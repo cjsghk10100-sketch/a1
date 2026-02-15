@@ -5,6 +5,7 @@ export type MessageId = `msg_${string}`;
 export type RoomId = `room_${string}`;
 export type RunId = `run_${string}`;
 export type StepId = `step_${string}`;
+export type ToolCallId = `tc_${string}`;
 export type ThreadId = `th_${string}`;
 export type WorkspaceId = `ws_${string}`;
 
@@ -30,6 +31,10 @@ export function newRunId(): RunId {
 
 export function newStepId(): StepId {
   return withPrefix("step_") as StepId;
+}
+
+export function newToolCallId(): ToolCallId {
+  return withPrefix("tc_") as ToolCallId;
 }
 
 export function newThreadId(): ThreadId {
