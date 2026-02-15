@@ -38,6 +38,13 @@ export interface EventEnvelopeV1<TEventType extends string = string, TData = unk
   event_version: number;
   occurred_at: string; // RFC3339 timestamp
 
+  workspace_id: string;
+  mission_id?: string;
+  room_id?: string;
+  thread_id?: string;
+  run_id?: string;
+  step_id?: string;
+
   actor: ActorRefV1;
   stream: StreamRefV1;
 
@@ -51,4 +58,6 @@ export interface EventEnvelopeV1<TEventType extends string = string, TData = unk
 
   redaction_level?: RedactionLevel;
   contains_secrets?: boolean;
+
+  idempotency_key?: string;
 }
