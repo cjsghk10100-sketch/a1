@@ -33,6 +33,7 @@ export type ThreadCreatedV1 = EventEnvelopeV1<
 export type MessageCreatedV1 = EventEnvelopeV1<
   "message.created",
   {
+    message_id: string;
     sender_type: string;
     sender_id: string;
     content_md: string;

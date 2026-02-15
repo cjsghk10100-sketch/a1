@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance } from "fastify";
 
-import { newThreadId } from "@agentapp/shared";
+import { newMessageId, newThreadId } from "@agentapp/shared";
 
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
@@ -75,6 +75,7 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
     const sender_type = req.body.sender_type ?? "user";
     const sender_id = req.body.sender_id ?? "anon";
 
+    const message_id = newMessageId();
     const event = await appendToStream(pool, {
       event_id: randomUUID(),
       event_type: "message.created",
@@ -88,6 +89,7 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
       stream: { stream_type: "room", stream_id: thread.rows[0].room_id },
       correlation_id,
       data: {
+        message_id,
         sender_type,
         sender_id,
         content_md: req.body.content_md,
@@ -101,7 +103,7 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
     });
 
     await applyCoreEvent(pool, event);
-    return reply.code(201).send({ message_id: event.event_id });
+    return reply.code(201).send({ message_id });
   });
 
   app.get<{

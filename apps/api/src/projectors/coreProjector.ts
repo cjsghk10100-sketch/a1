@@ -142,6 +142,8 @@ async function applyMessageCreated(tx: DbClient, event: MessageCreatedV1): Promi
   if (!event.thread_id) throw new Error("message.created requires thread_id");
   if (!event.data.content_md) throw new Error("message.created requires content_md");
 
+  // message_id is the stable entity id; event_id is for the event record itself.
+  const message_id = event.data.message_id || event.event_id;
   const labels = event.data.labels ?? [];
 
   await tx.query(
@@ -169,7 +171,7 @@ async function applyMessageCreated(tx: DbClient, event: MessageCreatedV1): Promi
       updated_at = EXCLUDED.updated_at,
       last_event_id = EXCLUDED.last_event_id`,
     [
-      event.event_id, // message_id == event_id for message.created
+      message_id,
       event.workspace_id,
       event.room_id,
       event.thread_id,
