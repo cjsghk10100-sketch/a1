@@ -196,6 +196,8 @@ async function main(): Promise<void> {
         stream_type: string;
         stream_id: string;
         stream_seq: number;
+        correlation_id: string;
+        causation_id: string | null;
         data: { message_id?: string };
       }>(
         `${baseUrl}/v1/streams/rooms/${room_id}?from_seq=${fromSeq}`,
@@ -219,6 +221,8 @@ async function main(): Promise<void> {
       assert.equal(ev.data.message_id, message_id);
       assert.notEqual(ev.event_id, message_id);
       assert.ok(message_id.startsWith("msg_"));
+      assert.ok(ev.correlation_id.length > 0);
+      assert.equal(ev.causation_id, null);
 
       const row = await client.query<{ message_id: string; last_event_id: string }>(
         "SELECT message_id, last_event_id FROM proj_messages WHERE message_id = $1",

@@ -51,6 +51,8 @@ export async function registerStreamRoutes(app: FastifyInstance, pool: DbPool): 
         stream_type: string;
         stream_id: string;
         stream_seq: string;
+        correlation_id: string;
+        causation_id: string | null;
         data: unknown;
       }>(
         `SELECT
@@ -70,6 +72,8 @@ export async function registerStreamRoutes(app: FastifyInstance, pool: DbPool): 
           stream_type,
           stream_id,
           stream_seq,
+          correlation_id,
+          causation_id,
           data
         FROM evt_events
         WHERE stream_type = 'room'
