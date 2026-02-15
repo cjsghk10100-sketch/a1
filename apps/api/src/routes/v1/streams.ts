@@ -40,8 +40,16 @@ export async function registerStreamRoutes(app: FastifyInstance, pool: DbPool): 
         event_version: number;
         occurred_at: string;
         recorded_at: string;
+        workspace_id: string;
+        mission_id: string | null;
+        room_id: string | null;
+        thread_id: string | null;
         actor_type: string;
         actor_id: string;
+        run_id: string | null;
+        step_id: string | null;
+        stream_type: string;
+        stream_id: string;
         stream_seq: string;
         data: unknown;
       }>(
@@ -51,8 +59,16 @@ export async function registerStreamRoutes(app: FastifyInstance, pool: DbPool): 
           event_version,
           occurred_at,
           recorded_at,
+          workspace_id,
+          mission_id,
+          room_id,
+          thread_id,
           actor_type,
           actor_id,
+          run_id,
+          step_id,
+          stream_type,
+          stream_id,
           stream_seq,
           data
         FROM evt_events

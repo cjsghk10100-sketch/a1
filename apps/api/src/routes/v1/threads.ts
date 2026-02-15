@@ -34,7 +34,8 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
       room_id: req.params.roomId,
       thread_id,
       actor: { actor_type: "service", actor_id: "api" },
-      stream: { stream_type: "thread", stream_id: thread_id },
+      // Room feed is the primary realtime stream: all room-scoped events go to the room stream.
+      stream: { stream_type: "room", stream_id: req.params.roomId },
       correlation_id,
       data: {
         title: req.body.title,
@@ -83,7 +84,8 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
       room_id: thread.rows[0].room_id,
       thread_id: req.params.threadId,
       actor: { actor_type: sender_type === "service" ? "service" : "user", actor_id: sender_id },
-      stream: { stream_type: "thread", stream_id: req.params.threadId },
+      // Room feed is the primary realtime stream: all room-scoped events go to the room stream.
+      stream: { stream_type: "room", stream_id: thread.rows[0].room_id },
       correlation_id,
       data: {
         sender_type,
