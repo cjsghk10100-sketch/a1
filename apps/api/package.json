@@ -9,6 +9,7 @@
     "typecheck": "pnpm -w exec tsc -p apps/api/tsconfig.json"
   },
   "dependencies": {
+    "@agentapp/shared": "workspace:*",
     "pg": "^8.11.5"
   },
   "devDependencies": {
