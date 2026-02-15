@@ -163,6 +163,20 @@ body {
   margin: 10px 0 12px;
 }
 
+.select,
+.textInput {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.92);
+  padding: 10px 12px;
+}
+
+.select {
+  appearance: none;
+}
+
 .tab {
   color: var(--muted);
   background: rgba(255, 255, 255, 0.06);
@@ -393,6 +407,156 @@ body {
   line-height: 1.4;
 }
 
+.timelineTopBar {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 12px;
+  margin: 12px 0 14px;
+}
+
+.timelineRoomRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.timelineManualRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.timelineConnection {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.timelineConnRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.timelineConnLabel {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.connState {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.connOk {
+  border-color: rgba(120, 255, 170, 0.35);
+  background: rgba(120, 255, 170, 0.12);
+}
+
+.connErr {
+  border-color: rgba(255, 100, 100, 0.35);
+  background: rgba(255, 100, 100, 0.12);
+}
+
+.timelineConnActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.timelineControls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.checkRow {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.timelineList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.eventCard {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 12px;
+}
+
+.eventTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.eventType {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.eventTime {
+  color: var(--muted);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.eventMeta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.eventDetails {
+  margin-top: 10px;
+}
+
+.eventSummary {
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.eventDetailGrid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 10px;
+  padding: 10px 0 6px;
+}
+
+.detailK {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.detailV {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 720px) {
   .appHeader {
     flex-wrap: wrap;
@@ -407,6 +571,14 @@ body {
   }
 
   .kvGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .timelineTopBar {
+    grid-template-columns: 1fr;
+  }
+
+  .eventDetailGrid {
     grid-template-columns: 1fr;
   }
 }
