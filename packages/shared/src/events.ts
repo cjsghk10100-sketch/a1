@@ -5,6 +5,14 @@ export const ActorType = {
 
 export type ActorType = (typeof ActorType)[keyof typeof ActorType];
 
+export const Zone = {
+  Sandbox: "sandbox",
+  Supervised: "supervised",
+  HighStakes: "high_stakes",
+} as const;
+
+export type Zone = (typeof Zone)[keyof typeof Zone];
+
 export const StreamType = {
   Room: "room",
   Thread: "thread",
@@ -46,6 +54,8 @@ export interface EventEnvelopeV1<TEventType extends string = string, TData = unk
   step_id?: string;
 
   actor: ActorRefV1;
+  actor_principal_id?: string;
+  zone?: Zone;
   stream: StreamRefV1;
 
   correlation_id: string;

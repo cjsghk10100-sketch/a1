@@ -139,6 +139,8 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
       thread_id: string | null;
       actor_type: string;
       actor_id: string;
+      actor_principal_id: string | null;
+      zone: string;
       run_id: string | null;
       step_id: string | null;
       stream_type: string;
@@ -162,6 +164,8 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
         thread_id,
         actor_type,
         actor_id,
+        actor_principal_id,
+        zone,
         run_id,
         step_id,
         stream_type,
@@ -207,6 +211,8 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
       thread_id: string | null;
       actor_type: string;
       actor_id: string;
+      actor_principal_id: string | null;
+      zone: string;
       run_id: string | null;
       step_id: string | null;
       stream_type: string;
@@ -234,6 +240,8 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
         thread_id,
         actor_type,
         actor_id,
+        actor_principal_id,
+        zone,
         run_id,
         step_id,
         stream_type,
@@ -269,4 +277,3 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
     });
   });
 }
-
