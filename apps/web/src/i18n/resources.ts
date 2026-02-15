@@ -7,6 +7,7 @@ export const resources = {
     translation: {
       "app.title": "Agent OS",
       "nav.timeline": "Timeline",
+      "nav.notifications": "Notifications",
       "nav.approvals": "Approval Inbox",
       "nav.inspector": "Inspector",
       "lang.en": "EN",
@@ -19,6 +20,7 @@ export const resources = {
       "error.load_failed": "Failed to load. (code: {{code}})",
       "page.not_found": "Not found.",
       "page.timeline.title": "Timeline",
+      "page.notifications.title": "Notifications",
       "page.approvals.title": "Approval Inbox",
       "page.inspector.title": "Inspector",
       "page.inspector.placeholder": "UI coming soon. This will consume /v1/events and related read APIs.",
@@ -51,6 +53,14 @@ export const resources = {
       "timeline.conn.connecting": "Connecting",
       "timeline.conn.connected": "Connected",
       "timeline.conn.error": "Error (reconnecting)",
+
+      "notifications.fetch": "Fetch unread",
+      "notifications.mark_all_read": "Mark all read",
+      "notifications.reset_cursor": "Reset cursor",
+      "notifications.open_timeline": "Open timeline",
+      "notifications.read_cursor": "Read cursor",
+      "notifications.unread_count": "Unread (loaded)",
+      "notifications.empty": "No unread events (or not loaded yet).",
 
       "approval.status.pending": "Pending",
       "approval.status.held": "Held",
@@ -157,6 +167,7 @@ export const resources = {
     translation: {
       "app.title": "에이전트 OS",
       "nav.timeline": "타임라인",
+      "nav.notifications": "알림",
       "nav.approvals": "승인함",
       "nav.inspector": "인스펙터",
       "lang.en": "EN",
@@ -169,6 +180,7 @@ export const resources = {
       "error.load_failed": "불러오기에 실패했습니다. (code: {{code}})",
       "page.not_found": "페이지를 찾을 수 없습니다.",
       "page.timeline.title": "타임라인",
+      "page.notifications.title": "알림",
       "page.approvals.title": "승인함",
       "page.inspector.title": "인스펙터",
       "page.inspector.placeholder": "UI는 곧 추가됩니다. /v1/events 및 관련 read API를 소비합니다.",
@@ -201,6 +213,14 @@ export const resources = {
       "timeline.conn.connecting": "연결 중",
       "timeline.conn.connected": "연결됨",
       "timeline.conn.error": "에러(재연결 중)",
+
+      "notifications.fetch": "미확인 불러오기",
+      "notifications.mark_all_read": "모두 읽음 처리",
+      "notifications.reset_cursor": "커서 초기화",
+      "notifications.open_timeline": "타임라인 열기",
+      "notifications.read_cursor": "읽음 커서",
+      "notifications.unread_count": "미확인(로드됨)",
+      "notifications.empty": "미확인 이벤트가 없습니다(또는 아직 불러오지 않았습니다).",
 
       "approval.status.pending": "대기",
       "approval.status.held": "보류",

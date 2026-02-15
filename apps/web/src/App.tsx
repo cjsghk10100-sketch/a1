@@ -6,6 +6,7 @@ import { i18nStorageKey, normalizeLanguage } from "./i18n/i18n";
 import type { SupportedLanguage } from "./i18n/resources";
 import { ApprovalInboxPage } from "./pages/ApprovalInboxPage";
 import { InspectorPage } from "./pages/InspectorPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 import { TimelinePage } from "./pages/TimelinePage";
 
 function LangButton(props: { lang: SupportedLanguage; current: SupportedLanguage; label: string }) {
@@ -50,6 +51,12 @@ export function App(): JSX.Element {
           </NavLink>
           <NavLink
             className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")}
+            to="/notifications"
+          >
+            {t("nav.notifications")}
+          </NavLink>
+          <NavLink
+            className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")}
             to="/approvals"
           >
             {t("nav.approvals")}
@@ -67,6 +74,7 @@ export function App(): JSX.Element {
         <Routes>
           <Route path="/" element={<Navigate to="/timeline" replace />} />
           <Route path="/timeline" element={<TimelinePage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/approvals" element={<ApprovalInboxPage />} />
           <Route path="/inspector" element={<InspectorPage />} />
           <Route path="*" element={<div className="placeholder">{t("page.not_found")}</div>} />
