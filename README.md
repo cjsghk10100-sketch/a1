@@ -30,3 +30,12 @@ docker compose -f infra/docker-compose.yml down
 ```
 
 If you already have something on port `5432`, change the port mapping in `infra/docker-compose.yml`.
+
+## Migrations
+
+With `DATABASE_URL` set:
+
+```bash
+pnpm -C apps/api db:migrate
+pnpm -C apps/api db:status
+```
