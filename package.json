@@ -1,0 +1,20 @@
+{
+  "name": "agent-app",
+  "private": true,
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome lint .",
+    "format": "biome check --write .",
+    "format:check": "biome check .",
+    "test": "echo \"(no tests yet)\""
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.7.3",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.5"
+  }
+}

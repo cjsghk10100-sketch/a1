@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Node / JS
+node_modules/
+.pnpm-store/
+.yarn/
+.npm/
+
+# Build outputs
+dist/
+build/
+.out/
+coverage/
+
+# Logs
+*.log
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Misc
+.tmp/
