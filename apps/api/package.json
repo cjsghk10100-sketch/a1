@@ -8,7 +8,7 @@
     "db:status": "tsx scripts/migrate_status.ts",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "tsx test/contract_room_sse.ts",
+    "test": "tsx test/contract_room_sse.ts && tsx test/contract_approvals.ts",
     "typecheck": "pnpm -w exec tsc -p apps/api/tsconfig.json"
   },
   "dependencies": {
