@@ -4,6 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:status": "tsx scripts/migrate_status.ts",
     "typecheck": "pnpm -w exec tsc -p apps/api/tsconfig.json"
+  },
+  "dependencies": {
+    "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.6",
+    "tsx": "^4.19.0"
   }
 }
