@@ -71,3 +71,11 @@ export interface EventEnvelopeV1<TEventType extends string = string, TData = unk
 
   idempotency_key?: string;
 }
+
+export interface EventRedactedDataV1 {
+  target_event_id: string;
+  reason?: string;
+  intended_redaction_level: RedactionLevel;
+}
+
+export type EventRedactedEventV1 = EventEnvelopeV1<"event.redacted", EventRedactedDataV1>;
