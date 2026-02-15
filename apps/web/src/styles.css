@@ -1,0 +1,135 @@
+:root {
+  --bg: #0b1220;
+  --panel: rgba(255, 255, 255, 0.06);
+  --panel-strong: rgba(255, 255, 255, 0.1);
+  --text: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.72);
+  --accent: #49d3ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 600px at 30% -20%, rgba(73, 211, 255, 0.28), transparent 55%),
+    radial-gradient(900px 600px at 90% 10%, rgba(255, 255, 255, 0.12), transparent 55%),
+    var(--bg);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+
+.appShell {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.appHeader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(11, 18, 32, 0.6);
+  backdrop-filter: blur(10px);
+}
+
+.appTitle {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.appNav {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  justify-content: center;
+}
+
+.navLink {
+  text-decoration: none;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.navLink:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.navLinkActive {
+  color: var(--text);
+  border-color: rgba(73, 211, 255, 0.35);
+  background: rgba(73, 211, 255, 0.12);
+}
+
+.appLang {
+  display: flex;
+  gap: 8px;
+}
+
+.langButton {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.langButtonActive {
+  color: var(--text);
+  border-color: rgba(73, 211, 255, 0.35);
+  background: rgba(73, 211, 255, 0.14);
+}
+
+.appMain {
+  width: min(1000px, calc(100% - 24px));
+  margin: 18px auto 40px;
+  padding: 0 12px;
+}
+
+.page {
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+}
+
+.pageTitle {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.placeholder {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .appHeader {
+    flex-wrap: wrap;
+  }
+
+  .appNav {
+    justify-content: flex-start;
+  }
+}
+
