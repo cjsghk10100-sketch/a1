@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
 
 export type ApprovalId = `appr_${string}`;
+export type ArtifactId = `art_${string}`;
 export type MessageId = `msg_${string}`;
 export type RoomId = `room_${string}`;
 export type RunId = `run_${string}`;
@@ -15,6 +16,10 @@ function withPrefix<T extends string>(prefix: T): `${T}${string}` {
 
 export function newApprovalId(): ApprovalId {
   return withPrefix("appr_") as ApprovalId;
+}
+
+export function newArtifactId(): ArtifactId {
+  return withPrefix("art_") as ArtifactId;
 }
 
 export function newMessageId(): MessageId {
