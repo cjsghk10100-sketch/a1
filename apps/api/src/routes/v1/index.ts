@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import type { DbPool } from "../../db/pool.js";
+import { registerActionRegistryRoutes } from "./actionRegistry.js";
 import { registerApprovalRoutes } from "./approvals.js";
 import { registerArtifactRoutes } from "./artifacts.js";
 import { registerEventRoutes } from "./events.js";
@@ -12,6 +13,7 @@ import { registerStreamRoutes } from "./streams.js";
 import { registerThreadRoutes } from "./threads.js";
 
 export async function registerV1Routes(app: FastifyInstance, pool: DbPool): Promise<void> {
+  await registerActionRegistryRoutes(app, pool);
   await registerApprovalRoutes(app, pool);
   await registerArtifactRoutes(app, pool);
   await registerEventRoutes(app, pool);
