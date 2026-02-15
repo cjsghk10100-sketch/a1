@@ -38,17 +38,30 @@ export interface EventDetail extends EventRow {
 }
 
 export async function listEvents(params: {
+  stream_type?: "room" | "thread" | "workspace";
+  stream_id?: string;
+  from_seq?: number;
+
+  room_id?: string;
+  thread_id?: string;
   run_id?: string;
   step_id?: string;
   correlation_id?: string;
   event_type?: string;
+  before_recorded_at?: string;
   limit?: number;
 }): Promise<EventRow[]> {
   const qs = new URLSearchParams();
+  if (params.stream_type) qs.set("stream_type", params.stream_type);
+  if (params.stream_id) qs.set("stream_id", params.stream_id);
+  if (typeof params.from_seq === "number") qs.set("from_seq", String(params.from_seq));
+  if (params.room_id) qs.set("room_id", params.room_id);
+  if (params.thread_id) qs.set("thread_id", params.thread_id);
   if (params.run_id) qs.set("run_id", params.run_id);
   if (params.step_id) qs.set("step_id", params.step_id);
   if (params.correlation_id) qs.set("correlation_id", params.correlation_id);
   if (params.event_type) qs.set("event_type", params.event_type);
+  if (params.before_recorded_at) qs.set("before_recorded_at", params.before_recorded_at);
   if (params.limit) qs.set("limit", String(params.limit));
   const url = `/v1/events${qs.size ? `?${qs.toString()}` : ""}`;
 
@@ -60,4 +73,3 @@ export async function getEvent(eventId: string): Promise<EventDetail> {
   const res = await apiGet<{ event: EventDetail }>(`/v1/events/${eventId}`);
   return res.event;
 }
-
