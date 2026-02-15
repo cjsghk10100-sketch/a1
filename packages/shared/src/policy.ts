@@ -11,6 +11,8 @@ export type PolicyDecision = (typeof PolicyDecision)[keyof typeof PolicyDecision
 export const PolicyReasonCode = {
   DefaultAllow: "default_allow",
   ExternalWriteRequiresApproval: "external_write_requires_approval",
+  ApprovalAllowsAction: "approval_allows_action",
+  KillSwitchActive: "kill_switch_active",
 } as const;
 
 // Open set: callers may introduce new reason codes without breaking the contract.
@@ -35,4 +37,3 @@ export interface PolicyCheckResultV1 {
   reason_code: PolicyReasonCode;
   reason?: string;
 }
-
