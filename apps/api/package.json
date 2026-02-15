@@ -6,10 +6,13 @@
   "scripts": {
     "db:migrate": "tsx scripts/migrate.ts",
     "db:status": "tsx scripts/migrate_status.ts",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
     "typecheck": "pnpm -w exec tsc -p apps/api/tsconfig.json"
   },
   "dependencies": {
     "@agentapp/shared": "workspace:*",
+    "fastify": "^4.29.1",
     "pg": "^8.11.5"
   },
   "devDependencies": {
