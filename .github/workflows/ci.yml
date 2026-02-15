@@ -23,3 +23,39 @@ jobs:
 
       - name: Typecheck
         run: pnpm -r typecheck
+
+  contract-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentapp
+          POSTGRES_PASSWORD: agentapp
+          POSTGRES_DB: agentapp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentapp -d agentapp_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Contract tests
+        env:
+          DATABASE_URL: postgres://agentapp:agentapp@localhost:5432/agentapp_test
+        run: pnpm -C apps/api test
