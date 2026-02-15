@@ -3,7 +3,11 @@ import type { EventEnvelopeV1, StreamRefV1 } from "@agentapp/shared";
 import type { DbClient } from "../db/pool.js";
 
 type StreamWithSeq = StreamRefV1 & { stream_seq: number };
-export type EnvelopeWithSeq = EventEnvelopeV1 & { stream: StreamWithSeq };
+export type EnvelopeWithSeq = EventEnvelopeV1 & {
+  stream: StreamWithSeq;
+  prev_event_hash?: string | null;
+  event_hash?: string;
+};
 
 function toJsonb(value: unknown): string {
   return JSON.stringify(value ?? {});
@@ -27,6 +31,8 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
     causation_id,
     redaction_level,
     contains_secrets,
+    prev_event_hash,
+    event_hash,
     policy_context,
     model_context,
     display,
@@ -43,6 +49,7 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
       stream_type, stream_id, stream_seq,
       correlation_id, causation_id,
       redaction_level, contains_secrets,
+      prev_event_hash, event_hash,
       policy_context, model_context, display,
       data,
       idempotency_key
@@ -54,9 +61,10 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
       $13, $14, $15,
       $16, $17,
       $18, $19,
-      $20::jsonb, $21::jsonb, $22::jsonb,
-      $23::jsonb,
-      $24
+      $20, $21,
+      $22::jsonb, $23::jsonb, $24::jsonb,
+      $25::jsonb,
+      $26
     )`,
     [
       event_id,
@@ -78,6 +86,8 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
       causation_id ?? null,
       redaction_level ?? "none",
       contains_secrets ?? false,
+      prev_event_hash ?? null,
+      event_hash ?? null,
       toJsonb(policy_context),
       toJsonb(model_context),
       toJsonb(display),
