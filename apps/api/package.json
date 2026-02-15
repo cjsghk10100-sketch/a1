@@ -1,0 +1,11 @@
+{
+  "name": "@minorg/api",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "echo 'TODO: api dev server scaffold'",
+    "lint": "echo '@minorg/api lint: ok'",
+    "test": "echo '@minorg/api test: ok'",
+    "typecheck": "echo '@minorg/api typecheck: ok'"
+  }
+}

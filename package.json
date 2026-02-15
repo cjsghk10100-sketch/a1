@@ -1,0 +1,13 @@
+{
+  "name": "min_org_agent_activity_app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MIN_ORG agent-first workspace monorepo bootstrap",
+  "packageManager": "pnpm@9.12.3",
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "dev": "echo 'Use package-level dev scripts (apps/api, apps/web)'",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

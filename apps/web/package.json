@@ -1,0 +1,11 @@
+{
+  "name": "@minorg/web",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "echo 'TODO: web dev server scaffold'",
+    "lint": "echo '@minorg/web lint: ok'",
+    "test": "echo '@minorg/web test: ok'",
+    "typecheck": "echo '@minorg/web typecheck: ok'"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "@minorg/shared",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "lint": "echo '@minorg/shared lint: ok'",
+    "test": "echo '@minorg/shared test: ok'",
+    "typecheck": "echo '@minorg/shared typecheck: ok'"
+  }
+}
