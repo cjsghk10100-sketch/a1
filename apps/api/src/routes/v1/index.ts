@@ -5,6 +5,7 @@ import { registerApprovalRoutes } from "./approvals.js";
 import { registerEventRoutes } from "./events.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerRunRoutes } from "./runs.js";
+import { registerToolCallRoutes } from "./toolcalls.js";
 import { registerRoomRoutes } from "./rooms.js";
 import { registerStreamRoutes } from "./streams.js";
 import { registerThreadRoutes } from "./threads.js";
@@ -14,6 +15,7 @@ export async function registerV1Routes(app: FastifyInstance, pool: DbPool): Prom
   await registerEventRoutes(app, pool);
   await registerPolicyRoutes(app, pool);
   await registerRunRoutes(app, pool);
+  await registerToolCallRoutes(app, pool);
   await registerRoomRoutes(app, pool);
   await registerStreamRoutes(app, pool);
   await registerThreadRoutes(app, pool);
