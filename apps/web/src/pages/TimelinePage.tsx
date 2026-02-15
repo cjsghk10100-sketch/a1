@@ -1,13 +1,343 @@
 import { useTranslation } from "react-i18next";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import type { RoomRow } from "../api/rooms";
+import { listRooms } from "../api/rooms";
+import { ApiError } from "../api/http";
+import type { RoomStreamEventRow } from "../api/streams";
+import { JsonView } from "../components/JsonView";
+
+type ConnState = "disconnected" | "connecting" | "connected" | "error";
+
+function formatTimestamp(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString();
+}
+
+function safeParseEvent(data: string): RoomStreamEventRow | null {
+  try {
+    const obj = JSON.parse(data) as unknown;
+    if (!obj || typeof obj !== "object") return null;
+    const row = obj as Partial<RoomStreamEventRow>;
+    if (!row.event_id || !row.event_type || typeof row.stream_seq !== "number") return null;
+    return row as RoomStreamEventRow;
+  } catch {
+    return null;
+  }
+}
+
+const roomStorageKey = "agentapp.room_id";
+
+function roomCursorKey(roomId: string): string {
+  return `agentapp.room_cursor.${roomId}`;
+}
+
+function loadCursor(roomId: string): number {
+  const raw = localStorage.getItem(roomCursorKey(roomId));
+  const n = Number(raw ?? "0");
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+function saveCursor(roomId: string, cursor: number): void {
+  localStorage.setItem(roomCursorKey(roomId), String(cursor));
+}
 
 export function TimelinePage(): JSX.Element {
   const { t } = useTranslation();
 
+  const [rooms, setRooms] = useState<RoomRow[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState<boolean>(false);
+  const [roomsError, setRoomsError] = useState<string | null>(null);
+
+  const [roomId, setRoomId] = useState<string>(() => localStorage.getItem(roomStorageKey) ?? "");
+  const [manualRoomId, setManualRoomId] = useState<string>("");
+
+  const [conn, setConn] = useState<ConnState>("disconnected");
+  const [cursor, setCursor] = useState<number>(() => (roomId ? loadCursor(roomId) : 0));
+  const [events, setEvents] = useState<RoomStreamEventRow[]>([]);
+  const [autoScroll, setAutoScroll] = useState<boolean>(true);
+
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+
+  const roomOptions = useMemo(() => {
+    return rooms.map((r) => ({
+      room_id: r.room_id,
+      label: r.title ? `${r.title} (${r.room_id})` : r.room_id,
+    }));
+  }, [rooms]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRoomsLoading(true);
+    setRoomsError(null);
+
+    void (async () => {
+      try {
+        const res = await listRooms();
+        if (cancelled) return;
+        setRooms(res);
+      } catch (e) {
+        if (cancelled) return;
+        setRoomsError(e instanceof ApiError ? `${e.status}` : "unknown");
+      } finally {
+        if (!cancelled) setRoomsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(roomStorageKey, roomId);
+    setCursor(roomId ? loadCursor(roomId) : 0);
+    setEvents([]);
+    disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
+
+  useEffect(() => {
+    return () => {
+      disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function disconnect(): void {
+    if (reconnectTimerRef.current) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setConn("disconnected");
+  }
+
+  function scheduleReconnect(nextCursor: number): void {
+    if (reconnectTimerRef.current) return;
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      connect(nextCursor);
+    }, 1000);
+  }
+
+  function connect(fromSeq?: number): void {
+    if (!roomId.trim()) return;
+    disconnect();
+
+    const start = typeof fromSeq === "number" ? fromSeq : cursor;
+    setConn("connecting");
+
+    const url = `/v1/streams/rooms/${encodeURIComponent(roomId)}?from_seq=${encodeURIComponent(String(start))}`;
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+
+    es.onopen = () => {
+      setConn("connected");
+    };
+
+    es.onmessage = (msg) => {
+      const row = safeParseEvent(msg.data);
+      if (!row) return;
+      setEvents((prev) => {
+        const next = prev.length > 500 ? prev.slice(prev.length - 500) : prev;
+        return [...next, row];
+      });
+
+      setCursor((prev) => {
+        const next = row.stream_seq > prev ? row.stream_seq : prev;
+        saveCursor(roomId, next);
+        return next;
+      });
+
+      if (autoScroll) {
+        window.requestAnimationFrame(() => {
+          window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+        });
+      }
+    };
+
+    es.onerror = () => {
+      setConn("error");
+      es.close();
+      eventSourceRef.current = null;
+      scheduleReconnect(cursor);
+    };
+  }
+
   return (
     <section className="page">
-      <h1 className="pageTitle">{t("page.timeline.title")}</h1>
-      <p className="placeholder">{t("page.timeline.placeholder")}</p>
+      <div className="pageHeader">
+        <h1 className="pageTitle">{t("page.timeline.title")}</h1>
+        <div className="timelineControls">
+          <label className="checkRow">
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(e) => setAutoScroll(e.target.checked)}
+            />
+            <span>{t("timeline.autoscroll")}</span>
+          </label>
+          <button type="button" className="ghostButton" onClick={() => setEvents([])}>
+            {t("timeline.clear")}
+          </button>
+        </div>
+      </div>
+
+      <div className="timelineTopBar">
+        <div className="timelineRoomPicker">
+          <label className="fieldLabel" htmlFor="roomSelect">
+            {t("timeline.room")}
+          </label>
+          <div className="timelineRoomRow">
+            <select
+              id="roomSelect"
+              className="select"
+              value={roomId}
+              onChange={(e) => setRoomId(e.target.value)}
+            >
+              <option value="">{t("timeline.room_select_placeholder")}</option>
+              {roomOptions.map((o) => (
+                <option key={o.room_id} value={o.room_id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => {
+                void (async () => {
+                  setRoomsLoading(true);
+                  setRoomsError(null);
+                  try {
+                    const res = await listRooms();
+                    setRooms(res);
+                  } catch (e) {
+                    setRoomsError(e instanceof ApiError ? `${e.status}` : "unknown");
+                  } finally {
+                    setRoomsLoading(false);
+                  }
+                })();
+              }}
+              disabled={roomsLoading}
+            >
+              {t("common.refresh")}
+            </button>
+          </div>
+
+          <div className="timelineManualRow">
+            <input
+              className="textInput"
+              value={manualRoomId}
+              onChange={(e) => setManualRoomId(e.target.value)}
+              placeholder={t("timeline.room_id_placeholder")}
+            />
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => {
+                const next = manualRoomId.trim();
+                if (!next) return;
+                setRoomId(next);
+                setManualRoomId("");
+              }}
+            >
+              {t("timeline.use_room_id")}
+            </button>
+          </div>
+
+          {roomsError ? <div className="errorBox">{t("error.load_failed", { code: roomsError })}</div> : null}
+          {roomsLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+        </div>
+
+        <div className="timelineConnection">
+          <div className="timelineConnRow">
+            <div className="timelineConnLabel">{t("timeline.connection")}</div>
+            <div className={conn === "connected" ? "connState connOk" : conn === "error" ? "connState connErr" : "connState"}>
+              {t(`timeline.conn.${conn}`)}
+            </div>
+          </div>
+          <div className="timelineConnRow">
+            <div className="timelineConnLabel">{t("timeline.cursor")}</div>
+            <div className="mono">{cursor}</div>
+          </div>
+          <div className="timelineConnActions">
+            <button
+              type="button"
+              className="primaryButton"
+              onClick={() => connect()}
+              disabled={!roomId.trim() || conn === "connecting" || conn === "connected"}
+            >
+              {t("timeline.connect")}
+            </button>
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => disconnect()}
+              disabled={conn === "disconnected"}
+            >
+              {t("timeline.disconnect")}
+            </button>
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => connect(cursor)}
+              disabled={!roomId.trim() || conn === "connecting"}
+            >
+              {t("timeline.reconnect")}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {events.length === 0 ? <div className="placeholder">{t("timeline.empty")}</div> : null}
+
+      <div className="timelineList">
+        {events.map((e) => (
+          <article key={`${e.event_id}-${e.stream_seq}`} className="eventCard">
+            <div className="eventTop">
+              <div className="eventType mono">{e.event_type}</div>
+              <div className="eventTime">{formatTimestamp(e.occurred_at)}</div>
+            </div>
+            <div className="eventMeta">
+              <span className="mono">{t("timeline.seq", { seq: e.stream_seq })}</span>
+              <span className="mono">{t("timeline.actor", { actor: `${e.actor_type}:${e.actor_id}` })}</span>
+              <span className="mono">{t("timeline.event_id", { id: e.event_id })}</span>
+            </div>
+            <div className="eventMeta">
+              <span className="mono">{t("timeline.correlation_id", { id: e.correlation_id })}</span>
+              {e.causation_id ? (
+                <span className="mono">{t("timeline.causation_id", { id: e.causation_id })}</span>
+              ) : null}
+            </div>
+
+            <details className="eventDetails">
+              <summary className="eventSummary">{t("timeline.details")}</summary>
+              <div className="eventDetailGrid">
+                <div className="detailK">{t("timeline.fields.room")}</div>
+                <div className="detailV mono">{e.room_id ?? "-"}</div>
+                <div className="detailK">{t("timeline.fields.thread")}</div>
+                <div className="detailV mono">{e.thread_id ?? "-"}</div>
+                <div className="detailK">{t("timeline.fields.run")}</div>
+                <div className="detailV mono">{e.run_id ?? "-"}</div>
+                <div className="detailK">{t("timeline.fields.step")}</div>
+                <div className="detailV mono">{e.step_id ?? "-"}</div>
+              </div>
+
+              <div className="detailSection">
+                <div className="detailSectionTitle">{t("timeline.data")}</div>
+                <JsonView value={e.data} />
+              </div>
+            </details>
+          </article>
+        ))}
+      </div>
     </section>
   );
 }
-
