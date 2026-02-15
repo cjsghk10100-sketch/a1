@@ -557,6 +557,134 @@ body {
   overflow-wrap: anywhere;
 }
 
+.inspectorSearchCard {
+  margin-bottom: 12px;
+}
+
+.inspectorSearchGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 140px;
+  gap: 10px;
+  align-items: end;
+}
+
+.inspectorSearchActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.hintBox {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(73, 211, 255, 0.22);
+  background: rgba(73, 211, 255, 0.1);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.hintText {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.inspectorSection {
+  margin-top: 12px;
+}
+
+.inspectorSplit {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.compactList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.compactRow {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.compactTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.compactMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  align-items: center;
+}
+
+.eventList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 540px;
+  overflow: auto;
+}
+
+.eventRow {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.eventRow:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.eventRowSelected {
+  border-color: rgba(73, 211, 255, 0.35);
+  background: rgba(73, 211, 255, 0.12);
+}
+
+.eventRowTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.eventRowMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  align-items: center;
+}
+
 @media (max-width: 720px) {
   .appHeader {
     flex-wrap: wrap;
@@ -579,6 +707,14 @@ body {
   }
 
   .eventDetailGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .inspectorSearchGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .inspectorSplit {
     grid-template-columns: 1fr;
   }
 }
