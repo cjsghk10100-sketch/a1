@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "pnpm -w exec tsc -p packages/shared/tsconfig.json"
+  },
+  "dependencies": {
+    "ulid": "^2.3.0"
   }
 }

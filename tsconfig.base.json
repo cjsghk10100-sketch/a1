@@ -1,5 +1,10 @@
 {
   "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@agentapp/shared": ["packages/shared/src/index.ts"],
+      "@agentapp/shared/*": ["packages/shared/src/*"]
+    },
     "target": "ES2022",
     "lib": ["ES2022"],
     "module": "NodeNext",
