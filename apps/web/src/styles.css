@@ -117,10 +117,280 @@ body {
   font-size: 18px;
 }
 
+.pageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .placeholder {
   margin: 0;
   color: var(--muted);
   line-height: 1.55;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace;
+}
+
+.errorBox {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 100, 100, 0.25);
+  background: rgba(255, 100, 100, 0.12);
+  color: rgba(255, 255, 255, 0.9);
+  margin: 10px 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 12px;
+}
+
+.tab {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tabActive {
+  color: var(--text);
+  border-color: rgba(73, 211, 255, 0.35);
+  background: rgba(73, 211, 255, 0.14);
+}
+
+.approvalsLayout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.approvalsLeft,
+.approvalsRight {
+  min-width: 0;
+}
+
+.approvalList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.approvalRow {
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 12px 12px;
+  cursor: pointer;
+}
+
+.approvalRow:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.approvalRowSelected {
+  border-color: rgba(73, 211, 255, 0.35);
+  background: rgba(73, 211, 255, 0.12);
+}
+
+.approvalRowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approvalRowTitle {
+  font-weight: 650;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approvalRowMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.statusPill {
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+  flex: 0 0 auto;
+}
+
+.statusPending {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.statusHeld {
+  border-color: rgba(255, 210, 120, 0.35);
+  background: rgba(255, 210, 120, 0.12);
+}
+
+.statusApproved {
+  border-color: rgba(120, 255, 170, 0.35);
+  background: rgba(120, 255, 170, 0.12);
+}
+
+.statusDenied {
+  border-color: rgba(255, 100, 100, 0.35);
+  background: rgba(255, 100, 100, 0.12);
+}
+
+.detailCard {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 14px;
+}
+
+.detailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.detailTitle {
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kvGrid {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 8px 10px;
+  padding: 10px 0 6px;
+}
+
+.kvKey {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kvVal {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.decisionBox {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fieldLabel {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.textArea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.92);
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.decisionActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.primaryButton,
+.dangerButton,
+.ghostButton {
+  border-radius: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.primaryButton {
+  border-color: rgba(73, 211, 255, 0.35);
+  background: rgba(73, 211, 255, 0.14);
+}
+
+.dangerButton {
+  border-color: rgba(255, 100, 100, 0.35);
+  background: rgba(255, 100, 100, 0.12);
+}
+
+.ghostButton {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.detailSection {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.detailSectionTitle {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.jsonBlock {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.88);
+  overflow: auto;
+  max-height: 340px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 @media (max-width: 720px) {
@@ -131,5 +401,12 @@ body {
   .appNav {
     justify-content: flex-start;
   }
-}
 
+  .approvalsLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .kvGrid {
+    grid-template-columns: 1fr;
+  }
+}
