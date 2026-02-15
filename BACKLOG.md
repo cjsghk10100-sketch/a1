@@ -1,23 +1,43 @@
-# BACKLOG
+# BACKLOG (Codex-ready)
 
-## Epic A — Platform Foundation
-- [ ] TASK-001 Repo bootstrap hardening
-- [ ] TASK-002 Event store (append-only) skeleton
-- [ ] TASK-003 Shared event schema package wiring
-- [ ] TASK-004 API approval gate middleware
-- [ ] TASK-005 Web shell (EN/KO i18n baseline)
+## Conventions
+- Each task: ~1 hour / few hundred LOC
+- Each task produces 1 PR
+- Start with plan file in /plans (Ask mode), then implement (Code mode)
 
-## Epic B — Security & Policy
-- [ ] OAuth/key change flow with explicit approvals
-- [ ] Permission mutation requests (Request != Execute)
-- [ ] Secret redaction guardrails in logs
+---
 
-## Epic C — Learn or Die Loop
-- [ ] RCA template + workflow integration
-- [ ] Learning Ledger event + UI feed
-- [ ] Failure-close policy enforcement
+## MVP-0: Repo + Dev Environment
+- [ ] TASK-001 Repo bootstrap (monorepo layout + pnpm + basic CI)
+- [ ] TASK-002 Infra: postgres docker-compose + env example
+- [ ] TASK-003 Migration runner + first migration folder scaffold
 
-## Epic D — Sustain or Sunset
-- [ ] Cost telemetry event ingestion
-- [ ] Budget cap policy and cheap-by-default toggles
-- [ ] Value/Learning score dashboard primitives
+## MVP-1: Event store + projections foundation
+- [ ] TASK-010 Create evt_events + evt_stream_heads (+ indexes)
+- [ ] TASK-011 Create proj_projectors + applied_events idempotency table
+- [ ] TASK-012 Minimal projections: rooms/threads/messages tables + projector skeleton
+
+## MVP-2: Policy gate + approvals (MIN_ORG core)
+- [ ] TASK-020 Policy decision engine (ALLOW/DENY/REQUIRE_APPROVAL + reason_code)
+- [ ] TASK-021 Approvals tables + API endpoints (request/decide)
+- [ ] TASK-022 Kill-switch flag + enforcement
+
+## MVP-3: Discord ingest normalization (optional if OpenClaw does gateway)
+- [ ] TASK-030 integ_discord_messages + channel mapping table
+- [ ] TASK-031 Parse @event line + schema validation + dedupe
+- [ ] TASK-032 CEO emoji reply mapping to approval.decided
+
+## MVP-4: Web UI skeleton (CEO mode first)
+- [ ] TASK-040 Web scaffold + i18n (en/ko) wiring
+- [ ] TASK-041 CEO Approval Inbox (pending/held/decided + decision actions)
+- [ ] TASK-042 Notifications stream UI (unread/read)
+
+## MVP-5: Work Surface essentials
+- [ ] TASK-050 Pins (message/thread/artifact/run/memory) + UI
+- [ ] TASK-051 Search (pg_trgm) + UI
+- [ ] TASK-052 Run inspector timeline (run/steps/toolcalls/artifacts)
+
+## MVP-6: Learn or Die + Sustain or Sunset
+- [ ] TASK-060 Incidents + RCA + close blockers
+- [ ] TASK-061 Survival ledgers + daily rollup
+- [ ] TASK-062 Lifecycle automation (ACTIVE→PROBATION→…)

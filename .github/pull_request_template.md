@@ -1,20 +1,16 @@
 ## Summary
-- 
 
-## Why
-- 
+## Changes
+- [ ] …
 
-## Risks
-- 
+## How to test
+- [ ] Command:
+- [ ] Expected:
 
-## Rollback
-- 
+## Security / Policy
+- [ ] No secrets logged
+- [ ] Approval boundaries respected (Request != Execute)
+- [ ] Event log append-only preserved
 
-## Validation
-- [ ] `pnpm test`
-- [ ] `pnpm lint`
-
-## Docs Updated
-- [ ] `PLANS.md`
-- [ ] `BACKLOG.md`
-- [ ] `docs/*` (if applicable)
+## i18n
+- [ ] EN + KO keys added for new strings

@@ -1,7 +1,10 @@
-# WEB Agent Notes
+# Web Package Instructions
 
-Scope: `apps/web/**`
+## UI responsibilities
+- Work Surface: pins + search
+- CEO Mode: Approval Inbox, Survival dashboard, Incidents
+- Inspector: run/runstep/tool-calls/artifacts timeline
 
-- All user-facing strings must use i18n keys.
-- New UI copy requires EN + KO entries in locale files.
-- Show approval state clearly (`pending/approved/rejected`).
+## Hard rules
+- All visible strings must be i18n (en/ko).
+- Never show raw secrets; always show redacted views.

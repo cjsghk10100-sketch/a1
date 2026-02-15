@@ -1,10 +1,20 @@
-# CODEX_PROMPTS
+# Codex prompts (copy/paste)
 
-## Task Kickoff Prompt (Template)
-"Implement `/plans/TASK-XXX_*.md` with minimal safe scope. Respect append-only events, approval gates, and EN/KO i18n requirements. Provide tests and update docs."
+## A) Ask Mode (planning only)
+Read /AGENTS.md and /BACKLOG.md.
+Pick TASK-XXX.
+Create /plans/TASK-XXX.md using the /PLANS.md template.
+Be self-contained: include all relevant context in the plan.
+Stop after writing the plan. Do NOT edit code.
 
-## RCA Prompt (Template)
-"Summarize incident timeline, root cause, contributing factors, remediation, and Learning Ledger entry. Ensure closure criteria are met."
+## B) Code Mode (implementation)
+Implement TASK-XXX following /plans/TASK-XXX.md exactly.
+Keep the PR small.
+Run tests and include commands + outputs in PR description.
+Do not add new deps unless required; if you do, justify in PR.
+Update docs if needed.
 
-## PR Summary Prompt (Template)
-"List what changed, why, risk, rollback strategy, and validation commands with outputs."
+## C) PR review (optional GitHub workflow)
+After opening the PR, request:
+@codex review
+Focus: security regressions + policy boundaries + i18n completeness.

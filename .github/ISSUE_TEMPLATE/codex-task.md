@@ -1,20 +1,23 @@
 ---
 name: Codex Task
-about: Structured implementation task for Codex agents
-title: "[TASK] "
-labels: ["task", "codex"]
-assignees: []
+about: Small, well-scoped task for Codex (~1 hour)
 ---
 
-## Task
-<!-- What should be built? -->
+## Goal (1-2 lines)
 
 ## Context
-<!-- Relevant docs/plans/constraints -->
+- Relevant files:
+- Related docs:
+- Constraints (security/policy/cost):
 
-## Acceptance Criteria
-- [ ]
+## Scope
+In scope:
+Out of scope:
 
-## Validation Commands
-- [ ] `pnpm test`
-- [ ] `pnpm lint`
+## Acceptance criteria (observable)
+- Command(s) to run:
+- Expected output(s):
+
+## Notes
+- Do not add new dependencies without explaining why.
+- Keep PR small.

@@ -1,14 +1,39 @@
-# PLANS
+# PLANS.md (Codex execution plans)
 
-## 현재 목표 (Current Goal)
-에이전트 앱 저장소의 초기 구조를 부트스트랩하고, 문서/백로그/작업 계획 템플릿을 준비한다.
+## How to use
+- For any non-trivial task: write a plan in /plans/TASK-xxx_*.md first (Ask mode).
+- Plans must be self-contained: do NOT say “see other doc”. Copy the needed context into the plan.
 
-## Phase 1: Repository Bootstrap
-- [x] 기본 디렉터리 구조 생성 (`apps`, `packages`, `docs`, `plans`, `infra`, `.github`)
-- [x] 코어 문서 파일 생성 (`SPEC`, `WORKFLOW`, `PROMPTS`, `EVENT_SPECS`)
-- [x] 초기 백로그/작업 계획 파일 생성
-- [ ] API/Web 앱 실제 기능 스캐폴딩 시작
+## Plan template (copy for each task)
 
-## Acceptance Checks
-- 필수 경로/파일이 모두 존재한다.
-- `AGENTS.md` 지침 위반 없이 문서 중심 초기화가 완료된다.
+### 1) Problem
+What is broken / missing? Why does it matter?
+
+### 2) Scope
+In scope:
+Out of scope:
+
+### 3) Constraints (Security/Policy/Cost)
+- Request != Execute boundaries:
+- Redaction rules:
+- Budget caps:
+
+### 4) Repository context
+- Existing relevant files (paths):
+- New files to add (paths):
+
+### 5) Acceptance criteria (observable)
+- Commands to run:
+- Expected outputs:
+
+### 6) Step-by-step plan
+1. …
+2. …
+3. …
+
+### 7) Risks & mitigations
+- Risk:
+- Mitigation:
+
+### 8) Rollback plan
+How to revert safely if this PR must be rolled back.

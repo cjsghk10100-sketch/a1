@@ -36,7 +36,7 @@ Build a lightweight, agent-first workspace (Discord-light) optimized for:
 - Event types and payload schemas must be defined in /docs/EVENT_SPECS.md and in code (shared package).
 - Migrations are required for any DB changes; never mutate history.
 
-## Local commands (update once scaffold exists)
+## Local commands
 - install: pnpm i
 - dev: pnpm dev
 - test: pnpm test
