@@ -3,6 +3,10 @@ import type {
   AgentQuarantineRequestV1,
   AgentQuarantineResponseV1,
   AgentRecordV1,
+  AgentRegisterRequestV1,
+  AgentRegisterResponseV1,
+  AgentSkillImportRequestV1,
+  AgentSkillImportResponseV1,
   AgentUnquarantineResponseV1,
   CapabilityScopesV1,
 } from "@agentapp/shared";
@@ -66,6 +70,10 @@ export async function getAgent(agent_id: string): Promise<AgentRecordV1> {
   return res.agent;
 }
 
+export async function registerAgent(payload: AgentRegisterRequestV1): Promise<AgentRegisterResponseV1> {
+  return await apiPost<AgentRegisterResponseV1>("/v1/agents", payload);
+}
+
 export async function quarantineAgent(
   agent_id: string,
   payload: AgentQuarantineRequestV1,
@@ -75,6 +83,13 @@ export async function quarantineAgent(
 
 export async function unquarantineAgent(agent_id: string): Promise<AgentUnquarantineResponseV1> {
   return await apiPost<AgentUnquarantineResponseV1>(`/v1/agents/${encodeURIComponent(agent_id)}/unquarantine`, {});
+}
+
+export async function importAgentSkills(
+  agent_id: string,
+  payload: AgentSkillImportRequestV1,
+): Promise<AgentSkillImportResponseV1> {
+  return await apiPost<AgentSkillImportResponseV1>(`/v1/agents/${encodeURIComponent(agent_id)}/skills/import`, payload);
 }
 
 export interface AgentTrustRow {

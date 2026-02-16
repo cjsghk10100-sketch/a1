@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { AgentRecordV1, SkillPackageRecordV1, SkillVerificationStatus } from "@agentapp/shared";
+import type {
+  AgentRecordV1,
+  AgentSkillImportResponseV1,
+  SkillPackageRecordV1,
+  SkillVerificationStatus,
+} from "@agentapp/shared";
 
 import type {
   AgentSkillRow,
@@ -15,6 +20,7 @@ import type {
 import {
   getAgent,
   getAgentTrust,
+  importAgentSkills,
   listAgentSkills,
   listAgentSnapshots,
   listCapabilityTokens,
@@ -22,6 +28,7 @@ import {
   listMistakeRepeatedEvents,
   listRegisteredAgents,
   quarantineAgent,
+  registerAgent,
   unquarantineAgent,
 } from "../api/agents";
 import { listSkillPackages, quarantineSkillPackage, verifySkillPackage } from "../api/skillPackages";
@@ -126,6 +133,15 @@ export function AgentProfilePage(): JSX.Element {
   const [agentId, setAgentId] = useState<string>(() => localStorage.getItem(agentStorageKey) ?? "");
   const [manualAgentId, setManualAgentId] = useState<string>("");
 
+  const [registerDisplayName, setRegisterDisplayName] = useState<string>("");
+  const [registerLoading, setRegisterLoading] = useState<boolean>(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+
+  const [skillImportJson, setSkillImportJson] = useState<string>("");
+  const [skillImportLoading, setSkillImportLoading] = useState<boolean>(false);
+  const [skillImportError, setSkillImportError] = useState<string | null>(null);
+  const [skillImportResult, setSkillImportResult] = useState<AgentSkillImportResponseV1 | null>(null);
+
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
 
   const [agentMeta, setAgentMeta] = useState<AgentRecordV1 | null>(null);
@@ -220,6 +236,8 @@ export function AgentProfilePage(): JSX.Element {
     setQuarantineActionError(null);
     setQuarantineActionLoading(false);
     setQuarantineReason("manual_quarantine");
+    setSkillImportError(null);
+    setSkillImportResult(null);
 
     setTrust(null);
     setTokens([]);
@@ -591,12 +609,12 @@ export function AgentProfilePage(): JSX.Element {
                         <span className="mono">
                           {t("agent_profile.token.parent")}: {tok.parent_token_id}
                         </span>
-                      ) : (
-                        <span className="muted">{t("agent_profile.token.no_parent")}</span>
-                      )}
-                      <span className="muted">
-                        {t("agent_profile.token.created")}: {formatTimestamp(tok.created_at)}
-                      </span>
+              ) : (
+                <span className="muted">{t("agent_profile.token.no_parent")}</span>
+              )}
+              <span className="muted">
+                {t("agent_profile.token.created")}: {formatTimestamp(tok.created_at)}
+              </span>
                       {tok.valid_until ? (
                         <span className="muted">
                           {t("agent_profile.token.valid_until")}: {formatTimestamp(tok.valid_until)}
@@ -612,6 +630,168 @@ export function AgentProfilePage(): JSX.Element {
                 ))}
               </ul>
             ) : null}
+          </div>
+
+          <div className="detailCard">
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.section.onboarding")}</div>
+            </div>
+
+            <div className="detailSectionTitle">{t("agent_profile.onboarding.register_title")}</div>
+
+            <label className="fieldLabel" htmlFor="registerDisplayName">
+              {t("agent_profile.onboarding.display_name")}
+            </label>
+            <div className="timelineManualRow">
+              <input
+                id="registerDisplayName"
+                className="textInput"
+                value={registerDisplayName}
+                onChange={(e) => setRegisterDisplayName(e.target.value)}
+                placeholder={t("agent_profile.onboarding.display_name_placeholder")}
+                disabled={registerLoading}
+              />
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={registerLoading || !registerDisplayName.trim()}
+                onClick={() => {
+                  void (async () => {
+                    const display_name = registerDisplayName.trim();
+                    if (!display_name) return;
+                    setRegisterLoading(true);
+                    setRegisterError(null);
+                    try {
+                      const res = await registerAgent({ display_name });
+                      setRegisterDisplayName("");
+                      setAgentId(res.agent_id);
+
+                      setAgentsLoading(true);
+                      setAgentsError(null);
+                      const list = await listRegisteredAgents({ limit: 200 });
+                      setAgents(list);
+                    } catch (e) {
+                      setRegisterError(toErrorCode(e));
+                    } finally {
+                      setAgentsLoading(false);
+                      setRegisterLoading(false);
+                    }
+                  })();
+                }}
+              >
+                {t("agent_profile.onboarding.button_register")}
+              </button>
+            </div>
+
+            {registerError ? <div className="errorBox">{t("error.load_failed", { code: registerError })}</div> : null}
+
+            <div className="detailSection">
+              <div className="detailSectionTitle">{t("agent_profile.onboarding.import_title")}</div>
+
+              <label className="fieldLabel" htmlFor="skillImportJson">
+                {t("agent_profile.onboarding.import_json")}
+              </label>
+              <textarea
+                id="skillImportJson"
+                className="textInput mono"
+                rows={8}
+                value={skillImportJson}
+                onChange={(e) => setSkillImportJson(e.target.value)}
+                placeholder={t("agent_profile.onboarding.import_json_placeholder")}
+                disabled={skillImportLoading}
+              />
+
+              <div className="timelineControls" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="primaryButton"
+                  disabled={skillImportLoading || !agentId.trim() || !skillImportJson.trim()}
+                  onClick={() => {
+                    void (async () => {
+                      const nextAgentId = agentId.trim();
+                      if (!nextAgentId) return;
+                      setSkillImportLoading(true);
+                      setSkillImportError(null);
+                      setSkillImportResult(null);
+                      try {
+                        const raw = skillImportJson.trim();
+                        let parsed: unknown;
+                        try {
+                          parsed = JSON.parse(raw) as unknown;
+                        } catch {
+                          setSkillImportError("invalid_json");
+                          return;
+                        }
+
+                        let packages: unknown = parsed;
+                        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                          const obj = parsed as Record<string, unknown>;
+                          if (Array.isArray(obj.packages)) packages = obj.packages;
+                        }
+                        if (!Array.isArray(packages)) {
+                          setSkillImportError("invalid_shape");
+                          return;
+                        }
+
+                        const res = await importAgentSkills(nextAgentId, { packages: packages as any[] });
+                        setSkillImportResult(res);
+                        await reloadSkillPackages();
+                      } catch (e) {
+                        setSkillImportError(toErrorCode(e));
+                      } finally {
+                        setSkillImportLoading(false);
+                      }
+                    })();
+                  }}
+                >
+                  {t("agent_profile.onboarding.button_import")}
+                </button>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  disabled={skillImportLoading}
+                  onClick={() => {
+                    setSkillImportJson("");
+                    setSkillImportError(null);
+                    setSkillImportResult(null);
+                  }}
+                >
+                  {t("common.reset")}
+                </button>
+              </div>
+
+              {skillImportError ? (
+                <div className="errorBox" style={{ marginTop: 10 }}>
+                  {skillImportError === "invalid_json"
+                    ? t("agent_profile.onboarding.error.invalid_json")
+                    : skillImportError === "invalid_shape"
+                      ? t("agent_profile.onboarding.error.invalid_shape")
+                      : t("error.load_failed", { code: skillImportError })}
+                </div>
+              ) : null}
+
+              {skillImportLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+              {skillImportResult ? (
+                <>
+                  <div className="kvGrid" style={{ marginTop: 10 }}>
+                    <div className="kvKey">{t("agent_profile.onboarding.import_summary")}</div>
+                    <div className="kvVal mono">
+                      {t("agent_profile.onboarding.import_summary_line", {
+                        total: skillImportResult.summary.total,
+                        verified: skillImportResult.summary.verified,
+                        pending: skillImportResult.summary.pending,
+                        quarantined: skillImportResult.summary.quarantined,
+                      })}
+                    </div>
+                  </div>
+                  <details className="advancedDetails">
+                    <summary className="advancedSummary">{t("common.advanced")}</summary>
+                    <JsonView value={{ import_result: skillImportResult }} />
+                  </details>
+                </>
+              ) : null}
+            </div>
           </div>
 
           <div className="detailCard">
