@@ -6,6 +6,8 @@ export interface AgentRecordV1 {
   display_name: string;
   created_at: string;
   revoked_at?: string;
+  quarantined_at?: string;
+  quarantine_reason?: string;
 }
 
 export interface AgentRegisterRequestV1 {
@@ -15,6 +17,27 @@ export interface AgentRegisterRequestV1 {
 export interface AgentRegisterResponseV1 {
   agent_id: string;
   principal_id: string;
+}
+
+export interface AgentGetResponseV1 {
+  agent: AgentRecordV1;
+}
+
+export interface AgentQuarantineRequestV1 {
+  quarantine_reason?: string;
+}
+
+export interface AgentQuarantineResponseV1 {
+  agent_id: string;
+  principal_id: string;
+  quarantined_at: string | null;
+  quarantine_reason?: string;
+}
+
+export interface AgentUnquarantineResponseV1 {
+  agent_id: string;
+  principal_id: string;
+  quarantined_at: string | null;
 }
 
 export interface AgentSkillImportItemV1 {
@@ -45,4 +68,3 @@ export interface AgentSkillImportResponseV1 {
     skill_package_id: string;
   }>;
 }
-

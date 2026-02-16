@@ -39,6 +39,24 @@ interface NegativeDecisionMeta {
   occurred_at: string;
 }
 
+async function isQuarantinedAgentPrincipal(
+  pool: DbPool,
+  principal_id: string | undefined,
+): Promise<{ agent_id: string; quarantine_reason: string | null } | null> {
+  const candidate = principal_id?.trim();
+  if (!candidate) return null;
+  const res = await pool.query<{ agent_id: string; quarantine_reason: string | null }>(
+    `SELECT agent_id, quarantine_reason
+     FROM sec_agents
+     WHERE principal_id = $1
+       AND quarantined_at IS NOT NULL
+     LIMIT 1`,
+    [candidate],
+  );
+  if (res.rowCount !== 1) return null;
+  return res.rows[0];
+}
+
 function getPolicyEnforcementMode(raw: string | undefined): PolicyEnforcementMode {
   const v = (raw ?? "").trim().toLowerCase();
   if (v === PolicyEnforcementMode.Enforce) return PolicyEnforcementMode.Enforce;
@@ -114,16 +132,27 @@ async function authorizeCore(
   category: AuthorizeCategory,
   input: AuthorizeInputV2,
 ): Promise<AuthorizeResultV2> {
-  const base = await evaluatePolicyDbV1(pool, {
-    action: input.action,
-    actor: input.actor,
-    workspace_id: input.workspace_id,
-    room_id: input.room_id,
-    thread_id: input.thread_id,
-    run_id: input.run_id,
-    step_id: input.step_id,
-    context: input.context,
-  });
+  const quarantined =
+    category === "egress" ? await isQuarantinedAgentPrincipal(pool, input.principal_id) : null;
+
+  const base = quarantined
+    ? {
+        decision: PolicyDecision.Deny,
+        reason_code: "agent_quarantined",
+        reason: quarantined.quarantine_reason
+          ? `Agent is quarantined: ${quarantined.quarantine_reason}`
+          : "Agent is quarantined.",
+      }
+    : await evaluatePolicyDbV1(pool, {
+        action: input.action,
+        actor: input.actor,
+        workspace_id: input.workspace_id,
+        room_id: input.room_id,
+        thread_id: input.thread_id,
+        run_id: input.run_id,
+        step_id: input.step_id,
+        context: input.context,
+      });
 
   const enforcement_mode = getPolicyEnforcementMode(process.env.POLICY_ENFORCEMENT_MODE);
   const blocked =

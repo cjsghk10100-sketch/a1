@@ -174,6 +174,186 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
     return reply.code(201).send({ agent_id, principal_id });
   });
 
+  app.get<{
+    Params: { agentId: string };
+  }>("/v1/agents/:agentId", async (req, reply) => {
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const res = await pool.query<{
+      agent_id: string;
+      principal_id: string;
+      display_name: string;
+      created_at: string;
+      revoked_at: string | null;
+      quarantined_at: string | null;
+      quarantine_reason: string | null;
+    }>(
+      `SELECT
+         agent_id,
+         principal_id,
+         display_name,
+         created_at::text AS created_at,
+         revoked_at::text AS revoked_at,
+         quarantined_at::text AS quarantined_at,
+         quarantine_reason
+       FROM sec_agents
+       WHERE agent_id = $1`,
+      [agent_id],
+    );
+
+    if (res.rowCount !== 1) return reply.code(404).send({ error: "agent_not_found" });
+
+    const row = res.rows[0];
+    return reply.code(200).send({
+      agent: {
+        agent_id: row.agent_id,
+        principal_id: row.principal_id,
+        display_name: row.display_name,
+        created_at: row.created_at,
+        revoked_at: row.revoked_at ?? undefined,
+        quarantined_at: row.quarantined_at ?? undefined,
+        quarantine_reason: row.quarantine_reason ?? undefined,
+      },
+    });
+  });
+
+  app.post<{
+    Params: { agentId: string };
+    Body: { quarantine_reason?: string; actor_type?: ActorType; actor_id?: string };
+  }>("/v1/agents/:agentId/quarantine", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+    const quarantine_reason = normalizeOptionalString(req.body.quarantine_reason) ?? "manual_quarantine";
+
+    const existing = await pool.query<{
+      principal_id: string;
+      quarantined_at: string | null;
+      quarantine_reason: string | null;
+    }>(
+      `SELECT principal_id, quarantined_at::text AS quarantined_at, quarantine_reason
+       FROM sec_agents
+       WHERE agent_id = $1`,
+      [agent_id],
+    );
+    if (existing.rowCount !== 1) return reply.code(404).send({ error: "agent_not_found" });
+
+    const principal_id = existing.rows[0].principal_id;
+    const already = existing.rows[0].quarantined_at;
+    const now = new Date().toISOString();
+
+    let quarantined_at = already;
+    if (!already) {
+      const updated = await pool.query<{ quarantined_at: string | null }>(
+        `UPDATE sec_agents
+         SET quarantined_at = $1,
+             quarantine_reason = $2
+         WHERE agent_id = $3
+         RETURNING quarantined_at::text AS quarantined_at`,
+        [now, quarantine_reason, agent_id],
+      );
+      quarantined_at = updated.rows[0]?.quarantined_at ?? now;
+
+      await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "agent.quarantined",
+        event_version: 1,
+        occurred_at: now,
+        workspace_id,
+        actor: { actor_type, actor_id },
+        stream: { stream_type: "workspace", stream_id: workspace_id },
+        correlation_id: randomUUID(),
+        data: {
+          agent_id,
+          principal_id,
+          quarantined_at,
+          quarantine_reason,
+        },
+        policy_context: {},
+        model_context: {},
+        display: {},
+      });
+    }
+
+    return reply.code(200).send({
+      agent_id,
+      principal_id,
+      quarantined_at,
+      quarantine_reason: existing.rows[0].quarantine_reason ?? quarantine_reason,
+    });
+  });
+
+  app.post<{
+    Params: { agentId: string };
+    Body: { actor_type?: ActorType; actor_id?: string };
+  }>("/v1/agents/:agentId/unquarantine", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+
+    const existing = await pool.query<{
+      principal_id: string;
+      quarantined_at: string | null;
+      quarantine_reason: string | null;
+    }>(
+      `SELECT principal_id, quarantined_at::text AS quarantined_at, quarantine_reason
+       FROM sec_agents
+       WHERE agent_id = $1`,
+      [agent_id],
+    );
+    if (existing.rowCount !== 1) return reply.code(404).send({ error: "agent_not_found" });
+
+    const principal_id = existing.rows[0].principal_id;
+    const already = existing.rows[0].quarantined_at;
+    const previous_reason = existing.rows[0].quarantine_reason;
+
+    if (already) {
+      await pool.query(
+        `UPDATE sec_agents
+         SET quarantined_at = NULL,
+             quarantine_reason = NULL
+         WHERE agent_id = $1`,
+        [agent_id],
+      );
+
+      const now = new Date().toISOString();
+      await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "agent.unquarantined",
+        event_version: 1,
+        occurred_at: now,
+        workspace_id,
+        actor: { actor_type, actor_id },
+        stream: { stream_type: "workspace", stream_id: workspace_id },
+        correlation_id: randomUUID(),
+        data: {
+          agent_id,
+          principal_id,
+          previous_quarantined_at: already,
+          previous_quarantine_reason: previous_reason,
+        },
+        policy_context: {},
+        model_context: {},
+        display: {},
+      });
+    }
+
+    return reply.code(200).send({
+      agent_id,
+      principal_id,
+      quarantined_at: null,
+    });
+  });
+
   app.post<{
     Params: { agentId: string };
     Body: {
@@ -472,4 +652,3 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
     });
   });
 }
-
