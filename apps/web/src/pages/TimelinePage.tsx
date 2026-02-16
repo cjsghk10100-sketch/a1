@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import type { RoomRow } from "../api/rooms";
 import { listRooms } from "../api/rooms";
@@ -45,6 +46,7 @@ function saveCursor(roomId: string, cursor: number): void {
 
 export function TimelinePage(): JSX.Element {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [roomsLoading, setRoomsLoading] = useState<boolean>(false);
@@ -315,6 +317,22 @@ export function TimelinePage(): JSX.Element {
               {e.causation_id ? (
                 <span className="mono">{t("timeline.causation_id", { id: e.causation_id })}</span>
               ) : null}
+            </div>
+
+            <div className="eventActions">
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => {
+                  if (e.run_id) {
+                    navigate(`/inspector?run_id=${encodeURIComponent(e.run_id)}`);
+                    return;
+                  }
+                  navigate(`/inspector?correlation_id=${encodeURIComponent(e.correlation_id)}`);
+                }}
+              >
+                {t("nav.inspector")}
+              </button>
             </div>
 
             <details className="eventDetails">

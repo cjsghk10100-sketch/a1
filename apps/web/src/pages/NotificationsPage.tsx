@@ -277,6 +277,22 @@ export function NotificationsPage(): JSX.Element {
               <span className="mono">{t("timeline.correlation_id", { id: e.correlation_id })}</span>
               {e.causation_id ? <span className="mono">{t("timeline.causation_id", { id: e.causation_id })}</span> : null}
             </div>
+
+            <div className="eventActions">
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => {
+                  if (e.run_id) {
+                    navigate(`/inspector?run_id=${encodeURIComponent(e.run_id)}`);
+                    return;
+                  }
+                  navigate(`/inspector?correlation_id=${encodeURIComponent(e.correlation_id)}`);
+                }}
+              >
+                {t("nav.inspector")}
+              </button>
+            </div>
             <details className="eventDetails">
               <summary className="eventSummary">{t("timeline.details")}</summary>
               <div className="detailSection">
@@ -290,4 +306,3 @@ export function NotificationsPage(): JSX.Element {
     </section>
   );
 }
-
