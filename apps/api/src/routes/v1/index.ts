@@ -10,6 +10,7 @@ import { registerDataAccessRoutes } from "./dataAccess.js";
 import { registerEgressRoutes } from "./egress.js";
 import { registerEventRoutes } from "./events.js";
 import { registerPolicyRoutes } from "./policy.js";
+import { registerPrincipalRoutes } from "./principals.js";
 import { registerResourceLabelRoutes } from "./resourceLabels.js";
 import { registerRunRoutes } from "./runs.js";
 import { registerSnapshotRoutes } from "./snapshots.js";
@@ -32,6 +33,7 @@ export async function registerV1Routes(app: FastifyInstance, pool: DbPool): Prom
   await registerEgressRoutes(app, pool);
   await registerEventRoutes(app, pool);
   await registerPolicyRoutes(app, pool);
+  await registerPrincipalRoutes(app, pool);
   await registerResourceLabelRoutes(app, pool);
   await registerRunRoutes(app, pool);
   await registerSnapshotRoutes(app, pool);
