@@ -150,6 +150,13 @@ export function AgentProfilePage(): JSX.Element {
   const [skillImportLoading, setSkillImportLoading] = useState<boolean>(false);
   const [skillImportError, setSkillImportError] = useState<string | null>(null);
   const [skillImportResult, setSkillImportResult] = useState<AgentSkillImportResponseV1 | null>(null);
+  const [skillImportVerifyLoading, setSkillImportVerifyLoading] = useState<boolean>(false);
+  const [skillImportVerifyProgress, setSkillImportVerifyProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
+  const [skillImportVerifyErrors, setSkillImportVerifyErrors] = useState<
+    Array<{ skill_package_id: string; error_code: string }>
+  >([]);
 
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
 
@@ -215,6 +222,12 @@ export function AgentProfilePage(): JSX.Element {
   const topSkills = useMemo(() => skills.slice(0, 6), [skills]);
   const latestSnapshot = useMemo(() => (snapshots.length ? snapshots[0] : null), [snapshots]);
   const snapshotRowsForTable = useMemo(() => snapshots.slice(0, 14), [snapshots]);
+  const pendingImportPackageIds = useMemo(() => {
+    if (!skillImportResult) return [];
+    return skillImportResult.items
+      .filter((it) => it.status === "pending")
+      .map((it) => it.skill_package_id);
+  }, [skillImportResult]);
 
   useEffect(() => {
     let cancelled = false;
@@ -255,6 +268,9 @@ export function AgentProfilePage(): JSX.Element {
     setQuarantineReason("manual_quarantine");
     setSkillImportError(null);
     setSkillImportResult(null);
+    setSkillImportVerifyErrors([]);
+    setSkillImportVerifyProgress(null);
+    setSkillImportVerifyLoading(false);
 
     setTrust(null);
     setTokens([]);
@@ -408,6 +424,52 @@ export function AgentProfilePage(): JSX.Element {
     } finally {
       setSkillPackagesLoading(false);
     }
+  }
+
+  async function verifyPendingPackagesFromImport(): Promise<void> {
+    const agent_id = agentId.trim();
+    if (!agent_id) return;
+    if (!skillImportResult) return;
+
+    const pendingIds = pendingImportPackageIds;
+    if (!pendingIds.length) return;
+
+    setSkillImportVerifyLoading(true);
+    setSkillImportVerifyErrors([]);
+    setSkillImportVerifyProgress({ done: 0, total: pendingIds.length });
+
+    const verified = new Set<string>();
+    const errors: Array<{ skill_package_id: string; error_code: string }> = [];
+
+    for (let idx = 0; idx < pendingIds.length; idx += 1) {
+      const skill_package_id = pendingIds[idx];
+      try {
+        await verifySkillPackage(skill_package_id);
+        verified.add(skill_package_id);
+      } catch (e) {
+        errors.push({ skill_package_id, error_code: toErrorCode(e) });
+      } finally {
+        setSkillImportVerifyProgress({ done: idx + 1, total: pendingIds.length });
+      }
+    }
+
+    setSkillImportVerifyErrors(errors);
+    setSkillImportResult((prev) => {
+      if (!prev) return prev;
+      const items = prev.items.map((it) =>
+        verified.has(it.skill_package_id) ? { ...it, status: "verified" as const } : it,
+      );
+      const summary = {
+        total: items.length,
+        verified: items.filter((it) => it.status === "verified").length,
+        pending: items.filter((it) => it.status === "pending").length,
+        quarantined: items.filter((it) => it.status === "quarantined").length,
+      };
+      return { summary, items };
+    });
+
+    await reloadSkillPackages();
+    setSkillImportVerifyLoading(false);
   }
 
   useEffect(() => {
@@ -927,6 +989,9 @@ export function AgentProfilePage(): JSX.Element {
                       setSkillImportLoading(true);
                       setSkillImportError(null);
                       setSkillImportResult(null);
+                      setSkillImportVerifyErrors([]);
+                      setSkillImportVerifyProgress(null);
+                      setSkillImportVerifyLoading(false);
                       try {
                         const raw = skillImportJson.trim();
                         let parsed: unknown;
@@ -968,6 +1033,9 @@ export function AgentProfilePage(): JSX.Element {
                     setSkillImportJson("");
                     setSkillImportError(null);
                     setSkillImportResult(null);
+                    setSkillImportVerifyErrors([]);
+                    setSkillImportVerifyProgress(null);
+                    setSkillImportVerifyLoading(false);
                   }}
                 >
                   {t("common.reset")}
@@ -999,9 +1067,52 @@ export function AgentProfilePage(): JSX.Element {
                       })}
                     </div>
                   </div>
+
+                  <div className="detailSection" style={{ marginTop: 10 }}>
+                    <div className="detailSectionTitle">{t("agent_profile.onboarding.review_title")}</div>
+
+                    {pendingImportPackageIds.length === 0 ? (
+                      <div className="muted">{t("agent_profile.onboarding.no_pending_from_import")}</div>
+                    ) : (
+                      <div className="muted">
+                        {t("agent_profile.onboarding.pending_from_import", { count: pendingImportPackageIds.length })}
+                      </div>
+                    )}
+
+                    <div className="timelineControls" style={{ marginTop: 10 }}>
+                      <button
+                        type="button"
+                        className="primaryButton"
+                        disabled={skillImportVerifyLoading || pendingImportPackageIds.length === 0}
+                        onClick={() => void verifyPendingPackagesFromImport()}
+                      >
+                        {t("agent_profile.onboarding.button_verify_pending")}
+                      </button>
+                    </div>
+
+                    {skillImportVerifyProgress ? (
+                      <div className="placeholder" style={{ marginTop: 10 }}>
+                        {skillImportVerifyLoading
+                          ? t("agent_profile.onboarding.verify_progress", {
+                              done: skillImportVerifyProgress.done,
+                              total: skillImportVerifyProgress.total,
+                            })
+                          : skillImportVerifyProgress.total > 0
+                            ? t("agent_profile.onboarding.verify_done")
+                            : ""}
+                      </div>
+                    ) : null}
+
+                    {skillImportVerifyErrors.length ? (
+                      <div className="errorBox" style={{ marginTop: 10 }}>
+                        {t("agent_profile.onboarding.verify_errors", { count: skillImportVerifyErrors.length })}
+                      </div>
+                    ) : null}
+                  </div>
+
                   <details className="advancedDetails">
                     <summary className="advancedSummary">{t("common.advanced")}</summary>
-                    <JsonView value={{ import_result: skillImportResult }} />
+                    <JsonView value={{ import_result: skillImportResult, bulk_verify_errors: skillImportVerifyErrors }} />
                   </details>
                 </>
               ) : null}
