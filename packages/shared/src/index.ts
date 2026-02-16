@@ -1,4 +1,5 @@
 export * from "./events.js";
+export * from "./agents.js";
 export * from "./approvals.js";
 export * from "./artifacts.js";
 export * from "./capabilities.js";
