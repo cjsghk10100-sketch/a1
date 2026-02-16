@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { i18nStorageKey, normalizeLanguage } from "./i18n/i18n";
 import type { SupportedLanguage } from "./i18n/resources";
 import { ApprovalInboxPage } from "./pages/ApprovalInboxPage";
+import { AgentProfilePage } from "./pages/AgentProfilePage";
 import { InspectorPage } from "./pages/InspectorPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { TimelinePage } from "./pages/TimelinePage";
@@ -61,6 +62,9 @@ export function App(): JSX.Element {
           >
             {t("nav.approvals")}
           </NavLink>
+          <NavLink className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")} to="/agents">
+            {t("nav.agents")}
+          </NavLink>
           <NavLink className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")} to="/inspector">
             {t("nav.inspector")}
           </NavLink>
@@ -76,6 +80,7 @@ export function App(): JSX.Element {
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/approvals" element={<ApprovalInboxPage />} />
+          <Route path="/agents" element={<AgentProfilePage />} />
           <Route path="/inspector" element={<InspectorPage />} />
           <Route path="*" element={<div className="placeholder">{t("page.not_found")}</div>} />
         </Routes>

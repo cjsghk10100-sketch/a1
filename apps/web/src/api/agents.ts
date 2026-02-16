@@ -1,0 +1,261 @@
+import type { CapabilityScopesV1 } from "@agentapp/shared";
+
+import type { EventRow } from "./events";
+import { listEvents } from "./events";
+import { apiGet } from "./http";
+
+export interface RegisteredAgent {
+  agent_id: string;
+  principal_id: string;
+  display_name: string;
+  occurred_at: string;
+  event_id: string;
+}
+
+type AgentRegisteredEventData = {
+  agent_id?: unknown;
+  principal_id?: unknown;
+  display_name?: unknown;
+};
+
+function parseRegisteredAgent(event: EventRow): RegisteredAgent | null {
+  if (event.event_type !== "agent.registered") return null;
+  const data = (event.data && typeof event.data === "object" ? (event.data as AgentRegisteredEventData) : {}) as AgentRegisteredEventData;
+
+  const agent_id = typeof data.agent_id === "string" ? data.agent_id : null;
+  const principal_id = typeof data.principal_id === "string" ? data.principal_id : null;
+  const display_name = typeof data.display_name === "string" ? data.display_name : null;
+
+  if (!agent_id || !principal_id || !display_name) return null;
+  return {
+    agent_id,
+    principal_id,
+    display_name,
+    occurred_at: event.occurred_at,
+    event_id: event.event_id,
+  };
+}
+
+export async function listRegisteredAgents(params?: { limit?: number }): Promise<RegisteredAgent[]> {
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(params?.limit ?? 200))));
+  const events = await listEvents({ event_type: "agent.registered", limit });
+
+  // Use the latest registration per agent_id (defensive against duplicates).
+  const byAgent = new Map<string, RegisteredAgent>();
+  for (const ev of events) {
+    const parsed = parseRegisteredAgent(ev);
+    if (!parsed) continue;
+    const existing = byAgent.get(parsed.agent_id);
+    if (!existing || parsed.occurred_at > existing.occurred_at) {
+      byAgent.set(parsed.agent_id, parsed);
+    }
+  }
+
+  return [...byAgent.values()].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+}
+
+export interface AgentTrustRow {
+  agent_id: string;
+  workspace_id: string;
+  trust_score: number;
+  success_rate_7d: number;
+  eval_quality_trend: number;
+  user_feedback_score: number;
+  policy_violations_7d: number;
+  time_in_service_days: number;
+  components: Record<string, unknown>;
+  last_recalculated_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getAgentTrust(agent_id: string): Promise<AgentTrustRow> {
+  const res = await apiGet<{ trust: AgentTrustRow }>(`/v1/agents/${encodeURIComponent(agent_id)}/trust`);
+  return res.trust;
+}
+
+export interface CapabilityTokenRow {
+  token_id: string;
+  workspace_id: string;
+  issued_to_principal_id: string;
+  granted_by_principal_id: string;
+  parent_token_id: string | null;
+  scopes: CapabilityScopesV1;
+  valid_until: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export async function listCapabilityTokens(principal_id: string): Promise<CapabilityTokenRow[]> {
+  const res = await apiGet<{ tokens: CapabilityTokenRow[] }>(
+    `/v1/capabilities?principal_id=${encodeURIComponent(principal_id)}`,
+  );
+  return res.tokens;
+}
+
+export interface AgentSkillRow {
+  workspace_id: string;
+  agent_id: string;
+  skill_id: string;
+  level: number;
+  learned_at: string | null;
+  last_used_at: string | null;
+  usage_total: number;
+  usage_7d: number;
+  usage_30d: number;
+  assessment_total: number;
+  assessment_passed: number;
+  reliability_score: number;
+  impact_score: number;
+  is_primary: boolean;
+  source_skill_package_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listAgentSkills(params: { agent_id: string; limit?: number }): Promise<AgentSkillRow[]> {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set("limit", String(params.limit));
+  const url = `/v1/agents/${encodeURIComponent(params.agent_id)}/skills${qs.size ? `?${qs.toString()}` : ""}`;
+  const res = await apiGet<{ skills: AgentSkillRow[] }>(url);
+  return res.skills;
+}
+
+export interface DailyAgentSnapshotRow {
+  workspace_id: string;
+  agent_id: string;
+  snapshot_date: string;
+  trust_score: number;
+  autonomy_rate_7d: number;
+  new_skills_learned_7d: number;
+  constraints_learned_7d: number;
+  repeated_mistakes_7d: number;
+  extras: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listAgentSnapshots(params: { agent_id: string; days?: number }): Promise<DailyAgentSnapshotRow[]> {
+  const qs = new URLSearchParams();
+  if (params.days) qs.set("days", String(params.days));
+  const url = `/v1/agents/${encodeURIComponent(params.agent_id)}/snapshots${qs.size ? `?${qs.toString()}` : ""}`;
+  const res = await apiGet<{ snapshots: DailyAgentSnapshotRow[] }>(url);
+  return res.snapshots;
+}
+
+export interface ConstraintLearnedRow {
+  event_id: string;
+  occurred_at: string;
+  room_id: string | null;
+  run_id: string | null;
+  constraint_id: string;
+  category: string;
+  action: string;
+  reason_code: string;
+  repeat_count: number;
+  guidance: unknown;
+  raw: EventRow;
+}
+
+type ConstraintLearnedEventData = {
+  agent_id?: unknown;
+  constraint_id?: unknown;
+  category?: unknown;
+  action?: unknown;
+  reason_code?: unknown;
+  repeat_count?: unknown;
+  guidance?: unknown;
+};
+
+function parseConstraintLearned(agent_id: string, event: EventRow): ConstraintLearnedRow | null {
+  if (event.event_type !== "constraint.learned") return null;
+  const data = (event.data && typeof event.data === "object" ? (event.data as ConstraintLearnedEventData) : {}) as ConstraintLearnedEventData;
+  if (data.agent_id !== agent_id) return null;
+
+  const constraint_id = typeof data.constraint_id === "string" ? data.constraint_id : null;
+  const category = typeof data.category === "string" ? data.category : null;
+  const action = typeof data.action === "string" ? data.action : null;
+  const reason_code = typeof data.reason_code === "string" ? data.reason_code : null;
+  const repeat_count = Number(data.repeat_count ?? 0);
+
+  if (!constraint_id || !category || !action || !reason_code) return null;
+  return {
+    event_id: event.event_id,
+    occurred_at: event.occurred_at,
+    room_id: event.room_id,
+    run_id: event.run_id,
+    constraint_id,
+    category,
+    action,
+    reason_code,
+    repeat_count: Number.isFinite(repeat_count) ? Math.max(0, Math.floor(repeat_count)) : 0,
+    guidance: data.guidance,
+    raw: event,
+  };
+}
+
+export async function listConstraintLearnedEvents(params: {
+  agent_id: string;
+  limit?: number;
+}): Promise<ConstraintLearnedRow[]> {
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(params.limit ?? 200))));
+  const events = await listEvents({ event_type: "constraint.learned", limit });
+  const rows: ConstraintLearnedRow[] = [];
+  for (const ev of events) {
+    const parsed = parseConstraintLearned(params.agent_id, ev);
+    if (parsed) rows.push(parsed);
+  }
+  return rows.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+}
+
+export interface MistakeRepeatedRow {
+  event_id: string;
+  occurred_at: string;
+  room_id: string | null;
+  run_id: string | null;
+  reason_code: string;
+  action: string;
+  repeat_count: number;
+  raw: EventRow;
+}
+
+type MistakeRepeatedEventData = {
+  agent_id?: unknown;
+  reason_code?: unknown;
+  action?: unknown;
+  repeat_count?: unknown;
+};
+
+function parseMistakeRepeated(agent_id: string, event: EventRow): MistakeRepeatedRow | null {
+  if (event.event_type !== "mistake.repeated") return null;
+  const data = (event.data && typeof event.data === "object" ? (event.data as MistakeRepeatedEventData) : {}) as MistakeRepeatedEventData;
+  if (data.agent_id !== agent_id) return null;
+
+  const reason_code = typeof data.reason_code === "string" ? data.reason_code : null;
+  const action = typeof data.action === "string" ? data.action : null;
+  const repeat_count = Number(data.repeat_count ?? 0);
+  if (!reason_code || !action) return null;
+
+  return {
+    event_id: event.event_id,
+    occurred_at: event.occurred_at,
+    room_id: event.room_id,
+    run_id: event.run_id,
+    reason_code,
+    action,
+    repeat_count: Number.isFinite(repeat_count) ? Math.max(0, Math.floor(repeat_count)) : 0,
+    raw: event,
+  };
+}
+
+export async function listMistakeRepeatedEvents(params: { agent_id: string; limit?: number }): Promise<MistakeRepeatedRow[]> {
+  const limit = Math.max(1, Math.min(500, Math.floor(Number(params.limit ?? 200))));
+  const events = await listEvents({ event_type: "mistake.repeated", limit });
+  const rows: MistakeRepeatedRow[] = [];
+  for (const ev of events) {
+    const parsed = parseMistakeRepeated(params.agent_id, ev);
+    if (parsed) rows.push(parsed);
+  }
+  return rows.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+}
+
