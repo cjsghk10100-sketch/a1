@@ -685,6 +685,103 @@ body {
   align-items: center;
 }
 
+.agentProfileGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.advancedDetails {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.advancedSummary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.advancedSummary:hover {
+  color: var(--text);
+}
+
+.tableWrap {
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dataTable th,
+.dataTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.dataTable th {
+  color: var(--muted);
+  font-weight: 650;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.agentChainList,
+.skillList,
+.constraintList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agentChainRow,
+.skillRow,
+.constraintRow {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.agentChainTop,
+.skillTop,
+.constraintTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.agentChainMeta,
+.skillMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.skillPrimary {
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(73, 211, 255, 0.18);
+  background: rgba(73, 211, 255, 0.08);
+}
+
 @media (max-width: 720px) {
   .appHeader {
     flex-wrap: wrap;
@@ -715,6 +812,10 @@ body {
   }
 
   .inspectorSplit {
+    grid-template-columns: 1fr;
+  }
+
+  .agentProfileGrid {
     grid-template-columns: 1fr;
   }
 }
