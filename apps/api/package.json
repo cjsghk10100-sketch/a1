@@ -8,7 +8,7 @@
     "db:status": "tsx scripts/migrate_status.ts",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "tsx test/contract_room_sse.ts && tsx test/contract_audit_hash_chain.ts && tsx test/contract_approvals.ts && tsx test/contract_policy_enforcement.ts && tsx test/contract_runs.ts && tsx test/contract_events_query.ts && tsx test/contract_capabilities.ts && tsx test/contract_egress.ts && tsx test/contract_skill_packages.ts && tsx test/contract_agents_onboarding.ts && tsx test/contract_toolcalls.ts && tsx test/contract_artifacts.ts && tsx test/contract_secrets.ts",
+    "test": "tsx test/contract_room_sse.ts && tsx test/contract_audit_hash_chain.ts && tsx test/contract_approvals.ts && tsx test/contract_policy_enforcement.ts && tsx test/contract_runs.ts && tsx test/contract_events_query.ts && tsx test/contract_capabilities.ts && tsx test/contract_egress.ts && tsx test/contract_skill_packages.ts && tsx test/contract_agents_onboarding.ts && tsx test/contract_toolcalls.ts && tsx test/contract_artifacts.ts && tsx test/contract_secrets.ts && tsx test/contract_trust.ts",
     "typecheck": "pnpm -w exec tsc -p apps/api/tsconfig.json"
   },
   "dependencies": {
