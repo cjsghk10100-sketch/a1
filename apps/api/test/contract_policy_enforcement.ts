@@ -81,6 +81,7 @@ async function postJson<T>(
 
 async function main(): Promise<void> {
   delete process.env.POLICY_KILL_SWITCH_EXTERNAL_WRITE;
+  delete process.env.POLICY_ENFORCEMENT_MODE;
 
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
@@ -97,6 +98,8 @@ async function main(): Promise<void> {
     throw new Error("expected server to listen on a TCP port");
   }
   const baseUrl = `http://127.0.0.1:${address.port}`;
+  const db = new Client({ connectionString: databaseUrl });
+  await db.connect();
 
   try {
     const workspaceHeader = { "x-workspace-id": "ws_contract" };
@@ -116,6 +119,25 @@ async function main(): Promise<void> {
     );
     assert.equal(before.decision, "require_approval");
     assert.equal(before.reason_code, "external_write_requires_approval");
+
+    const beforeAudit = await db.query<{
+      enforcement_mode: string | null;
+      blocked: boolean | null;
+    }>(
+      `SELECT
+         data->>'enforcement_mode' AS enforcement_mode,
+         (data->>'blocked')::boolean AS blocked
+       FROM evt_events
+       WHERE event_type = 'policy.requires_approval'
+         AND workspace_id = $1
+         AND room_id = $2
+       ORDER BY recorded_at DESC
+       LIMIT 1`,
+      ["ws_contract", room_id],
+    );
+    assert.equal(beforeAudit.rowCount, 1);
+    assert.equal(beforeAudit.rows[0].enforcement_mode, "shadow");
+    assert.equal(beforeAudit.rows[0].blocked, false);
 
     const { approval_id } = await postJson<{ approval_id: string }>(
       baseUrl,
@@ -140,6 +162,16 @@ async function main(): Promise<void> {
     assert.equal(after.decision, "allow");
     assert.equal(after.reason_code, "approval_allows_action");
 
+    const allowAuditCount = await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM evt_events
+       WHERE event_type IN ('policy.denied', 'policy.requires_approval')
+         AND workspace_id = $1
+         AND room_id = $2`,
+      ["ws_contract", room_id],
+    );
+    assert.equal(Number.parseInt(allowAuditCount.rows[0].count, 10), 1);
+
     process.env.POLICY_KILL_SWITCH_EXTERNAL_WRITE = "1";
     const killed = await postJson<{ decision: string; reason_code: string }>(
       baseUrl,
@@ -149,7 +181,27 @@ async function main(): Promise<void> {
     );
     assert.equal(killed.decision, "deny");
     assert.equal(killed.reason_code, "kill_switch_active");
+
+    const deniedAudit = await db.query<{
+      enforcement_mode: string | null;
+      blocked: boolean | null;
+    }>(
+      `SELECT
+         data->>'enforcement_mode' AS enforcement_mode,
+         (data->>'blocked')::boolean AS blocked
+       FROM evt_events
+       WHERE event_type = 'policy.denied'
+         AND workspace_id = $1
+         AND room_id = $2
+       ORDER BY recorded_at DESC
+       LIMIT 1`,
+      ["ws_contract", room_id],
+    );
+    assert.equal(deniedAudit.rowCount, 1);
+    assert.equal(deniedAudit.rows[0].enforcement_mode, "shadow");
+    assert.equal(deniedAudit.rows[0].blocked, false);
   } finally {
+    await db.end();
     await app.close();
   }
 }
@@ -159,4 +211,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-

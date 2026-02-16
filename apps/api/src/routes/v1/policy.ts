@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { ActorType, PolicyCheckResultV1 } from "@agentapp/shared";
 
 import type { DbPool } from "../../db/pool.js";
-import { evaluatePolicyDbV1 } from "../../policy/policyGate.js";
+import { authorize_action } from "../../policy/authorize.js";
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -38,7 +38,7 @@ export async function registerPolicyRoutes(app: FastifyInstance, pool: DbPool): 
     const actor_id =
       req.body.actor_id?.trim() || (actor_type === "service" ? "api" : "anon");
 
-    return await evaluatePolicyDbV1(pool, {
+    const result = await authorize_action(pool, {
       action: req.body.action,
       actor: { actor_type, actor_id },
       workspace_id,
@@ -48,5 +48,17 @@ export async function registerPolicyRoutes(app: FastifyInstance, pool: DbPool): 
       step_id: req.body.step_id,
       context: req.body.context,
     });
+
+    if (result.reason) {
+      return {
+        decision: result.decision,
+        reason_code: result.reason_code,
+        reason: result.reason,
+      };
+    }
+    return {
+      decision: result.decision,
+      reason_code: result.reason_code,
+    };
   });
 }
