@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { AgentRecordV1 } from "@agentapp/shared";
+import type { AgentRecordV1, SkillPackageRecordV1, SkillVerificationStatus } from "@agentapp/shared";
 
 import type {
   AgentSkillRow,
@@ -24,6 +24,7 @@ import {
   quarantineAgent,
   unquarantineAgent,
 } from "../api/agents";
+import { listSkillPackages, quarantineSkillPackage, verifySkillPackage } from "../api/skillPackages";
 import { ApiError } from "../api/http";
 import { JsonView } from "../components/JsonView";
 
@@ -54,6 +55,12 @@ function isTokenActive(token: CapabilityTokenRow): boolean {
     if (Number.isFinite(t) && t <= Date.now()) return false;
   }
   return true;
+}
+
+function skillPackageStatusPill(status: SkillVerificationStatus): string {
+  if (status === "verified") return "statusPill statusApproved";
+  if (status === "quarantined") return "statusPill statusDenied";
+  return "statusPill statusHeld";
 }
 
 type ScopeSummary = {
@@ -155,6 +162,18 @@ export function AgentProfilePage(): JSX.Element {
   const [mistakes, setMistakes] = useState<MistakeRepeatedRow[]>([]);
   const [mistakesError, setMistakesError] = useState<string | null>(null);
   const [mistakesLoading, setMistakesLoading] = useState<boolean>(false);
+
+  const [skillPackages, setSkillPackages] = useState<SkillPackageRecordV1[]>([]);
+  const [skillPackagesError, setSkillPackagesError] = useState<string | null>(null);
+  const [skillPackagesLoading, setSkillPackagesLoading] = useState<boolean>(false);
+
+  const [skillPackagesStatus, setSkillPackagesStatus] = useState<"all" | SkillVerificationStatus>("pending");
+  const [skillPackagesSkillId, setSkillPackagesSkillId] = useState<string>("");
+  const [skillPackagesLimit, setSkillPackagesLimit] = useState<number>(50);
+  const [skillPackagesQuarantineReason, setSkillPackagesQuarantineReason] =
+    useState<string>("manual_quarantine");
+  const [skillPackagesActionId, setSkillPackagesActionId] = useState<string | null>(null);
+  const [skillPackagesActionError, setSkillPackagesActionError] = useState<string | null>(null);
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
   const scopeUnion = useMemo(() => unionScopes(tokens), [tokens]);
@@ -318,6 +337,30 @@ export function AgentProfilePage(): JSX.Element {
       cancelled = true;
     };
   }, [principalId]);
+
+  async function reloadSkillPackages(): Promise<void> {
+    const limitNum = Number(skillPackagesLimit);
+    const limit = Number.isFinite(limitNum) ? Math.max(1, Math.min(200, Math.floor(limitNum))) : 50;
+    const skill_id = skillPackagesSkillId.trim() || undefined;
+    const status = skillPackagesStatus === "all" ? undefined : skillPackagesStatus;
+
+    setSkillPackagesLoading(true);
+    setSkillPackagesError(null);
+    setSkillPackagesActionError(null);
+    try {
+      const rows = await listSkillPackages({ status, skill_id, limit });
+      setSkillPackages(rows);
+    } catch (e) {
+      setSkillPackagesError(toErrorCode(e));
+    } finally {
+      setSkillPackagesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reloadSkillPackages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const agentOptions = useMemo(() => {
     return agents.map((a) => ({
@@ -678,6 +721,179 @@ export function AgentProfilePage(): JSX.Element {
                 <JsonView value={{ agent: agentMeta }} />
               </details>
             </div>
+          </div>
+
+          <div className="detailCard">
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.section.skill_packages")}</div>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => void reloadSkillPackages()}
+                disabled={skillPackagesLoading}
+              >
+                {t("common.refresh")}
+              </button>
+            </div>
+
+            <div className="kvGrid">
+              <div className="kvKey">{t("agent_profile.skill_packages.filter.status")}</div>
+              <div className="kvVal">
+                <select
+                  className="select"
+                  value={skillPackagesStatus}
+                  onChange={(e) => setSkillPackagesStatus(e.target.value as "all" | SkillVerificationStatus)}
+                  disabled={skillPackagesLoading}
+                >
+                  <option value="all">{t("agent_profile.skill_packages.status.all")}</option>
+                  <option value="pending">{t("agent_profile.skill_packages.status.pending")}</option>
+                  <option value="verified">{t("agent_profile.skill_packages.status.verified")}</option>
+                  <option value="quarantined">{t("agent_profile.skill_packages.status.quarantined")}</option>
+                </select>
+              </div>
+
+              <div className="kvKey">{t("agent_profile.skill_packages.filter.skill_id")}</div>
+              <div className="kvVal">
+                <input
+                  className="textInput"
+                  value={skillPackagesSkillId}
+                  onChange={(e) => setSkillPackagesSkillId(e.target.value)}
+                  placeholder={t("agent_profile.skill_packages.skill_id_placeholder")}
+                  disabled={skillPackagesLoading}
+                />
+              </div>
+
+              <div className="kvKey">{t("agent_profile.skill_packages.filter.limit")}</div>
+              <div className="kvVal">
+                <input
+                  className="textInput"
+                  inputMode="numeric"
+                  value={String(skillPackagesLimit)}
+                  onChange={(e) => setSkillPackagesLimit(Number(e.target.value ?? "50"))}
+                  disabled={skillPackagesLoading}
+                />
+              </div>
+            </div>
+
+            <div className="detailSection">
+              <label className="fieldLabel" htmlFor="skillPkgQuarantineReason">
+                {t("agent_profile.skill_packages.quarantine_reason")}
+              </label>
+              <input
+                id="skillPkgQuarantineReason"
+                className="textInput"
+                value={skillPackagesQuarantineReason}
+                onChange={(e) => setSkillPackagesQuarantineReason(e.target.value)}
+                placeholder={t("agent_profile.skill_packages.quarantine_reason_placeholder")}
+                disabled={skillPackagesLoading || Boolean(skillPackagesActionId)}
+              />
+            </div>
+
+            {skillPackagesError ? <div className="errorBox">{t("error.load_failed", { code: skillPackagesError })}</div> : null}
+            {skillPackagesLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {!skillPackagesLoading && !skillPackagesError && skillPackages.length === 0 ? (
+              <div className="placeholder">{t("agent_profile.skill_packages.empty")}</div>
+            ) : null}
+
+            {skillPackages.length ? (
+              <ul className="constraintList" style={{ marginTop: 10 }}>
+                {skillPackages.slice(0, 20).map((pkg) => (
+                  <li key={pkg.skill_package_id} className="constraintRow">
+                    <div className="constraintTop">
+                      <span className="mono">
+                        {pkg.skill_id}@{pkg.version}
+                      </span>
+                      <span className={skillPackageStatusPill(pkg.verification_status)}>
+                        {pkg.verification_status}
+                      </span>
+                    </div>
+                    <div className="muted" style={{ marginTop: 8 }}>
+                      <span className="mono">{pkg.skill_package_id}</span>
+                      <span className="muted"> · </span>
+                      <span className="muted">{formatTimestamp(pkg.updated_at)}</span>
+                      {pkg.quarantine_reason ? (
+                        <>
+                          <span className="muted"> · </span>
+                          <span className="mono">{pkg.quarantine_reason}</span>
+                        </>
+                      ) : null}
+                    </div>
+
+                    <div className="decisionActions" style={{ marginTop: 10 }}>
+                      {pkg.verification_status === "pending" ? (
+                        <button
+                          type="button"
+                          className="primaryButton"
+                          disabled={skillPackagesLoading || skillPackagesActionId === pkg.skill_package_id}
+                          onClick={() => {
+                            void (async () => {
+                              setSkillPackagesActionId(pkg.skill_package_id);
+                              setSkillPackagesActionError(null);
+                              try {
+                                await verifySkillPackage(pkg.skill_package_id);
+                                await reloadSkillPackages();
+                              } catch (e) {
+                                setSkillPackagesActionError(toErrorCode(e));
+                              } finally {
+                                setSkillPackagesActionId(null);
+                              }
+                            })();
+                          }}
+                        >
+                          {t("agent_profile.skill_packages.button.verify")}
+                        </button>
+                      ) : null}
+
+                      {pkg.verification_status !== "quarantined" ? (
+                        <button
+                          type="button"
+                          className="dangerButton"
+                          disabled={
+                            skillPackagesLoading ||
+                            skillPackagesActionId === pkg.skill_package_id ||
+                            !skillPackagesQuarantineReason.trim()
+                          }
+                          onClick={() => {
+                            void (async () => {
+                              const reason = skillPackagesQuarantineReason.trim();
+                              if (!reason) return;
+                              setSkillPackagesActionId(pkg.skill_package_id);
+                              setSkillPackagesActionError(null);
+                              try {
+                                await quarantineSkillPackage(pkg.skill_package_id, reason);
+                                await reloadSkillPackages();
+                              } catch (e) {
+                                setSkillPackagesActionError(toErrorCode(e));
+                              } finally {
+                                setSkillPackagesActionId(null);
+                              }
+                            })();
+                          }}
+                        >
+                          {t("agent_profile.skill_packages.button.quarantine")}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <details className="advancedDetails">
+                      <summary className="advancedSummary">{t("agent_profile.skill_packages.manifest")}</summary>
+                      <JsonView value={{ manifest: pkg.manifest, hash_sha256: pkg.hash_sha256, signature: pkg.signature }} />
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {skillPackagesActionError ? (
+              <div className="errorBox" style={{ marginTop: 10 }}>
+                {t("error.load_failed", { code: skillPackagesActionError })}
+              </div>
+            ) : null}
+
+            <details className="advancedDetails">
+              <summary className="advancedSummary">{t("common.advanced")}</summary>
+              <JsonView value={{ packages: skillPackages }} />
+            </details>
           </div>
         </div>
       ) : null}
