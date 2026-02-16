@@ -5,6 +5,7 @@ export * from "./artifacts.js";
 export * from "./capabilities.js";
 export * from "./egress.js";
 export * from "./ids.js";
+export * from "./learning.js";
 export * from "./policy.js";
 export * from "./runs.js";
 export * from "./secrets.js";

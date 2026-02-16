@@ -9,6 +9,7 @@ import {
 
 import type { DbPool } from "../db/pool.js";
 import { appendToStream } from "../eventStore/index.js";
+import { recordLearningFromFailure } from "../security/learningFromFailure.js";
 import { evaluatePolicyDbV1 } from "./policyGate.js";
 
 export const PolicyEnforcementMode = {
@@ -31,6 +32,12 @@ export interface AuthorizeResultV2 extends PolicyCheckResultV1 {
 }
 
 type AuthorizeCategory = "tool_call" | "data_access" | "action" | "egress";
+
+interface NegativeDecisionMeta {
+  event_id: string;
+  correlation_id: string;
+  occurred_at: string;
+}
 
 function getPolicyEnforcementMode(raw: string | undefined): PolicyEnforcementMode {
   const v = (raw ?? "").trim().toLowerCase();
@@ -57,17 +64,19 @@ async function appendNegativeDecisionEvent(
   category: AuthorizeCategory,
   input: AuthorizeInputV2,
   result: AuthorizeResultV2,
-): Promise<void> {
-  if (result.decision === PolicyDecision.Allow) return;
+): Promise<NegativeDecisionMeta | null> {
+  if (result.decision === PolicyDecision.Allow) return null;
 
   const event_type =
     result.decision === PolicyDecision.Deny ? "policy.denied" : "policy.requires_approval";
+  const occurred_at = new Date().toISOString();
+  const correlation_id = randomUUID();
 
-  await appendToStream(pool, {
+  const event = await appendToStream(pool, {
     event_id: randomUUID(),
     event_type,
     event_version: 1,
-    occurred_at: new Date().toISOString(),
+    occurred_at,
     workspace_id: input.workspace_id,
     room_id: input.room_id,
     thread_id: input.thread_id,
@@ -79,7 +88,7 @@ async function appendNegativeDecisionEvent(
     stream: input.room_id
       ? { stream_type: "room", stream_id: input.room_id }
       : { stream_type: "workspace", stream_id: input.workspace_id },
-    correlation_id: randomUUID(),
+    correlation_id,
     data: {
       category,
       action: input.action,
@@ -93,6 +102,11 @@ async function appendNegativeDecisionEvent(
     model_context: {},
     display: {},
   });
+  return {
+    event_id: event.event_id,
+    correlation_id,
+    occurred_at,
+  };
 }
 
 async function authorizeCore(
@@ -126,7 +140,37 @@ async function authorizeCore(
     blocked,
   };
 
-  await appendNegativeDecisionEvent(pool, category, input, result);
+  const negative = await appendNegativeDecisionEvent(pool, category, input, result);
+  if (negative) {
+    try {
+      await recordLearningFromFailure(pool, {
+        category,
+        action: input.action,
+        actor: input.actor,
+        workspace_id: input.workspace_id,
+        room_id: input.room_id,
+        thread_id: input.thread_id,
+        run_id: input.run_id,
+        step_id: input.step_id,
+        principal_id: input.principal_id,
+        zone: input.zone,
+        context: input.context,
+        decision: result.decision,
+        reason_code: result.reason_code,
+        reason: result.reason,
+        enforcement_mode: result.enforcement_mode,
+        blocked: result.blocked,
+        capability_token_id: input.capability_token_id,
+        policy_event_id: negative.event_id,
+        correlation_id: negative.correlation_id,
+        occurred_at: negative.occurred_at,
+      });
+    } catch (err) {
+      // Learning signals are additive; they must not block existing policy flows.
+      // eslint-disable-next-line no-console
+      console.warn("learning-from-failure recording failed", err);
+    }
+  }
   return result;
 }
 
@@ -157,4 +201,3 @@ export async function authorize_egress(
 ): Promise<AuthorizeResultV2> {
   return await authorizeCore(pool, "egress", input);
 }
-
