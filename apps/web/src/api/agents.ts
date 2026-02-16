@@ -1,8 +1,15 @@
-import type { CapabilityScopesV1 } from "@agentapp/shared";
+import type {
+  AgentGetResponseV1,
+  AgentQuarantineRequestV1,
+  AgentQuarantineResponseV1,
+  AgentRecordV1,
+  AgentUnquarantineResponseV1,
+  CapabilityScopesV1,
+} from "@agentapp/shared";
 
 import type { EventRow } from "./events";
 import { listEvents } from "./events";
-import { apiGet } from "./http";
+import { apiGet, apiPost } from "./http";
 
 export interface RegisteredAgent {
   agent_id: string;
@@ -52,6 +59,22 @@ export async function listRegisteredAgents(params?: { limit?: number }): Promise
   }
 
   return [...byAgent.values()].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+}
+
+export async function getAgent(agent_id: string): Promise<AgentRecordV1> {
+  const res = await apiGet<AgentGetResponseV1>(`/v1/agents/${encodeURIComponent(agent_id)}`);
+  return res.agent;
+}
+
+export async function quarantineAgent(
+  agent_id: string,
+  payload: AgentQuarantineRequestV1,
+): Promise<AgentQuarantineResponseV1> {
+  return await apiPost<AgentQuarantineResponseV1>(`/v1/agents/${encodeURIComponent(agent_id)}/quarantine`, payload);
+}
+
+export async function unquarantineAgent(agent_id: string): Promise<AgentUnquarantineResponseV1> {
+  return await apiPost<AgentUnquarantineResponseV1>(`/v1/agents/${encodeURIComponent(agent_id)}/unquarantine`, {});
 }
 
 export interface AgentTrustRow {
@@ -258,4 +281,3 @@ export async function listMistakeRepeatedEvents(params: { agent_id: string; limi
   }
   return rows.sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
 }
-

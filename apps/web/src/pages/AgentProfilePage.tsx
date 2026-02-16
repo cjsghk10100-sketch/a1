@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import type { AgentRecordV1 } from "@agentapp/shared";
+
 import type {
   AgentSkillRow,
   AgentTrustRow,
@@ -11,6 +13,7 @@ import type {
   RegisteredAgent,
 } from "../api/agents";
 import {
+  getAgent,
   getAgentTrust,
   listAgentSkills,
   listAgentSnapshots,
@@ -18,6 +21,8 @@ import {
   listConstraintLearnedEvents,
   listMistakeRepeatedEvents,
   listRegisteredAgents,
+  quarantineAgent,
+  unquarantineAgent,
 } from "../api/agents";
 import { ApiError } from "../api/http";
 import { JsonView } from "../components/JsonView";
@@ -115,7 +120,17 @@ export function AgentProfilePage(): JSX.Element {
   const [manualAgentId, setManualAgentId] = useState<string>("");
 
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
-  const principalId = selectedAgent?.principal_id ?? null;
+
+  const [agentMeta, setAgentMeta] = useState<AgentRecordV1 | null>(null);
+  const [agentMetaError, setAgentMetaError] = useState<string | null>(null);
+  const [agentMetaLoading, setAgentMetaLoading] = useState<boolean>(false);
+
+  const principalId = agentMeta?.principal_id ?? selectedAgent?.principal_id ?? null;
+  const isQuarantined = Boolean(agentMeta?.quarantined_at);
+
+  const [quarantineReason, setQuarantineReason] = useState<string>("manual_quarantine");
+  const [quarantineActionLoading, setQuarantineActionLoading] = useState<boolean>(false);
+  const [quarantineActionError, setQuarantineActionError] = useState<string | null>(null);
 
   const [trust, setTrust] = useState<AgentTrustRow | null>(null);
   const [trustError, setTrustError] = useState<string | null>(null);
@@ -181,6 +196,12 @@ export function AgentProfilePage(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(agentStorageKey, agentId);
 
+    setAgentMeta(null);
+    setAgentMetaError(null);
+    setQuarantineActionError(null);
+    setQuarantineActionLoading(false);
+    setQuarantineReason("manual_quarantine");
+
     setTrust(null);
     setTokens([]);
     setSkills([]);
@@ -195,15 +216,38 @@ export function AgentProfilePage(): JSX.Element {
     setConstraintsError(null);
     setMistakesError(null);
 
-    if (!agentId.trim()) return;
+    if (!agentId.trim()) {
+      setAgentMetaLoading(false);
+      setTrustLoading(false);
+      setSkillsLoading(false);
+      setSnapshotsLoading(false);
+      setConstraintsLoading(false);
+      setMistakesLoading(false);
+      setTokensLoading(false);
+      return;
+    }
     let cancelled = false;
+
+    setAgentMetaLoading(true);
+    void (async () => {
+      try {
+        const meta = await getAgent(agentId);
+        if (cancelled) return;
+        setAgentMeta(meta);
+        if (meta.quarantine_reason) setQuarantineReason(meta.quarantine_reason);
+      } catch (e) {
+        if (cancelled) return;
+        setAgentMetaError(toErrorCode(e));
+      } finally {
+        if (!cancelled) setAgentMetaLoading(false);
+      }
+    })();
 
     setTrustLoading(true);
     setSkillsLoading(true);
     setSnapshotsLoading(true);
     setConstraintsLoading(true);
     setMistakesLoading(true);
-    setTokensLoading(Boolean(principalId));
 
     void (async () => {
       try {
@@ -240,27 +284,40 @@ export function AgentProfilePage(): JSX.Element {
       }
     })();
 
-    if (principalId) {
-      void (async () => {
-        try {
-          const tok = await listCapabilityTokens(principalId);
-          if (cancelled) return;
-          setTokens(tok);
-        } catch (e) {
-          if (cancelled) return;
-          setTokensError(toErrorCode(e));
-        } finally {
-          if (!cancelled) setTokensLoading(false);
-        }
-      })();
-    } else {
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
+
+  useEffect(() => {
+    setTokens([]);
+    setTokensError(null);
+
+    if (!principalId?.trim()) {
       setTokensLoading(false);
+      return;
     }
+
+    let cancelled = false;
+    setTokensLoading(true);
+
+    void (async () => {
+      try {
+        const tok = await listCapabilityTokens(principalId);
+        if (cancelled) return;
+        setTokens(tok);
+      } catch (e) {
+        if (cancelled) return;
+        setTokensError(toErrorCode(e));
+      } finally {
+        if (!cancelled) setTokensLoading(false);
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [agentId, principalId]);
+  }, [principalId]);
 
   const agentOptions = useMemo(() => {
     return agents.map((a) => ({
@@ -373,6 +430,20 @@ export function AgentProfilePage(): JSX.Element {
           <div className="timelineConnRow">
             <div className="timelineConnLabel">{t("agent_profile.autonomy_rate_7d")}</div>
             <div className="mono">{latestSnapshot ? formatPct01(latestSnapshot.autonomy_rate_7d) : "—"}</div>
+          </div>
+          <div className="timelineConnRow">
+            <div className="timelineConnLabel">{t("agent_profile.quarantine")}</div>
+            <div className="mono">
+              {agentMetaLoading
+                ? t("common.loading")
+                : agentMetaError
+                  ? t("error.load_failed", { code: agentMetaError })
+                  : agentMeta
+                    ? isQuarantined
+                      ? t("agent_profile.quarantine.active")
+                      : t("agent_profile.quarantine.inactive")
+                    : "—"}
+            </div>
           </div>
         </div>
       </div>
@@ -498,6 +569,115 @@ export function AgentProfilePage(): JSX.Element {
                 ))}
               </ul>
             ) : null}
+          </div>
+
+          <div className="detailCard">
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.section.quarantine")}</div>
+              {agentMeta ? (
+                <span className={isQuarantined ? "statusPill statusDenied" : "statusPill statusApproved"}>
+                  {isQuarantined ? t("agent_profile.quarantine.active") : t("agent_profile.quarantine.inactive")}
+                </span>
+              ) : (
+                <span className="connState">{t("common.not_available")}</span>
+              )}
+            </div>
+
+            {agentMetaError ? <div className="errorBox">{t("error.load_failed", { code: agentMetaError })}</div> : null}
+            {agentMetaLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+            {!agentMetaLoading && !agentMetaError && agentMeta && isQuarantined ? (
+              <div className="kvGrid">
+                <div className="kvKey">{t("agent_profile.quarantine.at")}</div>
+                <div className="kvVal mono">{formatTimestamp(agentMeta.quarantined_at ?? null)}</div>
+
+                <div className="kvKey">{t("agent_profile.quarantine.reason")}</div>
+                <div className="kvVal mono">{agentMeta.quarantine_reason ?? "—"}</div>
+              </div>
+            ) : null}
+
+            {!agentMetaLoading && !agentMetaError && agentMeta && !isQuarantined ? (
+              <div className="placeholder">{t("agent_profile.quarantine.not_quarantined_hint")}</div>
+            ) : null}
+
+            <div className="detailSection">
+              <label className="fieldLabel" htmlFor="quarantineReason">
+                {t("agent_profile.quarantine.reason")}
+              </label>
+              <div className="timelineManualRow">
+                <input
+                  id="quarantineReason"
+                  className="textInput"
+                  value={quarantineReason}
+                  onChange={(e) => setQuarantineReason(e.target.value)}
+                  placeholder={t("agent_profile.quarantine.reason_placeholder")}
+                  disabled={quarantineActionLoading || isQuarantined}
+                />
+                <button
+                  type="button"
+                  className="dangerButton"
+                  disabled={quarantineActionLoading || !agentId.trim() || isQuarantined}
+                  onClick={() => {
+                    void (async () => {
+                      if (!agentId.trim()) return;
+                      setQuarantineActionLoading(true);
+                      setQuarantineActionError(null);
+                      try {
+                        await quarantineAgent(agentId, {
+                          quarantine_reason: quarantineReason.trim() || undefined,
+                        });
+                        const meta = await getAgent(agentId);
+                        setAgentMeta(meta);
+                      } catch (e) {
+                        setQuarantineActionError(toErrorCode(e));
+                      } finally {
+                        setQuarantineActionLoading(false);
+                      }
+                    })();
+                  }}
+                >
+                  {t("agent_profile.quarantine.button_quarantine")}
+                </button>
+              </div>
+
+              <div className="timelineControls" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  disabled={quarantineActionLoading || !agentId.trim() || !isQuarantined}
+                  onClick={() => {
+                    void (async () => {
+                      if (!agentId.trim()) return;
+                      setQuarantineActionLoading(true);
+                      setQuarantineActionError(null);
+                      try {
+                        await unquarantineAgent(agentId);
+                        const meta = await getAgent(agentId);
+                        setAgentMeta(meta);
+                      } catch (e) {
+                        setQuarantineActionError(toErrorCode(e));
+                      } finally {
+                        setQuarantineActionLoading(false);
+                      }
+                    })();
+                  }}
+                >
+                  {t("agent_profile.quarantine.button_unquarantine")}
+                </button>
+                <span className="muted">{t("agent_profile.quarantine.note_egress_blocked")}</span>
+              </div>
+
+              {quarantineActionError ? (
+                <div className="errorBox" style={{ marginTop: 10 }}>
+                  {t("error.load_failed", { code: quarantineActionError })}
+                </div>
+              ) : null}
+
+              <details className="advancedDetails">
+                <summary className="advancedSummary">{t("common.advanced")}</summary>
+                <JsonView value={{ agent: agentMeta }} />
+              </details>
+            </div>
           </div>
         </div>
       ) : null}
@@ -701,4 +881,3 @@ export function AgentProfilePage(): JSX.Element {
     </section>
   );
 }
-
