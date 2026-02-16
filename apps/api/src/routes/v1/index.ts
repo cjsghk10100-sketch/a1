@@ -11,6 +11,7 @@ import { registerEventRoutes } from "./events.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerRunRoutes } from "./runs.js";
 import { registerSecretRoutes } from "./secrets.js";
+import { registerSkillsLedgerRoutes } from "./skillsLedger.js";
 import { registerSkillPackageRoutes } from "./skillPackages.js";
 import { registerToolCallRoutes } from "./toolcalls.js";
 import { registerRoomRoutes } from "./rooms.js";
@@ -29,6 +30,7 @@ export async function registerV1Routes(app: FastifyInstance, pool: DbPool): Prom
   await registerPolicyRoutes(app, pool);
   await registerRunRoutes(app, pool);
   await registerSecretRoutes(app, pool);
+  await registerSkillsLedgerRoutes(app, pool);
   await registerSkillPackageRoutes(app, pool);
   await registerToolCallRoutes(app, pool);
   await registerRoomRoutes(app, pool);
