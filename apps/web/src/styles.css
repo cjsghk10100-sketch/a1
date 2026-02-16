@@ -561,6 +561,23 @@ body {
   margin-bottom: 12px;
 }
 
+.inspectorRecentRunsBlock {
+  margin-bottom: 10px;
+}
+
+.inspectorRecentRunsRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.inspectorRecentRunsNote {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .inspectorSearchGrid {
   display: grid;
   grid-template-columns: 1fr 1fr 140px;

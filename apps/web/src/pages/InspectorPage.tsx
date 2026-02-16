@@ -8,7 +8,7 @@ import type { EventDetail, EventRow } from "../api/events";
 import { getEvent, listEvents } from "../api/events";
 import { ApiError } from "../api/http";
 import type { RunRow, StepRow } from "../api/runs";
-import { getRun, listRunSteps } from "../api/runs";
+import { getRun, listRuns, listRunSteps } from "../api/runs";
 import type { ToolCallRow } from "../api/toolcalls";
 import { listToolCalls } from "../api/toolcalls";
 import { JsonView } from "../components/JsonView";
@@ -25,6 +25,12 @@ function formatTimestamp(value: string | null): string {
 function toErrorCode(e: unknown): string {
   if (e instanceof ApiError) return String(e.status);
   return "unknown";
+}
+
+function runOptionLabel(run: RunRow): string {
+  const title = (run.title ?? "").trim();
+  const prefix = title ? `${title} ` : "";
+  return `${prefix}(${run.status}) ${run.run_id}`;
 }
 
 function uniqueNonNull(values: Array<string | null>): string[] {
@@ -45,6 +51,11 @@ export function InspectorPage(): JSX.Element {
   const [correlationId, setCorrelationId] = useState<string>("");
   const [limit, setLimit] = useState<number>(200);
 
+  const [recentRuns, setRecentRuns] = useState<RunRow[]>([]);
+  const [recentRunsPick, setRecentRunsPick] = useState<string>("");
+  const [recentRunsLoading, setRecentRunsLoading] = useState<boolean>(false);
+  const [recentRunsError, setRecentRunsError] = useState<string | null>(null);
+
   const [run, setRun] = useState<RunRow | null>(null);
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallRow[]>([]);
@@ -63,6 +74,25 @@ export function InspectorPage(): JSX.Element {
   const eventTokenRef = useRef<number>(0);
 
   const runIdsFromEvents = useMemo(() => uniqueNonNull(events.map((e) => e.run_id)), [events]);
+  const recentRunsPickUnknown = useMemo(() => {
+    const pick = recentRunsPick.trim();
+    if (!pick) return false;
+    return !recentRuns.some((r) => r.run_id === pick);
+  }, [recentRuns, recentRunsPick]);
+
+  async function reloadRecentRuns(nextLimit?: number): Promise<void> {
+    const limitNum = nextLimit ?? 50;
+    setRecentRunsLoading(true);
+    setRecentRunsError(null);
+    try {
+      const runs = await listRuns({ limit: limitNum });
+      setRecentRuns(runs);
+    } catch (e) {
+      setRecentRunsError(toErrorCode(e));
+    } finally {
+      setRecentRunsLoading(false);
+    }
+  }
 
   useEffect(() => {
     const initialRunId = (searchParams.get("run_id") ?? "").trim();
@@ -75,6 +105,8 @@ export function InspectorPage(): JSX.Element {
 
     setLimit(initialLimit);
     if (initialEventId) setSelectedEventId(initialEventId);
+
+    void reloadRecentRuns();
 
     if (initialRunId) {
       setMode("run");
@@ -150,6 +182,7 @@ export function InspectorPage(): JSX.Element {
 
       setRun(r);
       setCorrelationId(r.correlation_id);
+      setRecentRunsPick(r.run_id);
       setSteps(s);
       setToolCalls(tc);
       setArtifacts(a);
@@ -267,6 +300,53 @@ export function InspectorPage(): JSX.Element {
       </div>
 
       <div className="detailCard inspectorSearchCard">
+        <div className="inspectorRecentRunsBlock">
+          <label className="fieldLabel" htmlFor="recentRunsPick">
+            {t("inspector.recent_runs")}
+          </label>
+          <div className="inspectorRecentRunsRow">
+            <select
+              id="recentRunsPick"
+              className="select"
+              value={recentRunsPick}
+              onChange={(e) => {
+                const id = e.target.value.trim();
+                setRecentRunsPick(id);
+                if (!id) return;
+                setMode("run");
+                setRunId(id);
+                void loadByRun(id, limit, true);
+              }}
+              disabled={recentRunsLoading}
+            >
+              <option value="">
+                {recentRunsLoading ? t("common.loading") : t("inspector.recent_runs_placeholder")}
+              </option>
+              {recentRunsPickUnknown ? <option value={recentRunsPick}>{recentRunsPick}</option> : null}
+              {recentRuns.map((r) => (
+                <option key={r.run_id} value={r.run_id}>
+                  {runOptionLabel(r)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="ghostButton"
+              onClick={() => void reloadRecentRuns()}
+              disabled={recentRunsLoading}
+            >
+              {t("common.refresh")}
+            </button>
+          </div>
+
+          {recentRunsError ? (
+            <div className="errorBox">{t("error.load_failed", { code: recentRunsError })}</div>
+          ) : null}
+          {!recentRunsError && !recentRunsLoading && recentRuns.length === 0 ? (
+            <div className="inspectorRecentRunsNote">{t("inspector.recent_runs_empty")}</div>
+          ) : null}
+        </div>
+
         <div className="inspectorSearchGrid">
           <div>
             <label className="fieldLabel" htmlFor="runId">
