@@ -8,6 +8,10 @@ import type {
   AgentSkillImportRequestV1,
   AgentSkillImportResponseV1,
   AgentUnquarantineResponseV1,
+  AutonomyApproveRequestV1,
+  AutonomyApproveResponseV1,
+  AutonomyRecommendRequestV1,
+  AutonomyRecommendResponseV1,
   CapabilityScopesV1,
 } from "@agentapp/shared";
 
@@ -110,6 +114,26 @@ export interface AgentTrustRow {
 export async function getAgentTrust(agent_id: string): Promise<AgentTrustRow> {
   const res = await apiGet<{ trust: AgentTrustRow }>(`/v1/agents/${encodeURIComponent(agent_id)}/trust`);
   return res.trust;
+}
+
+export async function recommendAutonomyUpgrade(
+  agent_id: string,
+  payload: AutonomyRecommendRequestV1,
+): Promise<AutonomyRecommendResponseV1> {
+  return await apiPost<AutonomyRecommendResponseV1>(
+    `/v1/agents/${encodeURIComponent(agent_id)}/autonomy/recommend`,
+    payload,
+  );
+}
+
+export async function approveAutonomyUpgrade(
+  agent_id: string,
+  payload: AutonomyApproveRequestV1,
+): Promise<AutonomyApproveResponseV1> {
+  return await apiPost<AutonomyApproveResponseV1>(
+    `/v1/agents/${encodeURIComponent(agent_id)}/autonomy/approve`,
+    payload,
+  );
 }
 
 export interface CapabilityTokenRow {
