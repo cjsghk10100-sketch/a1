@@ -60,6 +60,11 @@ function nextIsoDate(date: string): string {
   return new Date(t + DAY_MS).toISOString().slice(0, 10);
 }
 
+function addIsoDays(date: string, deltaDays: number): string {
+  const t = Date.parse(`${date}T00:00:00.000Z`);
+  return new Date(t + deltaDays * DAY_MS).toISOString().slice(0, 10);
+}
+
 async function scalarCount(pool: DbPool, sql: string, args: unknown[]): Promise<number> {
   const res = await pool.query<{ count: string }>(sql, args);
   return Math.max(0, Number(res.rows[0]?.count ?? "0"));
@@ -67,7 +72,13 @@ async function scalarCount(pool: DbPool, sql: string, args: unknown[]): Promise<
 
 async function computeAgentMetrics(
   pool: DbPool,
-  input: { workspace_id: string; snapshot_date: string; agent: AgentRow },
+  input: {
+    workspace_id: string;
+    snapshot_date: string;
+    range_start: string; // timestamptz (UTC)
+    range_end: string; // timestamptz (UTC, exclusive)
+    agent: AgentRow;
+  },
 ): Promise<SnapshotMetrics> {
   const trust = await pool.query<TrustRow>(
     `SELECT trust_score, success_rate_7d, policy_violations_7d, components
@@ -86,9 +97,9 @@ async function computeAgentMetrics(
      WHERE workspace_id = $1
        AND actor_principal_id = $2
        AND event_type IN ('run.completed', 'run.failed')
-       AND occurred_at >= ($3::date - interval '6 days')
-       AND occurred_at < ($3::date + interval '1 day')`,
-    [input.workspace_id, input.agent.principal_id, input.snapshot_date],
+       AND occurred_at >= ($3::timestamptz)
+       AND occurred_at < ($4::timestamptz)`,
+    [input.workspace_id, input.agent.principal_id, input.range_start, input.range_end],
   );
 
   const blocked_actions_7d = await scalarCount(
@@ -98,9 +109,9 @@ async function computeAgentMetrics(
      WHERE workspace_id = $1
        AND actor_principal_id = $2
        AND event_type IN ('policy.denied', 'policy.requires_approval', 'egress.blocked')
-       AND occurred_at >= ($3::date - interval '6 days')
-       AND occurred_at < ($3::date + interval '1 day')`,
-    [input.workspace_id, input.agent.principal_id, input.snapshot_date],
+       AND occurred_at >= ($3::timestamptz)
+       AND occurred_at < ($4::timestamptz)`,
+    [input.workspace_id, input.agent.principal_id, input.range_start, input.range_end],
   );
 
   const new_skills_learned_7d = await scalarCount(
@@ -110,9 +121,9 @@ async function computeAgentMetrics(
      WHERE workspace_id = $1
        AND agent_id = $2
        AND learned_at IS NOT NULL
-       AND learned_at >= ($3::date - interval '6 days')
-       AND learned_at < ($3::date + interval '1 day')`,
-    [input.workspace_id, input.agent.agent_id, input.snapshot_date],
+       AND learned_at >= ($3::timestamptz)
+       AND learned_at < ($4::timestamptz)`,
+    [input.workspace_id, input.agent.agent_id, input.range_start, input.range_end],
   );
 
   const constraints_learned_7d = await scalarCount(
@@ -124,9 +135,9 @@ async function computeAgentMetrics(
          agent_id = $2
          OR (agent_id IS NULL AND principal_id = $3)
        )
-       AND first_learned_at >= ($4::date - interval '6 days')
-       AND first_learned_at < ($4::date + interval '1 day')`,
-    [input.workspace_id, input.agent.agent_id, input.agent.principal_id, input.snapshot_date],
+       AND first_learned_at >= ($4::timestamptz)
+       AND first_learned_at < ($5::timestamptz)`,
+    [input.workspace_id, input.agent.agent_id, input.agent.principal_id, input.range_start, input.range_end],
   );
 
   const repeated_mistakes_7d = await scalarCount(
@@ -135,13 +146,13 @@ async function computeAgentMetrics(
      FROM evt_events
      WHERE workspace_id = $1
        AND event_type = 'mistake.repeated'
-       AND occurred_at >= ($2::date - interval '6 days')
-       AND occurred_at < ($2::date + interval '1 day')
+       AND occurred_at >= ($2::timestamptz)
+       AND occurred_at < ($3::timestamptz)
        AND (
-         data->>'agent_id' = $3
-         OR actor_principal_id = $4
+         data->>'agent_id' = $4
+         OR actor_principal_id = $5
        )`,
-    [input.workspace_id, input.snapshot_date, input.agent.agent_id, input.agent.principal_id],
+    [input.workspace_id, input.range_start, input.range_end, input.agent.agent_id, input.agent.principal_id],
   );
 
   const autonomy_rate_7d = runs_7d > 0 ? clamp01(1 - blocked_actions_7d / runs_7d) : 0;
@@ -172,6 +183,8 @@ export async function runDailySnapshotJob(
   const snapshot_date = toIsoDate(options.snapshot_date);
   const occurred_at = `${snapshot_date}T00:00:00.000Z`;
   const next_day = nextIsoDate(snapshot_date);
+  const range_start = `${addIsoDays(snapshot_date, -6)}T00:00:00.000Z`;
+  const range_end = `${next_day}T00:00:00.000Z`;
   const correlation_id = randomUUID();
 
   const agents = await pool.query<AgentRow>(
@@ -187,6 +200,8 @@ export async function runDailySnapshotJob(
     const metrics = await computeAgentMetrics(pool, {
       workspace_id,
       snapshot_date,
+      range_start,
+      range_end,
       agent,
     });
 
