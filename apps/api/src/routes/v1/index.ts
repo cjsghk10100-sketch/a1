@@ -5,6 +5,7 @@ import { registerActionRegistryRoutes } from "./actionRegistry.js";
 import { registerApprovalRoutes } from "./approvals.js";
 import { registerArtifactRoutes } from "./artifacts.js";
 import { registerCapabilityRoutes } from "./capabilities.js";
+import { registerEgressRoutes } from "./egress.js";
 import { registerEventRoutes } from "./events.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerRunRoutes } from "./runs.js";
@@ -18,6 +19,7 @@ export async function registerV1Routes(app: FastifyInstance, pool: DbPool): Prom
   await registerApprovalRoutes(app, pool);
   await registerArtifactRoutes(app, pool);
   await registerCapabilityRoutes(app, pool);
+  await registerEgressRoutes(app, pool);
   await registerEventRoutes(app, pool);
   await registerPolicyRoutes(app, pool);
   await registerRunRoutes(app, pool);
