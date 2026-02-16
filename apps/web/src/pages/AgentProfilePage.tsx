@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import type {
   AgentRecordV1,
   AgentSkillImportResponseV1,
+  AutonomyApproveResponseV1,
+  AutonomyRecommendationV1,
   SkillPackageRecordV1,
   SkillVerificationStatus,
 } from "@agentapp/shared";
@@ -18,6 +20,7 @@ import type {
   RegisteredAgent,
 } from "../api/agents";
 import {
+  approveAutonomyUpgrade,
   getAgent,
   getAgentTrust,
   importAgentSkills,
@@ -28,11 +31,13 @@ import {
   listMistakeRepeatedEvents,
   listRegisteredAgents,
   quarantineAgent,
+  recommendAutonomyUpgrade,
   registerAgent,
   unquarantineAgent,
 } from "../api/agents";
 import { listSkillPackages, quarantineSkillPackage, verifySkillPackage } from "../api/skillPackages";
 import { ApiError } from "../api/http";
+import { ensureLegacyPrincipal } from "../api/principals";
 import { JsonView } from "../components/JsonView";
 
 type TabKey = "permissions" | "growth";
@@ -112,6 +117,7 @@ function unionScopes(tokens: CapabilityTokenRow[]): ScopeSummary {
 }
 
 const agentStorageKey = "agentapp.agent_id";
+const operatorStorageKey = "agentapp.operator_actor_id";
 
 export function AgentProfilePage(): JSX.Element {
   const { t } = useTranslation();
@@ -132,6 +138,9 @@ export function AgentProfilePage(): JSX.Element {
 
   const [agentId, setAgentId] = useState<string>(() => localStorage.getItem(agentStorageKey) ?? "");
   const [manualAgentId, setManualAgentId] = useState<string>("");
+  const [operatorActorId, setOperatorActorId] = useState<string>(
+    () => localStorage.getItem(operatorStorageKey) ?? "anon",
+  );
 
   const [registerDisplayName, setRegisterDisplayName] = useState<string>("");
   const [registerLoading, setRegisterLoading] = useState<boolean>(false);
@@ -190,6 +199,14 @@ export function AgentProfilePage(): JSX.Element {
     useState<string>("manual_quarantine");
   const [skillPackagesActionId, setSkillPackagesActionId] = useState<string | null>(null);
   const [skillPackagesActionError, setSkillPackagesActionError] = useState<string | null>(null);
+
+  const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
+  const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
+  const [autonomyRecommendLoading, setAutonomyRecommendLoading] = useState<boolean>(false);
+  const [autonomyRecommendError, setAutonomyRecommendError] = useState<string | null>(null);
+  const [autonomyApproveLoading, setAutonomyApproveLoading] = useState<boolean>(false);
+  const [autonomyApproveError, setAutonomyApproveError] = useState<string | null>(null);
+  const [autonomyApproveResult, setAutonomyApproveResult] = useState<AutonomyApproveResponseV1 | null>(null);
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
   const scopeUnion = useMemo(() => unionScopes(tokens), [tokens]);
@@ -252,6 +269,14 @@ export function AgentProfilePage(): JSX.Element {
     setSnapshotsError(null);
     setConstraintsError(null);
     setMistakesError(null);
+
+    setAutonomyRecommendation(null);
+    setAutonomyRecommendationId("");
+    setAutonomyRecommendError(null);
+    setAutonomyRecommendLoading(false);
+    setAutonomyApproveError(null);
+    setAutonomyApproveLoading(false);
+    setAutonomyApproveResult(null);
 
     if (!agentId.trim()) {
       setAgentMetaLoading(false);
@@ -327,6 +352,10 @@ export function AgentProfilePage(): JSX.Element {
   }, [agentId]);
 
   useEffect(() => {
+    localStorage.setItem(operatorStorageKey, operatorActorId);
+  }, [operatorActorId]);
+
+  useEffect(() => {
     setTokens([]);
     setTokensError(null);
 
@@ -355,6 +384,12 @@ export function AgentProfilePage(): JSX.Element {
       cancelled = true;
     };
   }, [principalId]);
+
+  async function ensureOperatorPrincipalId(): Promise<string> {
+    const actor_id = operatorActorId.trim() || "anon";
+    const principal = await ensureLegacyPrincipal({ actor_type: "user", actor_id });
+    return principal.principal_id;
+  }
 
   async function reloadSkillPackages(): Promise<void> {
     const limitNum = Number(skillPackagesLimit);
@@ -584,6 +619,185 @@ export function AgentProfilePage(): JSX.Element {
             <details className="advancedDetails">
               <summary className="advancedSummary">{t("common.advanced")}</summary>
               <JsonView value={{ tokens }} />
+            </details>
+          </div>
+
+          <div className="detailCard">
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.section.autonomy_upgrade")}</div>
+            </div>
+
+            <div className="detailSection">
+              <label className="fieldLabel" htmlFor="operatorActorId">
+                {t("agent_profile.autonomy.operator_actor_id")}
+              </label>
+              <input
+                id="operatorActorId"
+                className="textInput mono"
+                value={operatorActorId}
+                onChange={(e) => setOperatorActorId(e.target.value)}
+                placeholder={t("agent_profile.autonomy.operator_actor_id_placeholder")}
+                disabled={autonomyRecommendLoading || autonomyApproveLoading}
+              />
+            </div>
+
+            <div className="timelineControls" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={autonomyRecommendLoading || autonomyApproveLoading || !agentId.trim()}
+                onClick={() => {
+                  void (async () => {
+                    const nextAgentId = agentId.trim();
+                    if (!nextAgentId) return;
+
+                    setAutonomyRecommendLoading(true);
+                    setAutonomyRecommendError(null);
+                    setAutonomyApproveError(null);
+                    setAutonomyApproveResult(null);
+
+                    try {
+                      const actor_id = operatorActorId.trim() || "anon";
+                      const operator_principal_id = await ensureOperatorPrincipalId();
+                      const res = await recommendAutonomyUpgrade(nextAgentId, {
+                        actor_type: "user",
+                        actor_id,
+                        actor_principal_id: operator_principal_id,
+                      });
+
+                      setAutonomyRecommendation(res.recommendation);
+                      setAutonomyRecommendationId(res.recommendation.recommendation_id);
+                      setTrust(res.trust);
+                    } catch (e) {
+                      setAutonomyRecommendError(toErrorCode(e));
+                    } finally {
+                      setAutonomyRecommendLoading(false);
+                    }
+                  })();
+                }}
+              >
+                {t("agent_profile.autonomy.button_recommend")}
+              </button>
+
+              <button
+                type="button"
+                className="ghostButton"
+                disabled={autonomyRecommendLoading || autonomyApproveLoading}
+                onClick={() => {
+                  setAutonomyRecommendation(null);
+                  setAutonomyRecommendationId("");
+                  setAutonomyRecommendError(null);
+                  setAutonomyApproveError(null);
+                  setAutonomyApproveResult(null);
+                }}
+              >
+                {t("common.reset")}
+              </button>
+            </div>
+
+            {autonomyRecommendError ? (
+              <div className="errorBox" style={{ marginTop: 10 }}>
+                {t("error.load_failed", { code: autonomyRecommendError })}
+              </div>
+            ) : null}
+
+            {autonomyRecommendLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+            {!autonomyRecommendLoading && !autonomyRecommendError && !autonomyRecommendation ? (
+              <div className="placeholder">{t("agent_profile.autonomy.no_recommendation")}</div>
+            ) : null}
+
+            {autonomyRecommendation ? (
+              <div className="kvGrid" style={{ marginTop: 10 }}>
+                <div className="kvKey">{t("agent_profile.autonomy.recommendation_id")}</div>
+                <div className="kvVal mono">{autonomyRecommendation.recommendation_id}</div>
+
+                <div className="kvKey">{t("agent_profile.autonomy.rationale")}</div>
+                <div className="kvVal">{autonomyRecommendation.rationale}</div>
+              </div>
+            ) : null}
+
+            <div className="detailSection">
+              <label className="fieldLabel" htmlFor="autonomyRecommendationId">
+                {t("agent_profile.autonomy.recommendation_id")}
+              </label>
+              <input
+                id="autonomyRecommendationId"
+                className="textInput mono"
+                value={autonomyRecommendationId}
+                onChange={(e) => setAutonomyRecommendationId(e.target.value)}
+                placeholder={t("agent_profile.autonomy.recommendation_id_placeholder")}
+                disabled={autonomyRecommendLoading || autonomyApproveLoading}
+              />
+            </div>
+
+            <div className="timelineControls" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={
+                  autonomyApproveLoading ||
+                  autonomyRecommendLoading ||
+                  !agentId.trim() ||
+                  !autonomyRecommendationId.trim()
+                }
+                onClick={() => {
+                  void (async () => {
+                    const nextAgentId = agentId.trim();
+                    const recommendation_id = autonomyRecommendationId.trim();
+                    if (!nextAgentId || !recommendation_id) return;
+
+                    setAutonomyApproveLoading(true);
+                    setAutonomyApproveError(null);
+                    setAutonomyApproveResult(null);
+                    try {
+                      const granted_by_principal_id = await ensureOperatorPrincipalId();
+                      const res = await approveAutonomyUpgrade(nextAgentId, {
+                        recommendation_id,
+                        granted_by_principal_id,
+                      });
+                      setAutonomyApproveResult(res);
+
+                      if (principalId?.trim()) {
+                        const tok = await listCapabilityTokens(principalId);
+                        setTokens(tok);
+                      }
+                    } catch (e) {
+                      setAutonomyApproveError(toErrorCode(e));
+                    } finally {
+                      setAutonomyApproveLoading(false);
+                    }
+                  })();
+                }}
+              >
+                {t("agent_profile.autonomy.button_approve")}
+              </button>
+            </div>
+
+            {autonomyApproveError ? (
+              <div className="errorBox" style={{ marginTop: 10 }}>
+                {t("error.load_failed", { code: autonomyApproveError })}
+              </div>
+            ) : null}
+            {autonomyApproveLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+            {autonomyApproveResult ? (
+              <div className="kvGrid" style={{ marginTop: 10 }}>
+                <div className="kvKey">{t("agent_profile.autonomy.token_id")}</div>
+                <div className="kvVal mono">{autonomyApproveResult.token_id}</div>
+
+                <div className="kvKey">{t("agent_profile.autonomy.status")}</div>
+                <div className="kvVal">
+                  {autonomyApproveResult.already_approved
+                    ? t("agent_profile.autonomy.already_approved")
+                    : t("agent_profile.autonomy.approved")}
+                </div>
+              </div>
+            ) : null}
+
+            <details className="advancedDetails">
+              <summary className="advancedSummary">{t("common.advanced")}</summary>
+              <JsonView value={{ recommendation: autonomyRecommendation, approve_result: autonomyApproveResult }} />
             </details>
           </div>
 
