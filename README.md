@@ -39,3 +39,13 @@ With `DATABASE_URL` set:
 pnpm -C apps/api db:migrate
 pnpm -C apps/api db:status
 ```
+
+## Secrets Vault (Optional)
+
+`SECRETS_MASTER_KEY` is only required for the secrets-vault endpoints:
+
+- `POST /v1/secrets`
+- `GET /v1/secrets`
+- `POST /v1/secrets/:id/access`
+
+If the key is not set, API/server startup and existing endpoints still work; vault endpoints return `501`.
