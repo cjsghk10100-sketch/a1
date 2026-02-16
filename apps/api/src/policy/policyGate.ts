@@ -16,7 +16,56 @@ function isTruthyEnv(value: string | undefined): boolean {
 function normalizeAction(action: string): string {
   const a = action.trim();
   if (a === "external_write") return "external.write";
+  if (a === "data_read") return "data.read";
+  if (a === "data_write") return "data.write";
   return a;
+}
+
+type DataAccessLabel =
+  | "public"
+  | "internal"
+  | "restricted"
+  | "confidential"
+  | "sensitive_pii";
+
+interface DataAccessContextV1 {
+  label?: string;
+  label_room_id?: string | null;
+  purpose_hint_mismatch?: boolean;
+  justification_provided?: boolean;
+}
+
+function normalizeDataAccessContext(raw: unknown): DataAccessContextV1 | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const dac = obj.data_access;
+  if (!dac || typeof dac !== "object") return null;
+  const d = dac as Record<string, unknown>;
+
+  const label = typeof d.label === "string" ? d.label.trim() : "";
+  const label_room_id =
+    d.label_room_id == null
+      ? null
+      : typeof d.label_room_id === "string"
+        ? d.label_room_id.trim()
+        : null;
+
+  return {
+    label: label.length ? label : undefined,
+    label_room_id: label_room_id && label_room_id.length ? label_room_id : null,
+    purpose_hint_mismatch: d.purpose_hint_mismatch === true,
+    justification_provided: d.justification_provided === true,
+  };
+}
+
+function isDataAccessLabel(value: string): value is DataAccessLabel {
+  return (
+    value === "public" ||
+    value === "internal" ||
+    value === "restricted" ||
+    value === "confidential" ||
+    value === "sensitive_pii"
+  );
 }
 
 function scopeMatches(
@@ -53,6 +102,51 @@ export function evaluatePolicyV1(input: PolicyCheckInputV1): PolicyCheckResultV1
       decision: PolicyDecision.RequireApproval,
       reason_code: PolicyReasonCode.ExternalWriteRequiresApproval,
       reason: "External writes require approval.",
+    };
+  }
+
+  if (action === "data.read" || action === "data.write") {
+    const ctx = normalizeDataAccessContext(input.context);
+    if (!ctx) {
+      return {
+        decision: PolicyDecision.Allow,
+        reason_code: PolicyReasonCode.DefaultAllow,
+      };
+    }
+
+    const label: DataAccessLabel = isDataAccessLabel(ctx.label ?? "")
+      ? (ctx.label as DataAccessLabel)
+      : "internal";
+
+    if (label === "restricted") {
+      const labelRoom = ctx.label_room_id;
+      const requestRoom = input.room_id?.trim() || null;
+      if (!labelRoom || !requestRoom || labelRoom !== requestRoom) {
+        return {
+          decision: PolicyDecision.Deny,
+          reason_code: "data_access_restricted_room_mismatch",
+          reason: "Restricted resource access requires matching room scope.",
+        };
+      }
+      return {
+        decision: PolicyDecision.Allow,
+        reason_code: PolicyReasonCode.DefaultAllow,
+      };
+    }
+
+    if (label === "confidential" || label === "sensitive_pii") {
+      if (ctx.purpose_hint_mismatch && !ctx.justification_provided) {
+        return {
+          decision: PolicyDecision.RequireApproval,
+          reason_code: "data_access_purpose_hint_mismatch",
+          reason: "Purpose hint mismatch. Provide a justification before accessing this resource.",
+        };
+      }
+    }
+
+    return {
+      decision: PolicyDecision.Allow,
+      reason_code: PolicyReasonCode.DefaultAllow,
     };
   }
 
