@@ -8,6 +8,7 @@ import { newToolCallId } from "@agentapp/shared";
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { applyToolEvent } from "../../projectors/toolProjector.js";
+import { trackAgentSkillUsageFromTool } from "./skillsLedger.js";
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -22,7 +23,7 @@ function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
 export async function registerToolCallRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.post<{
     Params: { stepId: string };
-    Body: { tool_name: string; title?: string; input?: Record<string, unknown> };
+    Body: { tool_name: string; title?: string; input?: Record<string, unknown>; agent_id?: string };
   }>("/v1/steps/:stepId/toolcalls", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
 
@@ -103,6 +104,32 @@ export async function registerToolCallRoutes(app: FastifyInstance, pool: DbPool)
     });
 
     await applyToolEvent(pool, event as ToolEventV1);
+
+    const agent_id = req.body.agent_id?.trim();
+    if (agent_id) {
+      try {
+        await trackAgentSkillUsageFromTool(pool, {
+          workspace_id,
+          agent_id,
+          skill_id: req.body.tool_name,
+          occurred_at,
+          correlation_id: run.rows[0].correlation_id,
+          causation_id: event.event_id,
+          room_id,
+          thread_id,
+          run_id: run.rows[0].run_id,
+          step_id: step.rows[0].step_id,
+          actor_type: "service",
+          actor_id: "api",
+        });
+      } catch (err) {
+        req.log.warn(
+          { err, agent_id, tool_name: req.body.tool_name },
+          "skill-ledger attribution failed; continuing without blocking toolcall",
+        );
+      }
+    }
+
     return reply.code(201).send({ tool_call_id });
   });
 
@@ -307,4 +334,3 @@ export async function registerToolCallRoutes(app: FastifyInstance, pool: DbPool)
     return reply.code(200).send({ tool_call: res.rows[0] });
   });
 }
-
