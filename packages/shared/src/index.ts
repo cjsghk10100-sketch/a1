@@ -9,6 +9,7 @@ export * from "./learning.js";
 export * from "./policy.js";
 export * from "./runs.js";
 export * from "./secrets.js";
+export * from "./snapshots.js";
 export * from "./skills_ledger.js";
 export * from "./skills_supply_chain.js";
 export * from "./tools.js";
