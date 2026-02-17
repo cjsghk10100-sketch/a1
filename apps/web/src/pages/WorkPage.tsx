@@ -10,6 +10,8 @@ import { JsonView } from "../components/JsonView";
 
 type ConnState = "idle" | "loading" | "error";
 
+type SenderType = "user" | "agent" | "service";
+
 function toErrorCode(e: unknown): string {
   if (e instanceof ApiError) return String(e.status);
   if (e instanceof Error) return e.message;
@@ -32,6 +34,24 @@ const roomStorageKey = "agentapp.room_id";
 
 function threadStorageKey(roomId: string): string {
   return `agentapp.thread_id.${roomId}`;
+}
+
+const senderTypeStorageKey = "agentapp.work.sender_type";
+const senderIdStorageKey = "agentapp.work.sender_id";
+
+function normalizeSenderType(raw: string | null): SenderType {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "agent") return "agent";
+  if (v === "service") return "service";
+  return "user";
+}
+
+function loadSenderType(): SenderType {
+  return normalizeSenderType(localStorage.getItem(senderTypeStorageKey));
+}
+
+function loadSenderId(): string {
+  return localStorage.getItem(senderIdStorageKey) ?? "anon";
 }
 
 function loadThreadId(roomId: string): string {
@@ -74,6 +94,8 @@ export function WorkPage(): JSX.Element {
   const [messagesError, setMessagesError] = useState<string | null>(null);
 
   const [composeContent, setComposeContent] = useState<string>("");
+  const [senderType, setSenderType] = useState<SenderType>(() => loadSenderType());
+  const [senderId, setSenderId] = useState<string>(() => loadSenderId());
   const [sendState, setSendState] = useState<ConnState>("idle");
   const [sendError, setSendError] = useState<string | null>(null);
 
@@ -166,6 +188,14 @@ export function WorkPage(): JSX.Element {
     void reloadRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(senderTypeStorageKey, senderType);
+  }, [senderType]);
+
+  useEffect(() => {
+    localStorage.setItem(senderIdStorageKey, senderId);
+  }, [senderId]);
 
   useEffect(() => {
     localStorage.setItem(roomStorageKey, roomId);
@@ -466,6 +496,37 @@ export function WorkPage(): JSX.Element {
 
           <div className="detailSection">
             <div className="detailSectionTitle">{t("work.message.compose_title")}</div>
+            <div className="workTwoCol">
+              <div>
+                <label className="fieldLabel" htmlFor="workSenderType">
+                  {t("work.message.sender_type")}
+                </label>
+                <select
+                  id="workSenderType"
+                  className="select"
+                  value={senderType}
+                  onChange={(e) => setSenderType(normalizeSenderType(e.target.value))}
+                  disabled={sendState === "loading"}
+                >
+                  <option value="user">{t("work.message.sender_type.user")}</option>
+                  <option value="agent">{t("work.message.sender_type.agent")}</option>
+                  <option value="service">{t("work.message.sender_type.service")}</option>
+                </select>
+              </div>
+              <div>
+                <label className="fieldLabel" htmlFor="workSenderId">
+                  {t("work.message.sender_id")}
+                </label>
+                <input
+                  id="workSenderId"
+                  className="textInput"
+                  value={senderId}
+                  onChange={(e) => setSenderId(e.target.value)}
+                  placeholder={t("work.message.sender_id_placeholder")}
+                  disabled={sendState === "loading"}
+                />
+              </div>
+            </div>
             <div className="workComposerRow">
               <textarea
                 className="textArea"
@@ -477,17 +538,28 @@ export function WorkPage(): JSX.Element {
               <button
                 type="button"
                 className="primaryButton"
-                disabled={!threadId.trim() || sendState === "loading" || !composeContent.trim()}
+                disabled={!threadId.trim() || sendState === "loading" || !composeContent.trim() || !senderId.trim()}
                 onClick={() => {
                   void (async () => {
                     const content_md = composeContent.trim();
+                    const sender_id = senderId.trim();
                     if (!threadId.trim() || !content_md) return;
+                    if (!sender_id) {
+                      setSendError("sender_id_required");
+                      setSendState("error");
+                      return;
+                    }
 
                     setSendState("loading");
                     setSendError(null);
 
                     try {
-                      await postThreadMessage(threadId, { content_md, lang: messageLang });
+                      await postThreadMessage(threadId, {
+                        sender_type: senderType,
+                        sender_id,
+                        content_md,
+                        lang: messageLang,
+                      });
                       setComposeContent("");
                       await reloadMessages(threadId);
                       setSendState("idle");
