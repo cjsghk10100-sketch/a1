@@ -531,6 +531,13 @@ body {
   font-size: 12px;
 }
 
+.eventActions {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .eventDetails {
   margin-top: 10px;
 }
