@@ -188,6 +188,35 @@ async function applyMessageCreated(tx: DbClient, event: MessageCreatedV1): Promi
       event.event_id,
     ],
   );
+
+  // `proj_search_docs` is a lightweight trigram-search index. For now we only index messages.
+  await tx.query(
+    `INSERT INTO proj_search_docs (
+      doc_id, workspace_id, room_id, thread_id, doc_type,
+      content_text, lang, updated_at
+    ) VALUES (
+      $1, $2, $3, $4, $5,
+      $6, $7, $8
+    )
+    ON CONFLICT (doc_id) DO UPDATE SET
+      workspace_id = EXCLUDED.workspace_id,
+      room_id = EXCLUDED.room_id,
+      thread_id = EXCLUDED.thread_id,
+      doc_type = EXCLUDED.doc_type,
+      content_text = EXCLUDED.content_text,
+      lang = EXCLUDED.lang,
+      updated_at = EXCLUDED.updated_at`,
+    [
+      message_id,
+      event.workspace_id,
+      event.room_id,
+      event.thread_id,
+      "message",
+      event.data.content_md,
+      event.data.lang,
+      event.occurred_at,
+    ],
+  );
 }
 
 export async function applyCoreEvent(pool: DbPool, envelope: EventEnvelopeV1): Promise<void> {

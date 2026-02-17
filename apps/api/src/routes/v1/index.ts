@@ -13,6 +13,7 @@ import { registerPolicyRoutes } from "./policy.js";
 import { registerPrincipalRoutes } from "./principals.js";
 import { registerResourceLabelRoutes } from "./resourceLabels.js";
 import { registerRunRoutes } from "./runs.js";
+import { registerSearchRoutes } from "./search.js";
 import { registerSnapshotRoutes } from "./snapshots.js";
 import { registerSecretRoutes } from "./secrets.js";
 import { registerSkillsLedgerRoutes } from "./skillsLedger.js";
@@ -36,6 +37,7 @@ export async function registerV1Routes(app: FastifyInstance, pool: DbPool): Prom
   await registerPrincipalRoutes(app, pool);
   await registerResourceLabelRoutes(app, pool);
   await registerRunRoutes(app, pool);
+  await registerSearchRoutes(app, pool);
   await registerSnapshotRoutes(app, pool);
   await registerSecretRoutes(app, pool);
   await registerSkillsLedgerRoutes(app, pool);
