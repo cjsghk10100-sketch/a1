@@ -98,12 +98,14 @@ async function main(): Promise<void> {
     throw new Error("expected server to listen on a TCP port");
   }
 
-  const baseUrl = `http://127.0.0.1:${address.port}`;
-  const db = new Client({ connectionString: databaseUrl });
-  await db.connect();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const db = new Client({ connectionString: databaseUrl });
+    await db.connect();
 
-  try {
-    const workspaceHeader = { "x-workspace-id": "ws_contract" };
+    try {
+      // Use a workspace id unique to this contract test to avoid cross-test interference
+      // when the full contract suite runs against a shared DATABASE_URL.
+      const workspaceHeader = { "x-workspace-id": "ws_contract_learning" };
 
     const room = await postJson<{ room_id: string }>(
       baseUrl,
@@ -142,11 +144,11 @@ async function main(): Promise<void> {
     assert.equal(second.decision, "require_approval");
     assert.equal(second.reason_code, "external_write_requires_approval");
 
-    const constraint = await db.query<{
-      constraint_id: string;
-      seen_count: number;
-      reason_code: string;
-      category: string;
+      const constraint = await db.query<{
+        constraint_id: string;
+        seen_count: number;
+        reason_code: string;
+        category: string;
       pattern: string;
       guidance: string;
     }>(
@@ -155,7 +157,7 @@ async function main(): Promise<void> {
        WHERE workspace_id = $1
        ORDER BY updated_at DESC
        LIMIT 1`,
-      ["ws_contract"],
+      ["ws_contract_learning"],
     );
     assert.equal(constraint.rowCount, 1);
     assert.equal(constraint.rows[0].seen_count, 2);
@@ -171,7 +173,7 @@ async function main(): Promise<void> {
        WHERE event_type = 'learning.from_failure'
          AND workspace_id = $1
          AND room_id = $2`,
-      ["ws_contract", room.room_id],
+      ["ws_contract_learning", room.room_id],
     );
     assert.equal(Number.parseInt(learningCount.rows[0].count, 10), 2);
 
@@ -181,7 +183,7 @@ async function main(): Promise<void> {
        WHERE event_type = 'constraint.learned'
          AND workspace_id = $1
          AND room_id = $2`,
-      ["ws_contract", room.room_id],
+      ["ws_contract_learning", room.room_id],
     );
     assert.equal(Number.parseInt(learnedCount.rows[0].count, 10), 2);
 
@@ -198,7 +200,7 @@ async function main(): Promise<void> {
          AND room_id = $2
        ORDER BY recorded_at DESC
        LIMIT 1`,
-      ["ws_contract", room.room_id],
+      ["ws_contract_learning", room.room_id],
     );
     assert.equal(repeated.rowCount, 1);
     assert.equal(repeated.rows[0].repeat_count, "2");
@@ -210,7 +212,7 @@ async function main(): Promise<void> {
        WHERE workspace_id = $1
        ORDER BY last_seen_at DESC
        LIMIT 1`,
-      ["ws_contract"],
+      ["ws_contract_learning"],
     );
     assert.equal(counters.rowCount, 1);
     assert.equal(counters.rows[0].seen_count, 2);
