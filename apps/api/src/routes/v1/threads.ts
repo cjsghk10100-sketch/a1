@@ -9,6 +9,32 @@ import { appendToStream } from "../../eventStore/index.js";
 import { applyCoreEvent } from "../../projectors/coreProjector.js";
 
 export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
+  app.get<{
+    Params: { roomId: string };
+    Querystring: { limit?: string };
+  }>("/v1/rooms/:roomId/threads", async (req, reply) => {
+    const rawLimit = Number(req.query.limit ?? "50");
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(200, Math.floor(rawLimit))) : 50;
+
+    const room = await pool.query<{ workspace_id: string }>(
+      "SELECT workspace_id FROM proj_rooms WHERE room_id = $1",
+      [req.params.roomId],
+    );
+    if (room.rowCount !== 1) {
+      return reply.code(404).send({ error: "room_not_found" });
+    }
+
+    const res = await pool.query(
+      `SELECT thread_id, workspace_id, room_id, title, status, created_at, updated_at, last_event_id
+       FROM proj_threads
+       WHERE room_id = $1
+       ORDER BY updated_at DESC
+       LIMIT $2`,
+      [req.params.roomId, limit],
+    );
+    return reply.code(200).send({ threads: res.rows });
+  });
+
   app.post<{
     Params: { roomId: string };
     Body: { title: string; status?: string };

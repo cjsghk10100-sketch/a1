@@ -6,6 +6,7 @@ export const resources = {
   en: {
     translation: {
       "app.title": "Agent OS",
+      "nav.work": "Work",
       "nav.timeline": "Timeline",
       "nav.notifications": "Notifications",
       "nav.approvals": "Approval Inbox",
@@ -22,6 +23,7 @@ export const resources = {
       "common.no": "No",
       "error.load_failed": "Failed to load. (code: {{code}})",
       "page.not_found": "Not found.",
+      "page.work.title": "Work",
       "page.timeline.title": "Timeline",
       "page.notifications.title": "Notifications",
       "page.approvals.title": "Approval Inbox",
@@ -65,6 +67,28 @@ export const resources = {
       "notifications.read_cursor": "Read cursor",
       "notifications.unread_count": "Unread (loaded)",
       "notifications.empty": "No unread events (or not loaded yet).",
+
+      "work.section.room": "Room",
+      "work.room.create_title": "Create room",
+      "work.room.title": "Title",
+      "work.room.title_placeholder": "e.g. Local Room",
+      "work.room.mode": "Mode",
+      "work.room.lang": "Language",
+      "work.room.button_create": "Create room",
+      "work.room.select_prompt": "Select a room to load threads.",
+
+      "work.section.threads": "Threads",
+      "work.thread.create_title": "Create thread",
+      "work.thread.title_placeholder": "e.g. General",
+      "work.thread.button_create": "Create thread",
+      "work.thread.empty": "No threads yet.",
+      "work.thread.select_prompt": "Select a thread to view messages.",
+
+      "work.section.messages": "Messages",
+      "work.message.empty": "No messages yet.",
+      "work.message.compose_title": "Compose",
+      "work.message.compose_placeholder": "Write a message…",
+      "work.message.button_send": "Send",
 
       "approval.status.pending": "Pending",
       "approval.status.held": "Held",
@@ -297,6 +321,7 @@ export const resources = {
   ko: {
     translation: {
       "app.title": "에이전트 OS",
+      "nav.work": "작업",
       "nav.timeline": "타임라인",
       "nav.notifications": "알림",
       "nav.approvals": "승인함",
@@ -313,6 +338,7 @@ export const resources = {
       "common.no": "아니오",
       "error.load_failed": "불러오기에 실패했습니다. (code: {{code}})",
       "page.not_found": "페이지를 찾을 수 없습니다.",
+      "page.work.title": "작업",
       "page.timeline.title": "타임라인",
       "page.notifications.title": "알림",
       "page.approvals.title": "승인함",
@@ -356,6 +382,28 @@ export const resources = {
       "notifications.read_cursor": "읽음 커서",
       "notifications.unread_count": "미확인(로드됨)",
       "notifications.empty": "미확인 이벤트가 없습니다(또는 아직 불러오지 않았습니다).",
+
+      "work.section.room": "룸",
+      "work.room.create_title": "룸 만들기",
+      "work.room.title": "제목",
+      "work.room.title_placeholder": "예: 로컬 룸",
+      "work.room.mode": "모드",
+      "work.room.lang": "언어",
+      "work.room.button_create": "룸 만들기",
+      "work.room.select_prompt": "룸을 선택하면 스레드를 불러옵니다.",
+
+      "work.section.threads": "스레드",
+      "work.thread.create_title": "스레드 만들기",
+      "work.thread.title_placeholder": "예: 일반",
+      "work.thread.button_create": "스레드 만들기",
+      "work.thread.empty": "아직 스레드가 없습니다.",
+      "work.thread.select_prompt": "스레드를 선택하면 메시지를 볼 수 있습니다.",
+
+      "work.section.messages": "메시지",
+      "work.message.empty": "아직 메시지가 없습니다.",
+      "work.message.compose_title": "작성",
+      "work.message.compose_placeholder": "메시지 작성…",
+      "work.message.button_send": "보내기",
 
       "approval.status.pending": "대기",
       "approval.status.held": "보류",

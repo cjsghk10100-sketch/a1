@@ -429,6 +429,46 @@ body {
   margin-top: 10px;
 }
 
+.workSplit {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 12px;
+}
+
+.workTwoCol {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.workMessageList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 540px;
+  overflow: auto;
+}
+
+.workMessageBody {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.workComposerRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
 .timelineConnection {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
@@ -824,6 +864,14 @@ body {
   }
 
   .timelineTopBar {
+    grid-template-columns: 1fr;
+  }
+
+  .workSplit {
+    grid-template-columns: 1fr;
+  }
+
+  .workTwoCol {
     grid-template-columns: 1fr;
   }
 

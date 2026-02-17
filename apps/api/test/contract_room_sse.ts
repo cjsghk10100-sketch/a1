@@ -79,6 +79,15 @@ async function postJson<T>(
   return JSON.parse(text) as T;
 }
 
+async function getJson<T>(baseUrl: string, urlPath: string): Promise<T> {
+  const res = await fetch(`${baseUrl}${urlPath}`, { method: "GET" });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`GET ${urlPath} failed: ${res.status} ${text}`);
+  }
+  return JSON.parse(text) as T;
+}
+
 async function waitForSseEvent<T>(
   url: string,
   predicate: (ev: T) => boolean,
@@ -176,6 +185,11 @@ async function main(): Promise<void> {
       `/v1/rooms/${room_id}/threads`,
       { title: "Contract Thread" },
     );
+
+    const threads = await getJson<{
+      threads: Array<{ thread_id: string; room_id: string; title: string; status: string }>;
+    }>(baseUrl, `/v1/rooms/${encodeURIComponent(room_id)}/threads?limit=10`);
+    assert.ok(threads.threads.some((t) => t.thread_id === thread_id));
 
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
