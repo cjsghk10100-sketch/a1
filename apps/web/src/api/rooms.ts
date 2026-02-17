@@ -1,4 +1,4 @@
-import { apiGet } from "./http";
+import { apiGet, apiPost } from "./http";
 
 export interface RoomRow {
   room_id: string;
@@ -18,3 +18,14 @@ export async function listRooms(): Promise<RoomRow[]> {
   return res.rooms;
 }
 
+export async function createRoom(payload: {
+  title: string;
+  room_mode: string;
+  default_lang: string;
+  topic?: string;
+  tool_policy_ref?: string;
+  mission_id?: string;
+}): Promise<string> {
+  const res = await apiPost<{ room_id: string }>("/v1/rooms", payload);
+  return res.room_id;
+}

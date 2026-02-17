@@ -9,6 +9,7 @@ import { AgentProfilePage } from "./pages/AgentProfilePage";
 import { InspectorPage } from "./pages/InspectorPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
 import { TimelinePage } from "./pages/TimelinePage";
+import { WorkPage } from "./pages/WorkPage";
 
 function LangButton(props: { lang: SupportedLanguage; current: SupportedLanguage; label: string }) {
   const { i18n } = useTranslation();
@@ -47,6 +48,9 @@ export function App(): JSX.Element {
       <header className="appHeader">
         <div className="appTitle">{t("app.title")}</div>
         <nav className="appNav">
+          <NavLink className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")} to="/work">
+            {t("nav.work")}
+          </NavLink>
           <NavLink className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")} to="/timeline">
             {t("nav.timeline")}
           </NavLink>
@@ -77,6 +81,7 @@ export function App(): JSX.Element {
       <main className="appMain">
         <Routes>
           <Route path="/" element={<Navigate to="/timeline" replace />} />
+          <Route path="/work" element={<WorkPage />} />
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/approvals" element={<ApprovalInboxPage />} />
