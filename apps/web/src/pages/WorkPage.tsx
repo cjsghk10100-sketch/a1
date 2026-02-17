@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 
 import type { RoomRow } from "../api/rooms";
 import { createRoom, listRooms } from "../api/rooms";
+import type { SearchDocRow } from "../api/search";
+import { searchDocs } from "../api/search";
 import type { MessageRow, ThreadRow } from "../api/threads";
 import { createThread, listRoomThreads, listThreadMessages, postThreadMessage } from "../api/threads";
 import { ApiError } from "../api/http";
@@ -99,6 +101,11 @@ export function WorkPage(): JSX.Element {
   const [sendState, setSendState] = useState<ConnState>("idle");
   const [sendError, setSendError] = useState<string | null>(null);
 
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchResults, setSearchResults] = useState<SearchDocRow[]>([]);
+  const [searchState, setSearchState] = useState<ConnState>("idle");
+  const [searchError, setSearchError] = useState<string | null>(null);
+
   const roomOptions = useMemo(() => {
     return rooms.map((r) => ({
       room_id: r.room_id,
@@ -184,6 +191,27 @@ export function WorkPage(): JSX.Element {
     }
   }
 
+  async function runSearch(): Promise<void> {
+    const q = searchQuery.trim();
+    if (!roomId.trim() || q.length < 2) {
+      setSearchResults([]);
+      setSearchState("idle");
+      setSearchError(null);
+      return;
+    }
+
+    setSearchState("loading");
+    setSearchError(null);
+    try {
+      const docs = await searchDocs({ q, room_id: roomId, limit: 20 });
+      setSearchResults(docs);
+      setSearchState("idle");
+    } catch (e) {
+      setSearchError(toErrorCode(e));
+      setSearchState("error");
+    }
+  }
+
   useEffect(() => {
     void reloadRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -204,6 +232,8 @@ export function WorkPage(): JSX.Element {
     setThreadsError(null);
     setMessagesError(null);
     setSendError(null);
+    setSearchError(null);
+    setSearchResults([]);
 
     const nextThread = loadThreadId(roomId).trim();
     setThreadId(nextThread);
@@ -493,6 +523,65 @@ export function WorkPage(): JSX.Element {
               ))}
             </ul>
           ) : null}
+
+          <div className="detailSection">
+            <div className="detailSectionTitle">{t("work.search.title")}</div>
+            <div className="timelineManualRow">
+              <input
+                className="textInput"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t("work.search.placeholder")}
+                disabled={!roomId.trim() || searchState === "loading"}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  e.preventDefault();
+                  void runSearch();
+                }}
+              />
+              <button
+                type="button"
+                className="ghostButton"
+                disabled={!roomId.trim() || searchState === "loading" || searchQuery.trim().length < 2}
+                onClick={() => void runSearch()}
+              >
+                {t("work.search.button")}
+              </button>
+            </div>
+
+            {searchError ? <div className="errorBox">{t("error.load_failed", { code: searchError })}</div> : null}
+            {searchState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {roomId.trim() && searchState !== "loading" && !searchError && searchQuery.trim().length >= 2 && searchResults.length === 0 ? (
+              <div className="placeholder">{t("work.search.empty")}</div>
+            ) : null}
+
+            {searchResults.length ? (
+              <ul className="eventList">
+                {searchResults.map((doc) => (
+                  <li key={doc.doc_id}>
+                    <button
+                      type="button"
+                      className="eventRow"
+                      onClick={() => {
+                        if (!doc.thread_id) return;
+                        setThreadId(doc.thread_id);
+                      }}
+                    >
+                      <div className="eventRowTop">
+                        <div className="mono">{doc.doc_type}</div>
+                        <div className="muted">{formatTimestamp(doc.updated_at)}</div>
+                      </div>
+                      <div className="eventRowMeta">
+                        {doc.thread_id ? <span className="mono">{doc.thread_id}</span> : null}
+                        <span className="mono">{doc.doc_id}</span>
+                      </div>
+                      <div className="workMessageBody">{doc.content_text}</div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
 
           <div className="detailSection">
             <div className="detailSectionTitle">{t("work.message.compose_title")}</div>
