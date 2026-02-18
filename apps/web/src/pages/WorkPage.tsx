@@ -153,6 +153,9 @@ export function WorkPage(): JSX.Element {
   const [createdToolCallId, setCreatedToolCallId] = useState<string | null>(null);
   const [toolCallActionId, setToolCallActionId] = useState<string | null>(null);
   const [toolCallActionError, setToolCallActionError] = useState<string | null>(null);
+  const [toolCallSucceedOutputJson, setToolCallSucceedOutputJson] = useState<string>("");
+  const [toolCallFailMessage, setToolCallFailMessage] = useState<string>("");
+  const [toolCallFailErrorJson, setToolCallFailErrorJson] = useState<string>("");
 
   const [artifactsStepId, setArtifactsStepId] = useState<string>("");
   const [artifacts, setArtifacts] = useState<ArtifactRow[]>([]);
@@ -444,6 +447,9 @@ export function WorkPage(): JSX.Element {
     setCreatedToolCallId(null);
     setToolCallActionId(null);
     setToolCallActionError(null);
+    setToolCallSucceedOutputJson("");
+    setToolCallFailMessage("");
+    setToolCallFailErrorJson("");
 
     setArtifactsStepId("");
     setArtifacts([]);
@@ -557,6 +563,9 @@ export function WorkPage(): JSX.Element {
     setCreateToolCallState("idle");
     setToolCallActionId(null);
     setToolCallActionError(null);
+    setToolCallSucceedOutputJson("");
+    setToolCallFailMessage("");
+    setToolCallFailErrorJson("");
 
     const id = toolCallsStepId.trim();
     if (!id) return;
@@ -1409,6 +1418,46 @@ export function WorkPage(): JSX.Element {
               </div>
             ) : null}
 
+            <details className="advancedDetails" style={{ marginTop: 10 }}>
+              <summary className="advancedSummary">{t("work.toolcalls.results_title")}</summary>
+
+              <label className="fieldLabel" htmlFor="toolCallSucceedOutputJson">
+                {t("work.toolcalls.results.succeed_output")}
+              </label>
+              <textarea
+                id="toolCallSucceedOutputJson"
+                className="textArea"
+                value={toolCallSucceedOutputJson}
+                onChange={(e) => setToolCallSucceedOutputJson(e.target.value)}
+                placeholder={t("work.toolcalls.results.succeed_output_placeholder")}
+                disabled={!toolCallsStepId.trim() || toolCallsState === "loading" || toolCallActionId != null}
+              />
+
+              <label className="fieldLabel" htmlFor="toolCallFailMessage">
+                {t("work.toolcalls.results.fail_message")}
+              </label>
+              <input
+                id="toolCallFailMessage"
+                className="textInput"
+                value={toolCallFailMessage}
+                onChange={(e) => setToolCallFailMessage(e.target.value)}
+                placeholder={t("work.toolcalls.results.fail_message_placeholder")}
+                disabled={!toolCallsStepId.trim() || toolCallsState === "loading" || toolCallActionId != null}
+              />
+
+              <label className="fieldLabel" htmlFor="toolCallFailErrorJson">
+                {t("work.toolcalls.results.fail_error")}
+              </label>
+              <textarea
+                id="toolCallFailErrorJson"
+                className="textArea"
+                value={toolCallFailErrorJson}
+                onChange={(e) => setToolCallFailErrorJson(e.target.value)}
+                placeholder={t("work.toolcalls.results.fail_error_placeholder")}
+                disabled={!toolCallsStepId.trim() || toolCallsState === "loading" || toolCallActionId != null}
+              />
+            </details>
+
             {toolCallActionError ? (
               <div className="errorBox">{t("error.load_failed", { code: toolCallActionError })}</div>
             ) : null}
@@ -1444,10 +1493,21 @@ export function WorkPage(): JSX.Element {
                                     const step_id = toolCallsStepId.trim();
                                     if (!step_id) return;
 
-                                    setToolCallActionId(tc.tool_call_id);
                                     setToolCallActionError(null);
+                                    const rawOutput = toolCallSucceedOutputJson.trim();
+                                    let payload: { output?: unknown } = {};
+                                    if (rawOutput) {
+                                      try {
+                                        payload = { output: JSON.parse(rawOutput) as unknown };
+                                      } catch {
+                                        setToolCallActionError("invalid_json");
+                                        return;
+                                      }
+                                    }
+
+                                    setToolCallActionId(tc.tool_call_id);
                                     try {
-                                      await succeedToolCall(tc.tool_call_id, {});
+                                      await succeedToolCall(tc.tool_call_id, payload);
                                       await reloadToolCalls(step_id);
                                       const run_id = stepsRunId.trim();
                                       if (run_id) await reloadSteps(run_id);
@@ -1470,10 +1530,24 @@ export function WorkPage(): JSX.Element {
                                     const step_id = toolCallsStepId.trim();
                                     if (!step_id) return;
 
-                                    setToolCallActionId(tc.tool_call_id);
                                     setToolCallActionError(null);
+                                    const message = toolCallFailMessage.trim();
+
+                                    const rawError = toolCallFailErrorJson.trim();
+                                    let payload: { message?: string; error?: unknown } = {};
+                                    if (message) payload.message = message;
+                                    if (rawError) {
+                                      try {
+                                        payload.error = JSON.parse(rawError) as unknown;
+                                      } catch {
+                                        setToolCallActionError("invalid_json");
+                                        return;
+                                      }
+                                    }
+
+                                    setToolCallActionId(tc.tool_call_id);
                                     try {
-                                      await failToolCall(tc.tool_call_id, {});
+                                      await failToolCall(tc.tool_call_id, payload);
                                       await reloadToolCalls(step_id);
                                       const run_id = stepsRunId.trim();
                                       if (run_id) await reloadSteps(run_id);
