@@ -1,4 +1,4 @@
-import { apiGet } from "./http";
+import { apiGet, apiPost } from "./http";
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed";
 export type StepStatus = "queued" | "running" | "succeeded" | "failed";
@@ -70,4 +70,16 @@ export async function listRuns(params?: {
   const url = `/v1/runs?${qs.toString()}`;
   const res = await apiGet<{ runs: RunRow[] }>(url);
   return res.runs;
+}
+
+export async function createRun(payload: {
+  room_id: string;
+  thread_id?: string;
+  title?: string;
+  goal?: string;
+  input?: Record<string, unknown>;
+  tags?: string[];
+  correlation_id?: string;
+}): Promise<{ run_id: string }> {
+  return apiPost<{ run_id: string }>("/v1/runs", payload);
 }
