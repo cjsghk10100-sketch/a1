@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import type { RoomRow } from "../api/rooms";
 import { createRoom, listRooms } from "../api/rooms";
+import type { RunRow } from "../api/runs";
+import { createRun, listRuns } from "../api/runs";
 import type { SearchDocRow } from "../api/search";
 import { searchDocs } from "../api/search";
 import type { MessageRow, ThreadRow } from "../api/threads";
@@ -70,6 +73,7 @@ function saveThreadId(roomId: string, threadId: string): void {
 
 export function WorkPage(): JSX.Element {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
 
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [roomsState, setRoomsState] = useState<ConnState>("idle");
@@ -107,6 +111,16 @@ export function WorkPage(): JSX.Element {
   const [searchResults, setSearchResults] = useState<SearchDocRow[]>([]);
   const [searchState, setSearchState] = useState<ConnState>("idle");
   const [searchError, setSearchError] = useState<string | null>(null);
+
+  const [runs, setRuns] = useState<RunRow[]>([]);
+  const [runsState, setRunsState] = useState<ConnState>("idle");
+  const [runsError, setRunsError] = useState<string | null>(null);
+
+  const [createRunTitle, setCreateRunTitle] = useState<string>("");
+  const [createRunGoal, setCreateRunGoal] = useState<string>("");
+  const [createRunState, setCreateRunState] = useState<ConnState>("idle");
+  const [createRunError, setCreateRunError] = useState<string | null>(null);
+  const [createdRunId, setCreatedRunId] = useState<string | null>(null);
 
   const [pins, setPins] = useState<PinItemV1[]>(() => loadPins());
 
@@ -202,6 +216,27 @@ export function WorkPage(): JSX.Element {
     }
   }
 
+  async function reloadRuns(nextRoomId: string): Promise<void> {
+    const id = nextRoomId.trim();
+    if (!id) {
+      setRuns([]);
+      setRunsState("idle");
+      setRunsError(null);
+      return;
+    }
+
+    setRunsState("loading");
+    setRunsError(null);
+    try {
+      const res = await listRuns({ room_id: id, limit: 20 });
+      setRuns(res);
+      setRunsState("idle");
+    } catch (e) {
+      setRunsError(toErrorCode(e));
+      setRunsState("error");
+    }
+  }
+
   async function runSearch(): Promise<void> {
     const q = searchQuery.trim();
     if (!roomId.trim() || q.length < 2) {
@@ -244,15 +279,23 @@ export function WorkPage(): JSX.Element {
     localStorage.setItem(roomStorageKey, roomId);
     setThreads([]);
     setMessages([]);
+    setRuns([]);
     setThreadsError(null);
     setMessagesError(null);
+    setRunsError(null);
     setSendError(null);
     setSearchError(null);
     setSearchResults([]);
+    setCreateRunError(null);
+    setCreateRunState("idle");
+    setCreatedRunId(null);
+    setCreateRunTitle("");
+    setCreateRunGoal("");
 
     const nextThread = loadThreadId(roomId).trim();
     setThreadId(nextThread);
     void reloadThreads(roomId, false);
+    void reloadRuns(roomId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
@@ -557,6 +600,139 @@ export function WorkPage(): JSX.Element {
 
             {createThreadError ? <div className="errorBox">{t("error.load_failed", { code: createThreadError })}</div> : null}
             {createThreadState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+          </div>
+
+          <div className="detailSection">
+            <div className="detailSectionTitle">{t("work.runs.title")}</div>
+            <div className="muted" style={{ marginTop: 4 }}>
+              {threadId.trim()
+                ? t("work.runs.attached_thread", { thread_id: threadId })
+                : t("work.runs.room_only")}
+            </div>
+
+            <div className="workTwoCol">
+              <div>
+                <label className="fieldLabel" htmlFor="createRunTitle">
+                  {t("work.runs.field.title")}
+                </label>
+                <input
+                  id="createRunTitle"
+                  className="textInput"
+                  value={createRunTitle}
+                  onChange={(e) => setCreateRunTitle(e.target.value)}
+                  placeholder={t("work.runs.field.title_placeholder")}
+                  disabled={!roomId.trim() || createRunState === "loading"}
+                />
+              </div>
+              <div>
+                <label className="fieldLabel" htmlFor="createRunGoal">
+                  {t("work.runs.field.goal")}
+                </label>
+                <input
+                  id="createRunGoal"
+                  className="textInput"
+                  value={createRunGoal}
+                  onChange={(e) => setCreateRunGoal(e.target.value)}
+                  placeholder={t("work.runs.field.goal_placeholder")}
+                  disabled={!roomId.trim() || createRunState === "loading"}
+                />
+              </div>
+            </div>
+
+            <div className="decisionActions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={!roomId.trim() || createRunState === "loading"}
+                onClick={() => {
+                  void (async () => {
+                    if (!roomId.trim()) return;
+
+                    setCreateRunState("loading");
+                    setCreateRunError(null);
+                    setCreatedRunId(null);
+
+                    try {
+                      const res = await createRun({
+                        room_id: roomId,
+                        thread_id: threadId.trim() ? threadId.trim() : undefined,
+                        title: createRunTitle.trim() ? createRunTitle.trim() : undefined,
+                        goal: createRunGoal.trim() ? createRunGoal.trim() : undefined,
+                      });
+                      setCreateRunTitle("");
+                      setCreateRunGoal("");
+                      setCreatedRunId(res.run_id);
+                      await reloadRuns(roomId);
+                      setCreateRunState("idle");
+                    } catch (e) {
+                      setCreateRunError(toErrorCode(e));
+                      setCreateRunState("error");
+                    }
+                  })();
+                }}
+              >
+                {t("work.runs.button_create")}
+              </button>
+              <button
+                type="button"
+                className="ghostButton"
+                disabled={!roomId.trim() || runsState === "loading"}
+                onClick={() => void reloadRuns(roomId)}
+              >
+                {t("common.refresh")}
+              </button>
+            </div>
+
+            {createRunError ? <div className="errorBox">{t("error.load_failed", { code: createRunError })}</div> : null}
+            {createRunState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+            {createdRunId ? (
+              <div className="hintBox" style={{ marginTop: 10 }}>
+                <div className="hintText">{t("work.runs.created", { run_id: createdRunId })}</div>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => navigate(`/inspector?run_id=${encodeURIComponent(createdRunId)}`)}
+                  disabled={createRunState === "loading"}
+                >
+                  {t("work.runs.open_inspector")}
+                </button>
+              </div>
+            ) : null}
+
+            {runsError ? <div className="errorBox">{t("error.load_failed", { code: runsError })}</div> : null}
+            {runsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {roomId.trim() && runsState !== "loading" && !runsError && runs.length === 0 ? (
+              <div className="placeholder">{t("work.runs.empty")}</div>
+            ) : null}
+
+            {runs.length ? (
+              <ul className="eventList">
+                {runs.map((r) => {
+                  const title = (r.title ?? "").trim();
+                  const label = title ? title : r.run_id;
+                  return (
+                    <li key={r.run_id}>
+                      <button
+                        type="button"
+                        className="eventRow"
+                        onClick={() => navigate(`/inspector?run_id=${encodeURIComponent(r.run_id)}`)}
+                      >
+                        <div className="eventRowTop">
+                          <div className="mono">{label}</div>
+                          <div className="muted">{formatTimestamp(r.updated_at)}</div>
+                        </div>
+                        <div className="eventRowMeta">
+                          <span className="mono">{t(`run.status.${r.status}`)}</span>
+                          {r.thread_id ? <span className="mono">{r.thread_id}</span> : null}
+                          <span className="mono">{r.run_id}</span>
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
           </div>
         </div>
 
