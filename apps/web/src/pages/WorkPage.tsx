@@ -127,6 +127,10 @@ export function WorkPage(): JSX.Element {
   const [createdRunId, setCreatedRunId] = useState<string | null>(null);
   const [runActionId, setRunActionId] = useState<string | null>(null);
   const [runActionError, setRunActionError] = useState<string | null>(null);
+  const [runCompleteSummary, setRunCompleteSummary] = useState<string>("");
+  const [runCompleteOutputJson, setRunCompleteOutputJson] = useState<string>("");
+  const [runFailMessage, setRunFailMessage] = useState<string>("");
+  const [runFailErrorJson, setRunFailErrorJson] = useState<string>("");
 
   const [stepsRunId, setStepsRunId] = useState<string>("");
   const [steps, setSteps] = useState<StepRow[]>([]);
@@ -979,6 +983,58 @@ export function WorkPage(): JSX.Element {
               </div>
             ) : null}
 
+            <details className="advancedDetails" style={{ marginTop: 10 }}>
+              <summary className="advancedSummary">{t("work.runs.results_title")}</summary>
+
+              <label className="fieldLabel" htmlFor="runCompleteSummary">
+                {t("work.runs.results.complete_summary")}
+              </label>
+              <input
+                id="runCompleteSummary"
+                className="textInput"
+                value={runCompleteSummary}
+                onChange={(e) => setRunCompleteSummary(e.target.value)}
+                placeholder={t("work.runs.results.complete_summary_placeholder")}
+                disabled={!roomId.trim() || runsState === "loading" || runActionId != null}
+              />
+
+              <label className="fieldLabel" htmlFor="runCompleteOutputJson">
+                {t("work.runs.results.complete_output")}
+              </label>
+              <textarea
+                id="runCompleteOutputJson"
+                className="textArea"
+                value={runCompleteOutputJson}
+                onChange={(e) => setRunCompleteOutputJson(e.target.value)}
+                placeholder={t("work.runs.results.complete_output_placeholder")}
+                disabled={!roomId.trim() || runsState === "loading" || runActionId != null}
+              />
+
+              <label className="fieldLabel" htmlFor="runFailMessage">
+                {t("work.runs.results.fail_message")}
+              </label>
+              <input
+                id="runFailMessage"
+                className="textInput"
+                value={runFailMessage}
+                onChange={(e) => setRunFailMessage(e.target.value)}
+                placeholder={t("work.runs.results.fail_message_placeholder")}
+                disabled={!roomId.trim() || runsState === "loading" || runActionId != null}
+              />
+
+              <label className="fieldLabel" htmlFor="runFailErrorJson">
+                {t("work.runs.results.fail_error")}
+              </label>
+              <textarea
+                id="runFailErrorJson"
+                className="textArea"
+                value={runFailErrorJson}
+                onChange={(e) => setRunFailErrorJson(e.target.value)}
+                placeholder={t("work.runs.results.fail_error_placeholder")}
+                disabled={!roomId.trim() || runsState === "loading" || runActionId != null}
+              />
+            </details>
+
             {runActionError ? <div className="errorBox">{t("error.load_failed", { code: runActionError })}</div> : null}
 
             {runsError ? <div className="errorBox">{t("error.load_failed", { code: runsError })}</div> : null}
@@ -1050,10 +1106,24 @@ export function WorkPage(): JSX.Element {
                                     const nextRoomId = roomId.trim();
                                     if (!nextRoomId) return;
 
-                                    setRunActionId(r.run_id);
                                     setRunActionError(null);
+
+                                    const summary = runCompleteSummary.trim();
+                                    const rawOutput = runCompleteOutputJson.trim();
+                                    let payload: { summary?: string; output?: unknown } = {};
+                                    if (summary) payload.summary = summary;
+                                    if (rawOutput) {
+                                      try {
+                                        payload.output = JSON.parse(rawOutput) as unknown;
+                                      } catch {
+                                        setRunActionError("invalid_json");
+                                        return;
+                                      }
+                                    }
+
+                                    setRunActionId(r.run_id);
                                     try {
-                                      await completeRun(r.run_id, {});
+                                      await completeRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
@@ -1074,10 +1144,24 @@ export function WorkPage(): JSX.Element {
                                     const nextRoomId = roomId.trim();
                                     if (!nextRoomId) return;
 
-                                    setRunActionId(r.run_id);
                                     setRunActionError(null);
+
+                                    const message = runFailMessage.trim();
+                                    const rawError = runFailErrorJson.trim();
+                                    let payload: { message?: string; error?: unknown } = {};
+                                    if (message) payload.message = message;
+                                    if (rawError) {
+                                      try {
+                                        payload.error = JSON.parse(rawError) as unknown;
+                                      } catch {
+                                        setRunActionError("invalid_json");
+                                        return;
+                                      }
+                                    }
+
+                                    setRunActionId(r.run_id);
                                     try {
-                                      await failRun(r.run_id, {});
+                                      await failRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
