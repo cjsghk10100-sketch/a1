@@ -6,6 +6,8 @@ import type { RoomRow } from "../api/rooms";
 import { createRoom, listRooms } from "../api/rooms";
 import type { RunRow, StepRow } from "../api/runs";
 import { completeRun, createRun, createStep, failRun, listRunSteps, listRuns, startRun } from "../api/runs";
+import type { ToolCallRow } from "../api/toolcalls";
+import { createToolCall, failToolCall, listToolCalls, succeedToolCall } from "../api/toolcalls";
 import type { SearchDocRow } from "../api/search";
 import { searchDocs } from "../api/search";
 import type { MessageRow, ThreadRow } from "../api/threads";
@@ -135,6 +137,21 @@ export function WorkPage(): JSX.Element {
   const [createStepError, setCreateStepError] = useState<string | null>(null);
   const [createdStepId, setCreatedStepId] = useState<string | null>(null);
 
+  const [toolCallsStepId, setToolCallsStepId] = useState<string>("");
+  const [toolCalls, setToolCalls] = useState<ToolCallRow[]>([]);
+  const [toolCallsState, setToolCallsState] = useState<ConnState>("idle");
+  const [toolCallsError, setToolCallsError] = useState<string | null>(null);
+
+  const [createToolCallName, setCreateToolCallName] = useState<string>("");
+  const [createToolCallTitle, setCreateToolCallTitle] = useState<string>("");
+  const [createToolCallAgentId, setCreateToolCallAgentId] = useState<string>("");
+  const [createToolCallInputJson, setCreateToolCallInputJson] = useState<string>("");
+  const [createToolCallState, setCreateToolCallState] = useState<ConnState>("idle");
+  const [createToolCallError, setCreateToolCallError] = useState<string | null>(null);
+  const [createdToolCallId, setCreatedToolCallId] = useState<string | null>(null);
+  const [toolCallActionId, setToolCallActionId] = useState<string | null>(null);
+  const [toolCallActionError, setToolCallActionError] = useState<string | null>(null);
+
   const [pins, setPins] = useState<PinItemV1[]>(() => loadPins());
 
   const roomOptions = useMemo(() => {
@@ -168,6 +185,12 @@ export function WorkPage(): JSX.Element {
     if (!id) return null;
     return runs.find((r) => r.run_id === id) ?? null;
   }, [runs, stepsRunId]);
+
+  const selectedStepForToolCalls = useMemo(() => {
+    const id = toolCallsStepId.trim();
+    if (!id) return null;
+    return steps.find((s) => s.step_id === id) ?? null;
+  }, [steps, toolCallsStepId]);
 
   async function reloadRooms(): Promise<void> {
     setRoomsState("loading");
@@ -277,6 +300,27 @@ export function WorkPage(): JSX.Element {
     }
   }
 
+  async function reloadToolCalls(nextStepId: string): Promise<void> {
+    const id = nextStepId.trim();
+    if (!id) {
+      setToolCalls([]);
+      setToolCallsState("idle");
+      setToolCallsError(null);
+      return;
+    }
+
+    setToolCallsState("loading");
+    setToolCallsError(null);
+    try {
+      const res = await listToolCalls({ step_id: id, limit: 50 });
+      setToolCalls(res);
+      setToolCallsState("idle");
+    } catch (e) {
+      setToolCallsError(toErrorCode(e));
+      setToolCallsState("error");
+    }
+  }
+
   async function runSearch(): Promise<void> {
     const q = searchQuery.trim();
     if (!roomId.trim() || q.length < 2) {
@@ -342,6 +386,20 @@ export function WorkPage(): JSX.Element {
     setCreateStepKind("tool");
     setCreateStepTitle("");
 
+    setToolCallsStepId("");
+    setToolCalls([]);
+    setToolCallsError(null);
+    setToolCallsState("idle");
+    setCreateToolCallName("");
+    setCreateToolCallTitle("");
+    setCreateToolCallAgentId("");
+    setCreateToolCallInputJson("");
+    setCreateToolCallError(null);
+    setCreateToolCallState("idle");
+    setCreatedToolCallId(null);
+    setToolCallActionId(null);
+    setToolCallActionError(null);
+
     const nextThread = loadThreadId(roomId).trim();
     setThreadId(nextThread);
     void reloadThreads(roomId, false);
@@ -380,11 +438,49 @@ export function WorkPage(): JSX.Element {
     setCreateStepError(null);
     setCreateStepState("idle");
 
+    setToolCallsStepId("");
+    setToolCalls([]);
+    setToolCallsError(null);
+    setToolCallsState("idle");
+    setCreatedToolCallId(null);
+    setCreateToolCallError(null);
+    setCreateToolCallState("idle");
+
     const id = stepsRunId.trim();
     if (!id) return;
     void reloadSteps(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepsRunId]);
+
+  useEffect(() => {
+    if (!steps.length) {
+      if (toolCallsStepId) setToolCallsStepId("");
+      return;
+    }
+
+    const current = toolCallsStepId.trim();
+    const stillExists = current && steps.some((s) => s.step_id === current);
+    if (stillExists) return;
+
+    const next = steps[0]?.step_id ?? "";
+    if (next && next !== toolCallsStepId) setToolCallsStepId(next);
+  }, [steps, toolCallsStepId]);
+
+  useEffect(() => {
+    setToolCalls([]);
+    setToolCallsError(null);
+    setToolCallsState("idle");
+    setCreatedToolCallId(null);
+    setCreateToolCallError(null);
+    setCreateToolCallState("idle");
+    setToolCallActionId(null);
+    setToolCallActionError(null);
+
+    const id = toolCallsStepId.trim();
+    if (!id) return;
+    void reloadToolCalls(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolCallsStepId]);
 
   return (
     <section className="page">
@@ -1043,6 +1139,274 @@ export function WorkPage(): JSX.Element {
                     </div>
                   </li>
                 ))}
+              </ul>
+            ) : null}
+          </div>
+
+          <div className="detailSection">
+            <div className="detailSectionTitle">{t("work.toolcalls.title")}</div>
+
+            <label className="fieldLabel" htmlFor="toolCallsStepSelect">
+              {t("work.toolcalls.step")}
+            </label>
+            <div className="timelineRoomRow">
+              <select
+                id="toolCallsStepSelect"
+                className="select"
+                value={toolCallsStepId}
+                onChange={(e) => setToolCallsStepId(e.target.value)}
+                disabled={!stepsRunId.trim() || stepsState === "loading"}
+              >
+                <option value="">{t("work.toolcalls.step_placeholder")}</option>
+                {steps.map((s) => (
+                  <option key={s.step_id} value={s.step_id}>
+                    {s.kind} ({s.status}) {s.step_id} {s.title ? s.title : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => void reloadToolCalls(toolCallsStepId)}
+                disabled={!toolCallsStepId.trim() || toolCallsState === "loading"}
+              >
+                {t("common.refresh")}
+              </button>
+            </div>
+
+            {selectedRunForSteps && selectedRunForSteps.status !== "running" ? (
+              <div className="muted" style={{ marginTop: 6 }}>
+                {t("work.toolcalls.requires_running")}
+              </div>
+            ) : null}
+
+            {selectedStepForToolCalls &&
+            (selectedStepForToolCalls.status === "succeeded" || selectedStepForToolCalls.status === "failed") ? (
+              <div className="muted" style={{ marginTop: 6 }}>
+                {t("work.toolcalls.requires_open_step")}
+              </div>
+            ) : null}
+
+            <div className="workTwoCol">
+              <div>
+                <label className="fieldLabel" htmlFor="createToolCallName">
+                  {t("work.toolcalls.field.tool_name")}
+                </label>
+                <input
+                  id="createToolCallName"
+                  className="textInput"
+                  value={createToolCallName}
+                  onChange={(e) => setCreateToolCallName(e.target.value)}
+                  placeholder={t("work.toolcalls.field.tool_name_placeholder")}
+                  disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+                />
+              </div>
+              <div>
+                <label className="fieldLabel" htmlFor="createToolCallTitle">
+                  {t("work.toolcalls.field.title")}
+                </label>
+                <input
+                  id="createToolCallTitle"
+                  className="textInput"
+                  value={createToolCallTitle}
+                  onChange={(e) => setCreateToolCallTitle(e.target.value)}
+                  placeholder={t("work.toolcalls.field.title_placeholder")}
+                  disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+                />
+              </div>
+            </div>
+
+            <label className="fieldLabel" htmlFor="createToolCallAgentId">
+              {t("work.toolcalls.field.agent_id")}
+            </label>
+            <input
+              id="createToolCallAgentId"
+              className="textInput"
+              value={createToolCallAgentId}
+              onChange={(e) => setCreateToolCallAgentId(e.target.value)}
+              placeholder={t("work.toolcalls.field.agent_id_placeholder")}
+              disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+            />
+
+            <label className="fieldLabel" htmlFor="createToolCallInputJson">
+              {t("work.toolcalls.field.input_json")}
+            </label>
+            <textarea
+              id="createToolCallInputJson"
+              className="textArea"
+              value={createToolCallInputJson}
+              onChange={(e) => setCreateToolCallInputJson(e.target.value)}
+              placeholder={t("work.toolcalls.field.input_json_placeholder")}
+              disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+            />
+
+            <div className="decisionActions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={
+                  !toolCallsStepId.trim() ||
+                  selectedRunForSteps?.status !== "running" ||
+                  selectedStepForToolCalls?.status === "succeeded" ||
+                  selectedStepForToolCalls?.status === "failed" ||
+                  createToolCallState === "loading" ||
+                  !createToolCallName.trim()
+                }
+                onClick={() => {
+                  void (async () => {
+                    const step_id = toolCallsStepId.trim();
+                    const tool_name = createToolCallName.trim();
+                    if (!step_id || !tool_name) return;
+
+                    setCreateToolCallState("loading");
+                    setCreateToolCallError(null);
+                    setCreatedToolCallId(null);
+
+                    const rawJson = createToolCallInputJson.trim();
+                    let inputJson: unknown | undefined = undefined;
+                    if (rawJson) {
+                      try {
+                        inputJson = JSON.parse(rawJson) as unknown;
+                      } catch {
+                        setCreateToolCallError("invalid_json");
+                        setCreateToolCallState("error");
+                        return;
+                      }
+                    }
+
+                    try {
+                      const res = await createToolCall(step_id, {
+                        tool_name,
+                        title: createToolCallTitle.trim() ? createToolCallTitle.trim() : undefined,
+                        input: inputJson,
+                        agent_id: createToolCallAgentId.trim() ? createToolCallAgentId.trim() : undefined,
+                      });
+
+                      setCreateToolCallTitle("");
+                      setCreateToolCallInputJson("");
+                      setCreatedToolCallId(res.tool_call_id);
+
+                      await reloadToolCalls(step_id);
+                      const run_id = stepsRunId.trim();
+                      if (run_id) await reloadSteps(run_id);
+
+                      setCreateToolCallState("idle");
+                    } catch (e) {
+                      setCreateToolCallError(toErrorCode(e));
+                      setCreateToolCallState("error");
+                    }
+                  })();
+                }}
+              >
+                {t("work.toolcalls.button_create")}
+              </button>
+            </div>
+
+            {createToolCallError ? (
+              <div className="errorBox">{t("error.load_failed", { code: createToolCallError })}</div>
+            ) : null}
+            {createToolCallState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+            {createdToolCallId ? (
+              <div className="hintBox" style={{ marginTop: 10 }}>
+                <div className="hintText">{t("work.toolcalls.created", { tool_call_id: createdToolCallId })}</div>
+              </div>
+            ) : null}
+
+            {toolCallActionError ? (
+              <div className="errorBox">{t("error.load_failed", { code: toolCallActionError })}</div>
+            ) : null}
+
+            {toolCallsError ? <div className="errorBox">{t("error.load_failed", { code: toolCallsError })}</div> : null}
+            {toolCallsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {toolCallsStepId.trim() && toolCallsState !== "loading" && !toolCallsError && toolCalls.length === 0 ? (
+              <div className="placeholder">{t("work.toolcalls.empty")}</div>
+            ) : null}
+
+            {toolCalls.length ? (
+              <ul className="compactList">
+                {toolCalls.map((tc) => {
+                  const actionDisabled =
+                    toolCallsState === "loading" ||
+                    toolCallActionId === tc.tool_call_id ||
+                    toolCallActionId != null ||
+                    createToolCallState === "loading";
+                  return (
+                    <li key={tc.tool_call_id} className="compactRow">
+                      <div className="compactTop">
+                        <div className="mono">{tc.tool_name}</div>
+                        <div className="compactTopActions">
+                          <div className="muted">{t(`tool.status.${tc.status}`)}</div>
+                          {tc.status === "running" ? (
+                            <>
+                              <button
+                                type="button"
+                                className="ghostButton"
+                                disabled={actionDisabled}
+                                onClick={() => {
+                                  void (async () => {
+                                    const step_id = toolCallsStepId.trim();
+                                    if (!step_id) return;
+
+                                    setToolCallActionId(tc.tool_call_id);
+                                    setToolCallActionError(null);
+                                    try {
+                                      await succeedToolCall(tc.tool_call_id, {});
+                                      await reloadToolCalls(step_id);
+                                      const run_id = stepsRunId.trim();
+                                      if (run_id) await reloadSteps(run_id);
+                                    } catch (e) {
+                                      setToolCallActionError(toErrorCode(e));
+                                    } finally {
+                                      setToolCallActionId(null);
+                                    }
+                                  })();
+                                }}
+                              >
+                                {t("work.toolcalls.button_succeed")}
+                              </button>
+                              <button
+                                type="button"
+                                className="dangerButton"
+                                disabled={actionDisabled}
+                                onClick={() => {
+                                  void (async () => {
+                                    const step_id = toolCallsStepId.trim();
+                                    if (!step_id) return;
+
+                                    setToolCallActionId(tc.tool_call_id);
+                                    setToolCallActionError(null);
+                                    try {
+                                      await failToolCall(tc.tool_call_id, {});
+                                      await reloadToolCalls(step_id);
+                                      const run_id = stepsRunId.trim();
+                                      if (run_id) await reloadSteps(run_id);
+                                    } catch (e) {
+                                      setToolCallActionError(toErrorCode(e));
+                                    } finally {
+                                      setToolCallActionId(null);
+                                    }
+                                  })();
+                                }}
+                              >
+                                {t("work.toolcalls.button_fail")}
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="compactMeta">
+                        <span className="mono">{tc.tool_call_id}</span>
+                        {tc.title ? <span>{tc.title}</span> : null}
+                        <span className="muted">{formatTimestamp(tc.updated_at)}</span>
+                      </div>
+                      <details className="eventDetails">
+                        <summary className="eventSummary">{t("common.advanced")}</summary>
+                        <JsonView value={tc} />
+                      </details>
+                    </li>
+                  );
+                })}
               </ul>
             ) : null}
           </div>

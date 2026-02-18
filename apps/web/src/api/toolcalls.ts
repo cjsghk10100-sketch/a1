@@ -1,4 +1,4 @@
-import { apiGet } from "./http";
+import { apiGet, apiPost } from "./http";
 
 export type ToolCallStatus = "running" | "succeeded" | "failed";
 
@@ -37,3 +37,20 @@ export async function listToolCalls(params: { run_id?: string; step_id?: string;
   return res.tool_calls;
 }
 
+export async function createToolCall(
+  stepId: string,
+  input: { tool_name: string; title?: string; input?: unknown; agent_id?: string },
+): Promise<{ tool_call_id: string }> {
+  return await apiPost<{ tool_call_id: string }>(`/v1/steps/${encodeURIComponent(stepId)}/toolcalls`, input);
+}
+
+export async function succeedToolCall(toolCallId: string, input: { output?: unknown }): Promise<{ ok: true }> {
+  return await apiPost<{ ok: true }>(`/v1/toolcalls/${encodeURIComponent(toolCallId)}/succeed`, input);
+}
+
+export async function failToolCall(
+  toolCallId: string,
+  input: { message?: string; error?: unknown },
+): Promise<{ ok: true }> {
+  return await apiPost<{ ok: true }>(`/v1/toolcalls/${encodeURIComponent(toolCallId)}/fail`, input);
+}
