@@ -691,6 +691,12 @@ body {
   align-items: baseline;
 }
 
+.compactTopActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .compactMeta {
   margin-top: 8px;
   display: flex;
