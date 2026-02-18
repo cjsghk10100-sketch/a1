@@ -122,6 +122,9 @@ export function WorkPage(): JSX.Element {
 
   const [createRunTitle, setCreateRunTitle] = useState<string>("");
   const [createRunGoal, setCreateRunGoal] = useState<string>("");
+  const [createRunInputJson, setCreateRunInputJson] = useState<string>("");
+  const [createRunTagsCsv, setCreateRunTagsCsv] = useState<string>("");
+  const [createRunCorrelationId, setCreateRunCorrelationId] = useState<string>("");
   const [createRunState, setCreateRunState] = useState<ConnState>("idle");
   const [createRunError, setCreateRunError] = useState<string | null>(null);
   const [createdRunId, setCreatedRunId] = useState<string | null>(null);
@@ -923,6 +926,46 @@ export function WorkPage(): JSX.Element {
               </div>
             </div>
 
+            <details className="advancedDetails" style={{ marginTop: 10 }}>
+              <summary className="advancedSummary">{t("common.advanced")}</summary>
+
+              <label className="fieldLabel" htmlFor="createRunInputJson">
+                {t("work.runs.field.input_json")}
+              </label>
+              <textarea
+                id="createRunInputJson"
+                className="textArea"
+                value={createRunInputJson}
+                onChange={(e) => setCreateRunInputJson(e.target.value)}
+                placeholder={t("work.runs.field.input_json_placeholder")}
+                disabled={!roomId.trim() || createRunState === "loading"}
+              />
+
+              <label className="fieldLabel" htmlFor="createRunTagsCsv">
+                {t("work.runs.field.tags")}
+              </label>
+              <input
+                id="createRunTagsCsv"
+                className="textInput"
+                value={createRunTagsCsv}
+                onChange={(e) => setCreateRunTagsCsv(e.target.value)}
+                placeholder={t("work.runs.field.tags_placeholder")}
+                disabled={!roomId.trim() || createRunState === "loading"}
+              />
+
+              <label className="fieldLabel" htmlFor="createRunCorrelationId">
+                {t("work.runs.field.correlation_id")}
+              </label>
+              <input
+                id="createRunCorrelationId"
+                className="textInput"
+                value={createRunCorrelationId}
+                onChange={(e) => setCreateRunCorrelationId(e.target.value)}
+                placeholder={t("work.runs.field.correlation_id_placeholder")}
+                disabled={!roomId.trim() || createRunState === "loading"}
+              />
+            </details>
+
             <div className="decisionActions" style={{ marginTop: 10 }}>
               <button
                 type="button"
@@ -936,15 +979,43 @@ export function WorkPage(): JSX.Element {
                     setCreateRunError(null);
                     setCreatedRunId(null);
 
+                    const rawJson = createRunInputJson.trim();
+                    let inputJson: unknown | undefined = undefined;
+                    if (rawJson) {
+                      try {
+                        inputJson = JSON.parse(rawJson) as unknown;
+                      } catch {
+                        setCreateRunError("invalid_json");
+                        setCreateRunState("error");
+                        return;
+                      }
+                    }
+
+                    const correlation_id = createRunCorrelationId.trim() || undefined;
+
+                    const rawTags = createRunTagsCsv.trim();
+                    const tags = rawTags
+                      ? rawTags
+                          .split(",")
+                          .map((tag) => tag.trim())
+                          .filter((tag) => Boolean(tag))
+                      : undefined;
+
                     try {
                       const res = await createRun({
                         room_id: roomId,
                         thread_id: threadId.trim() ? threadId.trim() : undefined,
                         title: createRunTitle.trim() ? createRunTitle.trim() : undefined,
                         goal: createRunGoal.trim() ? createRunGoal.trim() : undefined,
+                        input: inputJson,
+                        tags,
+                        correlation_id,
                       });
                       setCreateRunTitle("");
                       setCreateRunGoal("");
+                      setCreateRunInputJson("");
+                      setCreateRunTagsCsv("");
+                      setCreateRunCorrelationId("");
                       setCreatedRunId(res.run_id);
                       await reloadRuns(roomId);
                       setCreateRunState("idle");

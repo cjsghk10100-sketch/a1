@@ -77,7 +77,7 @@ export async function createRun(payload: {
   thread_id?: string;
   title?: string;
   goal?: string;
-  input?: Record<string, unknown>;
+  input?: unknown;
   tags?: string[];
   correlation_id?: string;
 }): Promise<{ run_id: string }> {
