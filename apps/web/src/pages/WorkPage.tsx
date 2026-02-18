@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 import type { RoomRow } from "../api/rooms";
 import { createRoom, listRooms } from "../api/rooms";
 import type { RunRow } from "../api/runs";
-import { createRun, listRuns } from "../api/runs";
+import { completeRun, createRun, failRun, listRuns, startRun } from "../api/runs";
 import type { SearchDocRow } from "../api/search";
 import { searchDocs } from "../api/search";
 import type { MessageRow, ThreadRow } from "../api/threads";
@@ -121,6 +121,8 @@ export function WorkPage(): JSX.Element {
   const [createRunState, setCreateRunState] = useState<ConnState>("idle");
   const [createRunError, setCreateRunError] = useState<string | null>(null);
   const [createdRunId, setCreatedRunId] = useState<string | null>(null);
+  const [runActionId, setRunActionId] = useState<string | null>(null);
+  const [runActionError, setRunActionError] = useState<string | null>(null);
 
   const [pins, setPins] = useState<PinItemV1[]>(() => loadPins());
 
@@ -291,6 +293,8 @@ export function WorkPage(): JSX.Element {
     setCreatedRunId(null);
     setCreateRunTitle("");
     setCreateRunGoal("");
+    setRunActionId(null);
+    setRunActionError(null);
 
     const nextThread = loadThreadId(roomId).trim();
     setThreadId(nextThread);
@@ -700,6 +704,8 @@ export function WorkPage(): JSX.Element {
               </div>
             ) : null}
 
+            {runActionError ? <div className="errorBox">{t("error.load_failed", { code: runActionError })}</div> : null}
+
             {runsError ? <div className="errorBox">{t("error.load_failed", { code: runsError })}</div> : null}
             {runsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
             {roomId.trim() && runsState !== "loading" && !runsError && runs.length === 0 ? (
@@ -711,23 +717,107 @@ export function WorkPage(): JSX.Element {
                 {runs.map((r) => {
                   const title = (r.title ?? "").trim();
                   const label = title ? title : r.run_id;
+                  const actionDisabled = !roomId.trim() || runsState === "loading" || runActionId === r.run_id;
                   return (
                     <li key={r.run_id}>
-                      <button
-                        type="button"
-                        className="eventRow"
-                        onClick={() => navigate(`/inspector?run_id=${encodeURIComponent(r.run_id)}`)}
-                      >
-                        <div className="eventRowTop">
-                          <div className="mono">{label}</div>
-                          <div className="muted">{formatTimestamp(r.updated_at)}</div>
+                      <div className="timelineRoomRow">
+                        <button
+                          type="button"
+                          className="eventRow"
+                          onClick={() => navigate(`/inspector?run_id=${encodeURIComponent(r.run_id)}`)}
+                        >
+                          <div className="eventRowTop">
+                            <div className="mono">{label}</div>
+                            <div className="muted">{formatTimestamp(r.updated_at)}</div>
+                          </div>
+                          <div className="eventRowMeta">
+                            <span className="mono">{t(`run.status.${r.status}`)}</span>
+                            {r.thread_id ? <span className="mono">{r.thread_id}</span> : null}
+                            <span className="mono">{r.run_id}</span>
+                          </div>
+                        </button>
+                        <div className="compactTopActions">
+                          {r.status === "queued" ? (
+                            <button
+                              type="button"
+                              className="ghostButton"
+                              disabled={actionDisabled}
+                              onClick={() => {
+                                void (async () => {
+                                  const nextRoomId = roomId.trim();
+                                  if (!nextRoomId) return;
+
+                                  setRunActionId(r.run_id);
+                                  setRunActionError(null);
+                                  try {
+                                    await startRun(r.run_id);
+                                    await reloadRuns(nextRoomId);
+                                  } catch (e) {
+                                    setRunActionError(toErrorCode(e));
+                                  } finally {
+                                    setRunActionId(null);
+                                  }
+                                })();
+                              }}
+                            >
+                              {t("work.runs.button_start")}
+                            </button>
+                          ) : null}
+
+                          {r.status === "running" ? (
+                            <>
+                              <button
+                                type="button"
+                                className="ghostButton"
+                                disabled={actionDisabled}
+                                onClick={() => {
+                                  void (async () => {
+                                    const nextRoomId = roomId.trim();
+                                    if (!nextRoomId) return;
+
+                                    setRunActionId(r.run_id);
+                                    setRunActionError(null);
+                                    try {
+                                      await completeRun(r.run_id, {});
+                                      await reloadRuns(nextRoomId);
+                                    } catch (e) {
+                                      setRunActionError(toErrorCode(e));
+                                    } finally {
+                                      setRunActionId(null);
+                                    }
+                                  })();
+                                }}
+                              >
+                                {t("work.runs.button_complete")}
+                              </button>
+                              <button
+                                type="button"
+                                className="dangerButton"
+                                disabled={actionDisabled}
+                                onClick={() => {
+                                  void (async () => {
+                                    const nextRoomId = roomId.trim();
+                                    if (!nextRoomId) return;
+
+                                    setRunActionId(r.run_id);
+                                    setRunActionError(null);
+                                    try {
+                                      await failRun(r.run_id, {});
+                                      await reloadRuns(nextRoomId);
+                                    } catch (e) {
+                                      setRunActionError(toErrorCode(e));
+                                    } finally {
+                                      setRunActionId(null);
+                                    }
+                                  })();
+                                }}
+                              >
+                                {t("work.runs.button_fail")}
+                              </button>
+                            </>
+                          ) : null}
                         </div>
-                        <div className="eventRowMeta">
-                          <span className="mono">{t(`run.status.${r.status}`)}</span>
-                          {r.thread_id ? <span className="mono">{r.thread_id}</span> : null}
-                          <span className="mono">{r.run_id}</span>
-                        </div>
-                      </button>
+                      </div>
                     </li>
                   );
                 })}
