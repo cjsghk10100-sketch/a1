@@ -1019,6 +1019,8 @@ export function WorkPage(): JSX.Element {
                       setCreateRunCorrelationId("");
                       setCreatedRunId(res.run_id);
                       await reloadRuns(roomId);
+                      // Ensure the next actions (steps/tool calls/artifacts) default to the newly created run.
+                      setStepsRunId(res.run_id);
                       setCreateRunState("idle");
                     } catch (e) {
                       setCreateRunError(toErrorCode(e));
