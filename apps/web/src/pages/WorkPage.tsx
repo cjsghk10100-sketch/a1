@@ -177,6 +177,7 @@ export function WorkPage(): JSX.Element {
   const [createArtifactText, setCreateArtifactText] = useState<string>("");
   const [createArtifactJson, setCreateArtifactJson] = useState<string>("");
   const [createArtifactUri, setCreateArtifactUri] = useState<string>("");
+  const [createArtifactMetadataJson, setCreateArtifactMetadataJson] = useState<string>("");
   const [createArtifactState, setCreateArtifactState] = useState<ConnState>("idle");
   const [createArtifactError, setCreateArtifactError] = useState<string | null>(null);
   const [createdArtifactId, setCreatedArtifactId] = useState<string | null>(null);
@@ -1899,6 +1900,22 @@ export function WorkPage(): JSX.Element {
               </>
             ) : null}
 
+            <details className="advancedDetails" style={{ marginTop: 10 }}>
+              <summary className="advancedSummary">{t("common.advanced")}</summary>
+
+              <label className="fieldLabel" htmlFor="createArtifactMetadataJson">
+                {t("work.artifacts.field.metadata")}
+              </label>
+              <textarea
+                id="createArtifactMetadataJson"
+                className="textArea"
+                value={createArtifactMetadataJson}
+                onChange={(e) => setCreateArtifactMetadataJson(e.target.value)}
+                placeholder={t("work.artifacts.field.metadata_placeholder")}
+                disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+              />
+            </details>
+
             <div className="decisionActions" style={{ marginTop: 10 }}>
               <button
                 type="button"
@@ -1937,12 +1954,25 @@ export function WorkPage(): JSX.Element {
                       content = { type: "uri", uri: createArtifactUri.trim() };
                     }
 
+                    const rawMetadata = createArtifactMetadataJson.trim();
+                    let metadata: unknown | undefined = undefined;
+                    if (rawMetadata) {
+                      try {
+                        metadata = JSON.parse(rawMetadata) as unknown;
+                      } catch {
+                        setCreateArtifactError("invalid_json");
+                        setCreateArtifactState("error");
+                        return;
+                      }
+                    }
+
                     try {
                       const res = await createArtifact(step_id, {
                         kind,
                         title: createArtifactTitle.trim() ? createArtifactTitle.trim() : undefined,
                         mime_type: createArtifactMimeType.trim() ? createArtifactMimeType.trim() : undefined,
                         content,
+                        metadata,
                       });
 
                       setCreateArtifactTitle("");
@@ -1950,6 +1980,7 @@ export function WorkPage(): JSX.Element {
                       setCreateArtifactText("");
                       setCreateArtifactJson("");
                       setCreateArtifactUri("");
+                      setCreateArtifactMetadataJson("");
                       setCreateArtifactContentType("none");
                       setCreatedArtifactId(res.artifact_id);
 
