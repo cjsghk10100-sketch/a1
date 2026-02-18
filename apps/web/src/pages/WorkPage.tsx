@@ -1385,6 +1385,9 @@ export function WorkPage(): JSX.Element {
                       setCreateStepInputJson("");
                       setCreatedStepId(res.step_id);
                       await reloadSteps(run_id);
+                      // Ensure the next actions (tool calls / artifacts) default to the newly created step.
+                      setToolCallsStepId(res.step_id);
+                      setArtifactsStepId(res.step_id);
                       setCreateStepState("idle");
                     } catch (e) {
                       setCreateStepError(toErrorCode(e));
