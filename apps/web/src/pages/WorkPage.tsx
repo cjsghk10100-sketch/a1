@@ -4,8 +4,8 @@ import { useNavigate } from "react-router-dom";
 
 import type { RoomRow } from "../api/rooms";
 import { createRoom, listRooms } from "../api/rooms";
-import type { RunRow } from "../api/runs";
-import { completeRun, createRun, failRun, listRuns, startRun } from "../api/runs";
+import type { RunRow, StepRow } from "../api/runs";
+import { completeRun, createRun, createStep, failRun, listRunSteps, listRuns, startRun } from "../api/runs";
 import type { SearchDocRow } from "../api/search";
 import { searchDocs } from "../api/search";
 import type { MessageRow, ThreadRow } from "../api/threads";
@@ -124,6 +124,17 @@ export function WorkPage(): JSX.Element {
   const [runActionId, setRunActionId] = useState<string | null>(null);
   const [runActionError, setRunActionError] = useState<string | null>(null);
 
+  const [stepsRunId, setStepsRunId] = useState<string>("");
+  const [steps, setSteps] = useState<StepRow[]>([]);
+  const [stepsState, setStepsState] = useState<ConnState>("idle");
+  const [stepsError, setStepsError] = useState<string | null>(null);
+
+  const [createStepKind, setCreateStepKind] = useState<string>("tool");
+  const [createStepTitle, setCreateStepTitle] = useState<string>("");
+  const [createStepState, setCreateStepState] = useState<ConnState>("idle");
+  const [createStepError, setCreateStepError] = useState<string | null>(null);
+  const [createdStepId, setCreatedStepId] = useState<string | null>(null);
+
   const [pins, setPins] = useState<PinItemV1[]>(() => loadPins());
 
   const roomOptions = useMemo(() => {
@@ -151,6 +162,12 @@ export function WorkPage(): JSX.Element {
     if (!messages.length) return [];
     return [...messages].reverse();
   }, [messages]);
+
+  const selectedRunForSteps = useMemo(() => {
+    const id = stepsRunId.trim();
+    if (!id) return null;
+    return runs.find((r) => r.run_id === id) ?? null;
+  }, [runs, stepsRunId]);
 
   async function reloadRooms(): Promise<void> {
     setRoomsState("loading");
@@ -239,6 +256,27 @@ export function WorkPage(): JSX.Element {
     }
   }
 
+  async function reloadSteps(nextRunId: string): Promise<void> {
+    const id = nextRunId.trim();
+    if (!id) {
+      setSteps([]);
+      setStepsState("idle");
+      setStepsError(null);
+      return;
+    }
+
+    setStepsState("loading");
+    setStepsError(null);
+    try {
+      const res = await listRunSteps(id);
+      setSteps(res);
+      setStepsState("idle");
+    } catch (e) {
+      setStepsError(toErrorCode(e));
+      setStepsState("error");
+    }
+  }
+
   async function runSearch(): Promise<void> {
     const q = searchQuery.trim();
     if (!roomId.trim() || q.length < 2) {
@@ -282,9 +320,12 @@ export function WorkPage(): JSX.Element {
     setThreads([]);
     setMessages([]);
     setRuns([]);
+    setSteps([]);
+    setStepsRunId("");
     setThreadsError(null);
     setMessagesError(null);
     setRunsError(null);
+    setStepsError(null);
     setSendError(null);
     setSearchError(null);
     setSearchResults([]);
@@ -295,6 +336,11 @@ export function WorkPage(): JSX.Element {
     setCreateRunGoal("");
     setRunActionId(null);
     setRunActionError(null);
+    setCreateStepError(null);
+    setCreateStepState("idle");
+    setCreatedStepId(null);
+    setCreateStepKind("tool");
+    setCreateStepTitle("");
 
     const nextThread = loadThreadId(roomId).trim();
     setThreadId(nextThread);
@@ -311,6 +357,34 @@ export function WorkPage(): JSX.Element {
     void reloadMessages(threadId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
+
+  useEffect(() => {
+    if (!runs.length) {
+      if (stepsRunId) setStepsRunId("");
+      return;
+    }
+
+    const current = stepsRunId.trim();
+    const stillExists = current && runs.some((r) => r.run_id === current);
+    if (stillExists) return;
+
+    const preferred = (createdRunId ?? "").trim();
+    const next = preferred && runs.some((r) => r.run_id === preferred) ? preferred : runs[0]?.run_id ?? "";
+    if (next && next !== stepsRunId) setStepsRunId(next);
+  }, [runs, createdRunId, stepsRunId]);
+
+  useEffect(() => {
+    setSteps([]);
+    setStepsError(null);
+    setCreatedStepId(null);
+    setCreateStepError(null);
+    setCreateStepState("idle");
+
+    const id = stepsRunId.trim();
+    if (!id) return;
+    void reloadSteps(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepsRunId]);
 
   return (
     <section className="page">
@@ -821,6 +895,154 @@ export function WorkPage(): JSX.Element {
                     </li>
                   );
                 })}
+              </ul>
+            ) : null}
+          </div>
+
+          <div className="detailSection">
+            <div className="detailSectionTitle">{t("work.steps.title")}</div>
+
+            <label className="fieldLabel" htmlFor="stepsRunSelect">
+              {t("work.steps.run")}
+            </label>
+            <div className="timelineRoomRow">
+              <select
+                id="stepsRunSelect"
+                className="select"
+                value={stepsRunId}
+                onChange={(e) => setStepsRunId(e.target.value)}
+                disabled={!roomId.trim() || runsState === "loading"}
+              >
+                <option value="">{t("work.steps.run_placeholder")}</option>
+                {runs.map((r) => (
+                  <option key={r.run_id} value={r.run_id}>
+                    {(r.title ?? "").trim() ? `${r.title} (${r.status})` : `(${r.status})`} {r.run_id}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => void reloadSteps(stepsRunId)}
+                disabled={!stepsRunId.trim() || stepsState === "loading"}
+              >
+                {t("common.refresh")}
+              </button>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => navigate(`/inspector?run_id=${encodeURIComponent(stepsRunId)}`)}
+                disabled={!stepsRunId.trim()}
+              >
+                {t("work.steps.open_inspector")}
+              </button>
+            </div>
+
+            {selectedRunForSteps && selectedRunForSteps.status !== "running" ? (
+              <div className="muted" style={{ marginTop: 6 }}>
+                {t("work.steps.requires_running")}
+              </div>
+            ) : null}
+
+            <div className="workTwoCol">
+              <div>
+                <label className="fieldLabel" htmlFor="createStepKind">
+                  {t("work.steps.field.kind")}
+                </label>
+                <input
+                  id="createStepKind"
+                  className="textInput"
+                  value={createStepKind}
+                  onChange={(e) => setCreateStepKind(e.target.value)}
+                  placeholder={t("work.steps.field.kind_placeholder")}
+                  disabled={!stepsRunId.trim() || createStepState === "loading"}
+                />
+              </div>
+              <div>
+                <label className="fieldLabel" htmlFor="createStepTitle">
+                  {t("work.steps.field.title")}
+                </label>
+                <input
+                  id="createStepTitle"
+                  className="textInput"
+                  value={createStepTitle}
+                  onChange={(e) => setCreateStepTitle(e.target.value)}
+                  placeholder={t("work.steps.field.title_placeholder")}
+                  disabled={!stepsRunId.trim() || createStepState === "loading"}
+                />
+              </div>
+            </div>
+
+            <div className="decisionActions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={
+                  !stepsRunId.trim() ||
+                  selectedRunForSteps?.status !== "running" ||
+                  createStepState === "loading" ||
+                  !createStepKind.trim()
+                }
+                onClick={() => {
+                  void (async () => {
+                    const run_id = stepsRunId.trim();
+                    const kind = createStepKind.trim();
+                    if (!run_id || !kind) return;
+
+                    setCreateStepState("loading");
+                    setCreateStepError(null);
+                    setCreatedStepId(null);
+
+                    try {
+                      const res = await createStep(run_id, {
+                        kind,
+                        title: createStepTitle.trim() ? createStepTitle.trim() : undefined,
+                      });
+                      setCreateStepTitle("");
+                      setCreatedStepId(res.step_id);
+                      await reloadSteps(run_id);
+                      setCreateStepState("idle");
+                    } catch (e) {
+                      setCreateStepError(toErrorCode(e));
+                      setCreateStepState("error");
+                    }
+                  })();
+                }}
+              >
+                {t("work.steps.button_create")}
+              </button>
+            </div>
+
+            {createStepError ? <div className="errorBox">{t("error.load_failed", { code: createStepError })}</div> : null}
+            {createStepState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+            {createdStepId ? (
+              <div className="hintBox" style={{ marginTop: 10 }}>
+                <div className="hintText">{t("work.steps.created", { step_id: createdStepId })}</div>
+              </div>
+            ) : null}
+
+            {stepsError ? <div className="errorBox">{t("error.load_failed", { code: stepsError })}</div> : null}
+            {stepsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {stepsRunId.trim() && stepsState !== "loading" && !stepsError && steps.length === 0 ? (
+              <div className="placeholder">{t("work.steps.empty")}</div>
+            ) : null}
+
+            {steps.length ? (
+              <ul className="compactList">
+                {steps.map((s) => (
+                  <li key={s.step_id} className="compactRow">
+                    <div className="compactTop">
+                      <div className="mono">{s.kind}</div>
+                      <div className="muted">{t(`step.status.${s.status}`)}</div>
+                    </div>
+                    <div className="compactMeta">
+                      <span className="mono">{s.step_id}</span>
+                      {s.title ? <span>{s.title}</span> : null}
+                      <span className="muted">{formatTimestamp(s.updated_at)}</span>
+                    </div>
+                  </li>
+                ))}
               </ul>
             ) : null}
           </div>
