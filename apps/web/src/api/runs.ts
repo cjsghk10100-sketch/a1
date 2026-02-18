@@ -83,3 +83,21 @@ export async function createRun(payload: {
 }): Promise<{ run_id: string }> {
   return apiPost<{ run_id: string }>("/v1/runs", payload);
 }
+
+export async function startRun(runId: string): Promise<void> {
+  await apiPost<{ ok: true }>(`/v1/runs/${encodeURIComponent(runId)}/start`, {});
+}
+
+export async function completeRun(
+  runId: string,
+  payload?: { summary?: string; output?: Record<string, unknown> },
+): Promise<void> {
+  await apiPost<{ ok: true }>(`/v1/runs/${encodeURIComponent(runId)}/complete`, payload ?? {});
+}
+
+export async function failRun(
+  runId: string,
+  payload?: { message?: string; error?: Record<string, unknown> },
+): Promise<void> {
+  await apiPost<{ ok: true }>(`/v1/runs/${encodeURIComponent(runId)}/fail`, payload ?? {});
+}
