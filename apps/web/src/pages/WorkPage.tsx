@@ -47,6 +47,18 @@ function threadStorageKey(roomId: string): string {
   return `agentapp.thread_id.${roomId}`;
 }
 
+function stepsRunStorageKey(roomId: string): string {
+  return `agentapp.work.steps.run_id.${roomId}`;
+}
+
+function toolCallsStepStorageKey(runId: string): string {
+  return `agentapp.work.toolcalls.step_id.${runId}`;
+}
+
+function artifactsStepStorageKey(runId: string): string {
+  return `agentapp.work.artifacts.step_id.${runId}`;
+}
+
 const senderTypeStorageKey = "agentapp.work.sender_type";
 const senderIdStorageKey = "agentapp.work.sender_id";
 
@@ -73,6 +85,36 @@ function loadThreadId(roomId: string): string {
 function saveThreadId(roomId: string, threadId: string): void {
   if (!roomId.trim()) return;
   localStorage.setItem(threadStorageKey(roomId), threadId);
+}
+
+function loadStepsRunId(roomId: string): string {
+  if (!roomId.trim()) return "";
+  return localStorage.getItem(stepsRunStorageKey(roomId)) ?? "";
+}
+
+function saveStepsRunId(roomId: string, runId: string): void {
+  if (!roomId.trim()) return;
+  localStorage.setItem(stepsRunStorageKey(roomId), runId);
+}
+
+function loadToolCallsStepId(runId: string): string {
+  if (!runId.trim()) return "";
+  return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
+}
+
+function saveToolCallsStepId(runId: string, stepId: string): void {
+  if (!runId.trim()) return;
+  localStorage.setItem(toolCallsStepStorageKey(runId), stepId);
+}
+
+function loadArtifactsStepId(runId: string): string {
+  if (!runId.trim()) return "";
+  return localStorage.getItem(artifactsStepStorageKey(runId)) ?? "";
+}
+
+function saveArtifactsStepId(runId: string, stepId: string): void {
+  if (!runId.trim()) return;
+  localStorage.setItem(artifactsStepStorageKey(runId), stepId);
 }
 
 export function WorkPage(): JSX.Element {
@@ -135,7 +177,7 @@ export function WorkPage(): JSX.Element {
   const [runFailMessage, setRunFailMessage] = useState<string>("");
   const [runFailErrorJson, setRunFailErrorJson] = useState<string>("");
 
-  const [stepsRunId, setStepsRunId] = useState<string>("");
+  const [stepsRunId, setStepsRunId] = useState<string>(() => (roomId ? loadStepsRunId(roomId) : ""));
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [stepsState, setStepsState] = useState<ConnState>("idle");
   const [stepsError, setStepsError] = useState<string | null>(null);
@@ -417,12 +459,24 @@ export function WorkPage(): JSX.Element {
   }, [pins]);
 
   useEffect(() => {
+    saveStepsRunId(roomId, stepsRunId);
+  }, [roomId, stepsRunId]);
+
+  useEffect(() => {
+    saveToolCallsStepId(stepsRunId, toolCallsStepId);
+  }, [stepsRunId, toolCallsStepId]);
+
+  useEffect(() => {
+    saveArtifactsStepId(stepsRunId, artifactsStepId);
+  }, [stepsRunId, artifactsStepId]);
+
+  useEffect(() => {
     localStorage.setItem(roomStorageKey, roomId);
     setThreads([]);
     setMessages([]);
     setRuns([]);
     setSteps([]);
-    setStepsRunId("");
+    setStepsRunId(loadStepsRunId(roomId).trim());
     setThreadsError(null);
     setMessagesError(null);
     setRunsError(null);
@@ -545,9 +599,11 @@ export function WorkPage(): JSX.Element {
     const stillExists = current && steps.some((s) => s.step_id === current);
     if (stillExists) return;
 
-    const next = steps[0]?.step_id ?? "";
+    const run_id = stepsRunId.trim();
+    const preferred = run_id ? loadToolCallsStepId(run_id).trim() : "";
+    const next = preferred && steps.some((s) => s.step_id === preferred) ? preferred : steps[0]?.step_id ?? "";
     if (next && next !== toolCallsStepId) setToolCallsStepId(next);
-  }, [steps, toolCallsStepId]);
+  }, [steps, stepsRunId, toolCallsStepId]);
 
   useEffect(() => {
     if (!steps.length) {
@@ -559,9 +615,11 @@ export function WorkPage(): JSX.Element {
     const stillExists = current && steps.some((s) => s.step_id === current);
     if (stillExists) return;
 
-    const next = steps[0]?.step_id ?? "";
+    const run_id = stepsRunId.trim();
+    const preferred = run_id ? loadArtifactsStepId(run_id).trim() : "";
+    const next = preferred && steps.some((s) => s.step_id === preferred) ? preferred : steps[0]?.step_id ?? "";
     if (next && next !== artifactsStepId) setArtifactsStepId(next);
-  }, [steps, artifactsStepId]);
+  }, [steps, stepsRunId, artifactsStepId]);
 
   useEffect(() => {
     setToolCalls([]);
