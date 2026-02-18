@@ -139,6 +139,7 @@ export function WorkPage(): JSX.Element {
 
   const [createStepKind, setCreateStepKind] = useState<string>("tool");
   const [createStepTitle, setCreateStepTitle] = useState<string>("");
+  const [createStepInputJson, setCreateStepInputJson] = useState<string>("");
   const [createStepState, setCreateStepState] = useState<ConnState>("idle");
   const [createStepError, setCreateStepError] = useState<string | null>(null);
   const [createdStepId, setCreatedStepId] = useState<string | null>(null);
@@ -1258,6 +1259,18 @@ export function WorkPage(): JSX.Element {
               </div>
             </div>
 
+            <label className="fieldLabel" htmlFor="createStepInputJson">
+              {t("work.steps.field.input_json")}
+            </label>
+            <textarea
+              id="createStepInputJson"
+              className="textArea"
+              value={createStepInputJson}
+              onChange={(e) => setCreateStepInputJson(e.target.value)}
+              placeholder={t("work.steps.field.input_json_placeholder")}
+              disabled={!stepsRunId.trim() || createStepState === "loading"}
+            />
+
             <div className="decisionActions" style={{ marginTop: 10 }}>
               <button
                 type="button"
@@ -1278,12 +1291,26 @@ export function WorkPage(): JSX.Element {
                     setCreateStepError(null);
                     setCreatedStepId(null);
 
+                    const rawJson = createStepInputJson.trim();
+                    let inputJson: unknown | undefined = undefined;
+                    if (rawJson) {
+                      try {
+                        inputJson = JSON.parse(rawJson) as unknown;
+                      } catch {
+                        setCreateStepError("invalid_json");
+                        setCreateStepState("error");
+                        return;
+                      }
+                    }
+
                     try {
                       const res = await createStep(run_id, {
                         kind,
                         title: createStepTitle.trim() ? createStepTitle.trim() : undefined,
+                        input: inputJson,
                       });
                       setCreateStepTitle("");
+                      setCreateStepInputJson("");
                       setCreatedStepId(res.step_id);
                       await reloadSteps(run_id);
                       setCreateStepState("idle");
