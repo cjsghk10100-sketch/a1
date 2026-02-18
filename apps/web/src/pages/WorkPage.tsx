@@ -8,6 +8,8 @@ import type { RunRow, StepRow } from "../api/runs";
 import { completeRun, createRun, createStep, failRun, listRunSteps, listRuns, startRun } from "../api/runs";
 import type { ToolCallRow } from "../api/toolcalls";
 import { createToolCall, failToolCall, listToolCalls, succeedToolCall } from "../api/toolcalls";
+import type { ArtifactContentType, ArtifactRow } from "../api/artifacts";
+import { createArtifact, listArtifacts } from "../api/artifacts";
 import type { SearchDocRow } from "../api/search";
 import { searchDocs } from "../api/search";
 import type { MessageRow, ThreadRow } from "../api/threads";
@@ -152,6 +154,22 @@ export function WorkPage(): JSX.Element {
   const [toolCallActionId, setToolCallActionId] = useState<string | null>(null);
   const [toolCallActionError, setToolCallActionError] = useState<string | null>(null);
 
+  const [artifactsStepId, setArtifactsStepId] = useState<string>("");
+  const [artifacts, setArtifacts] = useState<ArtifactRow[]>([]);
+  const [artifactsState, setArtifactsState] = useState<ConnState>("idle");
+  const [artifactsError, setArtifactsError] = useState<string | null>(null);
+
+  const [createArtifactKind, setCreateArtifactKind] = useState<string>("note");
+  const [createArtifactTitle, setCreateArtifactTitle] = useState<string>("");
+  const [createArtifactMimeType, setCreateArtifactMimeType] = useState<string>("");
+  const [createArtifactContentType, setCreateArtifactContentType] = useState<ArtifactContentType>("none");
+  const [createArtifactText, setCreateArtifactText] = useState<string>("");
+  const [createArtifactJson, setCreateArtifactJson] = useState<string>("");
+  const [createArtifactUri, setCreateArtifactUri] = useState<string>("");
+  const [createArtifactState, setCreateArtifactState] = useState<ConnState>("idle");
+  const [createArtifactError, setCreateArtifactError] = useState<string | null>(null);
+  const [createdArtifactId, setCreatedArtifactId] = useState<string | null>(null);
+
   const [pins, setPins] = useState<PinItemV1[]>(() => loadPins());
 
   const roomOptions = useMemo(() => {
@@ -191,6 +209,12 @@ export function WorkPage(): JSX.Element {
     if (!id) return null;
     return steps.find((s) => s.step_id === id) ?? null;
   }, [steps, toolCallsStepId]);
+
+  const selectedStepForArtifacts = useMemo(() => {
+    const id = artifactsStepId.trim();
+    if (!id) return null;
+    return steps.find((s) => s.step_id === id) ?? null;
+  }, [steps, artifactsStepId]);
 
   async function reloadRooms(): Promise<void> {
     setRoomsState("loading");
@@ -321,6 +345,27 @@ export function WorkPage(): JSX.Element {
     }
   }
 
+  async function reloadArtifacts(nextStepId: string): Promise<void> {
+    const id = nextStepId.trim();
+    if (!id) {
+      setArtifacts([]);
+      setArtifactsState("idle");
+      setArtifactsError(null);
+      return;
+    }
+
+    setArtifactsState("loading");
+    setArtifactsError(null);
+    try {
+      const res = await listArtifacts({ step_id: id, limit: 50 });
+      setArtifacts(res);
+      setArtifactsState("idle");
+    } catch (e) {
+      setArtifactsError(toErrorCode(e));
+      setArtifactsState("error");
+    }
+  }
+
   async function runSearch(): Promise<void> {
     const q = searchQuery.trim();
     if (!roomId.trim() || q.length < 2) {
@@ -400,6 +445,21 @@ export function WorkPage(): JSX.Element {
     setToolCallActionId(null);
     setToolCallActionError(null);
 
+    setArtifactsStepId("");
+    setArtifacts([]);
+    setArtifactsError(null);
+    setArtifactsState("idle");
+    setCreateArtifactKind("note");
+    setCreateArtifactTitle("");
+    setCreateArtifactMimeType("");
+    setCreateArtifactContentType("none");
+    setCreateArtifactText("");
+    setCreateArtifactJson("");
+    setCreateArtifactUri("");
+    setCreateArtifactError(null);
+    setCreateArtifactState("idle");
+    setCreatedArtifactId(null);
+
     const nextThread = loadThreadId(roomId).trim();
     setThreadId(nextThread);
     void reloadThreads(roomId, false);
@@ -446,6 +506,14 @@ export function WorkPage(): JSX.Element {
     setCreateToolCallError(null);
     setCreateToolCallState("idle");
 
+    setArtifactsStepId("");
+    setArtifacts([]);
+    setArtifactsError(null);
+    setArtifactsState("idle");
+    setCreatedArtifactId(null);
+    setCreateArtifactError(null);
+    setCreateArtifactState("idle");
+
     const id = stepsRunId.trim();
     if (!id) return;
     void reloadSteps(id);
@@ -467,6 +535,20 @@ export function WorkPage(): JSX.Element {
   }, [steps, toolCallsStepId]);
 
   useEffect(() => {
+    if (!steps.length) {
+      if (artifactsStepId) setArtifactsStepId("");
+      return;
+    }
+
+    const current = artifactsStepId.trim();
+    const stillExists = current && steps.some((s) => s.step_id === current);
+    if (stillExists) return;
+
+    const next = steps[0]?.step_id ?? "";
+    if (next && next !== artifactsStepId) setArtifactsStepId(next);
+  }, [steps, artifactsStepId]);
+
+  useEffect(() => {
     setToolCalls([]);
     setToolCallsError(null);
     setToolCallsState("idle");
@@ -481,6 +563,20 @@ export function WorkPage(): JSX.Element {
     void reloadToolCalls(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toolCallsStepId]);
+
+  useEffect(() => {
+    setArtifacts([]);
+    setArtifactsError(null);
+    setArtifactsState("idle");
+    setCreatedArtifactId(null);
+    setCreateArtifactError(null);
+    setCreateArtifactState("idle");
+
+    const id = artifactsStepId.trim();
+    if (!id) return;
+    void reloadArtifacts(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artifactsStepId]);
 
   return (
     <section className="page">
@@ -1407,6 +1503,248 @@ export function WorkPage(): JSX.Element {
                     </li>
                   );
                 })}
+              </ul>
+            ) : null}
+          </div>
+
+          <div className="detailSection">
+            <div className="detailSectionTitle">{t("work.artifacts.title")}</div>
+
+            <label className="fieldLabel" htmlFor="artifactsStepSelect">
+              {t("work.artifacts.step")}
+            </label>
+            <div className="timelineRoomRow">
+              <select
+                id="artifactsStepSelect"
+                className="select"
+                value={artifactsStepId}
+                onChange={(e) => setArtifactsStepId(e.target.value)}
+                disabled={!stepsRunId.trim() || stepsState === "loading"}
+              >
+                <option value="">{t("work.artifacts.step_placeholder")}</option>
+                {steps.map((s) => (
+                  <option key={s.step_id} value={s.step_id}>
+                    {s.kind} ({s.status}) {s.step_id} {s.title ? s.title : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => void reloadArtifacts(artifactsStepId)}
+                disabled={!artifactsStepId.trim() || artifactsState === "loading"}
+              >
+                {t("common.refresh")}
+              </button>
+            </div>
+
+            <div className="workTwoCol">
+              <div>
+                <label className="fieldLabel" htmlFor="createArtifactKind">
+                  {t("work.artifacts.field.kind")}
+                </label>
+                <input
+                  id="createArtifactKind"
+                  className="textInput"
+                  value={createArtifactKind}
+                  onChange={(e) => setCreateArtifactKind(e.target.value)}
+                  placeholder={t("work.artifacts.field.kind_placeholder")}
+                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                />
+              </div>
+              <div>
+                <label className="fieldLabel" htmlFor="createArtifactTitle">
+                  {t("work.artifacts.field.title")}
+                </label>
+                <input
+                  id="createArtifactTitle"
+                  className="textInput"
+                  value={createArtifactTitle}
+                  onChange={(e) => setCreateArtifactTitle(e.target.value)}
+                  placeholder={t("work.artifacts.field.title_placeholder")}
+                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                />
+              </div>
+            </div>
+
+            <label className="fieldLabel" htmlFor="createArtifactMime">
+              {t("work.artifacts.field.mime_type")}
+            </label>
+            <input
+              id="createArtifactMime"
+              className="textInput"
+              value={createArtifactMimeType}
+              onChange={(e) => setCreateArtifactMimeType(e.target.value)}
+              placeholder={t("work.artifacts.field.mime_type_placeholder")}
+              disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+            />
+
+            <label className="fieldLabel" htmlFor="createArtifactContentType">
+              {t("work.artifacts.field.content_type")}
+            </label>
+            <select
+              id="createArtifactContentType"
+              className="select"
+              value={createArtifactContentType}
+              onChange={(e) => setCreateArtifactContentType(e.target.value as ArtifactContentType)}
+              disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+            >
+              <option value="none">{t("work.artifacts.content_type.none")}</option>
+              <option value="text">{t("work.artifacts.content_type.text")}</option>
+              <option value="json">{t("work.artifacts.content_type.json")}</option>
+              <option value="uri">{t("work.artifacts.content_type.uri")}</option>
+            </select>
+
+            {createArtifactContentType === "text" ? (
+              <>
+                <label className="fieldLabel" htmlFor="createArtifactText">
+                  {t("work.artifacts.field.content_text")}
+                </label>
+                <textarea
+                  id="createArtifactText"
+                  className="textArea"
+                  value={createArtifactText}
+                  onChange={(e) => setCreateArtifactText(e.target.value)}
+                  placeholder={t("work.artifacts.field.content_text_placeholder")}
+                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                />
+              </>
+            ) : null}
+
+            {createArtifactContentType === "json" ? (
+              <>
+                <label className="fieldLabel" htmlFor="createArtifactJson">
+                  {t("work.artifacts.field.content_json")}
+                </label>
+                <textarea
+                  id="createArtifactJson"
+                  className="textArea"
+                  value={createArtifactJson}
+                  onChange={(e) => setCreateArtifactJson(e.target.value)}
+                  placeholder={t("work.artifacts.field.content_json_placeholder")}
+                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                />
+              </>
+            ) : null}
+
+            {createArtifactContentType === "uri" ? (
+              <>
+                <label className="fieldLabel" htmlFor="createArtifactUri">
+                  {t("work.artifacts.field.content_uri")}
+                </label>
+                <input
+                  id="createArtifactUri"
+                  className="textInput"
+                  value={createArtifactUri}
+                  onChange={(e) => setCreateArtifactUri(e.target.value)}
+                  placeholder={t("work.artifacts.field.content_uri_placeholder")}
+                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                />
+              </>
+            ) : null}
+
+            <div className="decisionActions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="primaryButton"
+                disabled={!artifactsStepId.trim() || createArtifactState === "loading" || !createArtifactKind.trim()}
+                onClick={() => {
+                  void (async () => {
+                    const step_id = artifactsStepId.trim();
+                    const kind = createArtifactKind.trim();
+                    if (!step_id || !kind) return;
+
+                    setCreateArtifactState("loading");
+                    setCreateArtifactError(null);
+                    setCreatedArtifactId(null);
+
+                    let content:
+                      | { type: ArtifactContentType; text?: string; json?: unknown; uri?: string }
+                      | undefined = undefined;
+
+                    if (createArtifactContentType === "text") {
+                      content = { type: "text", text: createArtifactText };
+                    } else if (createArtifactContentType === "json") {
+                      const rawJson = createArtifactJson.trim();
+                      if (rawJson) {
+                        try {
+                          content = { type: "json", json: JSON.parse(rawJson) as unknown };
+                        } catch {
+                          setCreateArtifactError("invalid_json");
+                          setCreateArtifactState("error");
+                          return;
+                        }
+                      } else {
+                        content = { type: "json", json: {} };
+                      }
+                    } else if (createArtifactContentType === "uri") {
+                      content = { type: "uri", uri: createArtifactUri.trim() };
+                    }
+
+                    try {
+                      const res = await createArtifact(step_id, {
+                        kind,
+                        title: createArtifactTitle.trim() ? createArtifactTitle.trim() : undefined,
+                        mime_type: createArtifactMimeType.trim() ? createArtifactMimeType.trim() : undefined,
+                        content,
+                      });
+
+                      setCreateArtifactTitle("");
+                      setCreateArtifactMimeType("");
+                      setCreateArtifactText("");
+                      setCreateArtifactJson("");
+                      setCreateArtifactUri("");
+                      setCreateArtifactContentType("none");
+                      setCreatedArtifactId(res.artifact_id);
+
+                      await reloadArtifacts(step_id);
+
+                      setCreateArtifactState("idle");
+                    } catch (e) {
+                      setCreateArtifactError(toErrorCode(e));
+                      setCreateArtifactState("error");
+                    }
+                  })();
+                }}
+              >
+                {t("work.artifacts.button_create")}
+              </button>
+            </div>
+
+            {createArtifactError ? <div className="errorBox">{t("error.load_failed", { code: createArtifactError })}</div> : null}
+            {createArtifactState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+
+            {createdArtifactId ? (
+              <div className="hintBox" style={{ marginTop: 10 }}>
+                <div className="hintText">{t("work.artifacts.created", { artifact_id: createdArtifactId })}</div>
+              </div>
+            ) : null}
+
+            {artifactsError ? <div className="errorBox">{t("error.load_failed", { code: artifactsError })}</div> : null}
+            {artifactsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {artifactsStepId.trim() && artifactsState !== "loading" && !artifactsError && artifacts.length === 0 ? (
+              <div className="placeholder">{t("work.artifacts.empty")}</div>
+            ) : null}
+
+            {artifacts.length ? (
+              <ul className="compactList">
+                {artifacts.map((a) => (
+                  <li key={a.artifact_id} className="compactRow">
+                    <div className="compactTop">
+                      <div className="mono">{a.kind}</div>
+                      <div className="muted mono">{a.content_type ?? ""}</div>
+                    </div>
+                    <div className="compactMeta">
+                      <span className="mono">{a.artifact_id}</span>
+                      {a.title ? <span>{a.title}</span> : null}
+                      <span className="muted">{formatTimestamp(a.updated_at)}</span>
+                    </div>
+                    <details className="eventDetails">
+                      <summary className="eventSummary">{t("common.advanced")}</summary>
+                      <JsonView value={a} />
+                    </details>
+                  </li>
+                ))}
               </ul>
             ) : null}
           </div>

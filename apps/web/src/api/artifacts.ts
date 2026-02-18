@@ -1,4 +1,6 @@
-import { apiGet } from "./http";
+import { apiGet, apiPost } from "./http";
+
+export type ArtifactContentType = "text" | "json" | "uri" | "none";
 
 export interface ArtifactRow {
   artifact_id: string;
@@ -44,3 +46,15 @@ export async function listArtifacts(params: {
   return res.artifacts;
 }
 
+export async function createArtifact(
+  stepId: string,
+  input: {
+    kind: string;
+    title?: string;
+    mime_type?: string;
+    content?: { type: ArtifactContentType; text?: string; json?: unknown; uri?: string };
+    metadata?: unknown;
+  },
+): Promise<{ artifact_id: string }> {
+  return await apiPost<{ artifact_id: string }>(`/v1/steps/${encodeURIComponent(stepId)}/artifacts`, input);
+}
