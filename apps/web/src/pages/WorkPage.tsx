@@ -9,6 +9,8 @@ import type { MessageRow, ThreadRow } from "../api/threads";
 import { createThread, listRoomThreads, listThreadMessages, postThreadMessage } from "../api/threads";
 import { ApiError } from "../api/http";
 import { JsonView } from "../components/JsonView";
+import type { PinItemV1 } from "../pins/pins";
+import { loadPins, pinKey, savePins, togglePin } from "../pins/pins";
 
 type ConnState = "idle" | "loading" | "error";
 
@@ -106,6 +108,8 @@ export function WorkPage(): JSX.Element {
   const [searchState, setSearchState] = useState<ConnState>("idle");
   const [searchError, setSearchError] = useState<string | null>(null);
 
+  const [pins, setPins] = useState<PinItemV1[]>(() => loadPins());
+
   const roomOptions = useMemo(() => {
     return rooms.map((r) => ({
       room_id: r.room_id,
@@ -119,6 +123,13 @@ export function WorkPage(): JSX.Element {
     const raw = selectedRoom?.default_lang ?? i18n.language;
     return normalizeLang(raw || "en");
   }, [i18n.language, selectedRoom?.default_lang]);
+
+  const pinnedSet = useMemo(() => new Set(pins.map((p) => pinKey(p.kind, p.entity_id))), [pins]);
+  const pinsForRoom = useMemo(() => {
+    const id = roomId.trim();
+    if (!id) return [];
+    return pins.filter((p) => p.room_id === id);
+  }, [pins, roomId]);
 
   const messagesAsc = useMemo(() => {
     if (!messages.length) return [];
@@ -224,6 +235,10 @@ export function WorkPage(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(senderIdStorageKey, senderId);
   }, [senderId]);
+
+  useEffect(() => {
+    savePins(pins);
+  }, [pins]);
 
   useEffect(() => {
     localStorage.setItem(roomStorageKey, roomId);
@@ -413,26 +428,89 @@ export function WorkPage(): JSX.Element {
             <div className="placeholder">{t("work.thread.empty")}</div>
           ) : null}
 
+          {roomId.trim() ? (
+            <div className="detailSection">
+              <div className="detailSectionTitle">{t("work.pins.title")}</div>
+              {pinsForRoom.length === 0 ? <div className="placeholder">{t("work.pins.empty")}</div> : null}
+              {pinsForRoom.length ? (
+                <ul className="eventList">
+                  {pinsForRoom.map((p) => (
+                    <li key={pinKey(p.kind, p.entity_id)}>
+                      <div className="timelineRoomRow">
+                        <button
+                          type="button"
+                          className="eventRow"
+                          onClick={() => {
+                            setThreadId(p.thread_id);
+                          }}
+                        >
+                          <div className="eventRowTop">
+                            <div className="mono">{p.label}</div>
+                            <div className="muted">{t(`work.pins.kind.${p.kind}`)}</div>
+                          </div>
+                          <div className="eventRowMeta">
+                            <span className="mono">{p.thread_id}</span>
+                            <span className="mono">{p.entity_id}</span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          className="ghostButton"
+                          onClick={() => {
+                            setPins((prev) => togglePin(prev, p));
+                          }}
+                        >
+                          {t("work.pins.unpin")}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
           {threads.length ? (
             <ul className="eventList">
               {threads.map((th) => {
                 const selected = th.thread_id === threadId;
+                const pinned = pinnedSet.has(pinKey("thread", th.thread_id));
                 return (
                   <li key={th.thread_id}>
-                    <button
-                      type="button"
-                      className={selected ? "eventRow eventRowSelected" : "eventRow"}
-                      onClick={() => setThreadId(th.thread_id)}
-                    >
-                      <div className="eventRowTop">
-                        <div className="mono">{th.title}</div>
-                        <div className="muted">{formatTimestamp(th.updated_at)}</div>
-                      </div>
-                      <div className="eventRowMeta">
-                        <span className="mono">{th.status}</span>
-                        <span className="mono">{th.thread_id}</span>
-                      </div>
-                    </button>
+                    <div className="timelineRoomRow">
+                      <button
+                        type="button"
+                        className={selected ? "eventRow eventRowSelected" : "eventRow"}
+                        onClick={() => setThreadId(th.thread_id)}
+                      >
+                        <div className="eventRowTop">
+                          <div className="mono">{th.title}</div>
+                          <div className="muted">{formatTimestamp(th.updated_at)}</div>
+                        </div>
+                        <div className="eventRowMeta">
+                          <span className="mono">{th.status}</span>
+                          <span className="mono">{th.thread_id}</span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className="ghostButton"
+                        onClick={() => {
+                          setPins((prev) =>
+                            togglePin(prev, {
+                              kind: "thread",
+                              entity_id: th.thread_id,
+                              room_id: th.room_id,
+                              thread_id: th.thread_id,
+                              label: th.title?.trim() ? th.title.trim() : th.thread_id,
+                              created_at: new Date().toISOString(),
+                            }),
+                          );
+                        }}
+                      >
+                        {pinned ? t("work.pins.unpin") : t("work.pins.pin")}
+                      </button>
+                    </div>
                   </li>
                 );
               })}
@@ -504,23 +582,48 @@ export function WorkPage(): JSX.Element {
 
           {messagesAsc.length ? (
             <ul className="workMessageList">
-              {messagesAsc.map((m) => (
-                <li key={m.message_id} className="compactRow">
-                  <div className="compactTop">
-                    <div className="mono">{`${m.sender_type}:${m.sender_id}`}</div>
-                    <div className="muted">{formatTimestamp(m.created_at)}</div>
-                  </div>
-                  <div className="compactMeta">
-                    <span className="mono">{m.message_id}</span>
-                    {m.run_id ? <span className="mono">{m.run_id}</span> : null}
-                  </div>
-                  <div className="workMessageBody">{m.content_md}</div>
-                  <details className="eventDetails">
-                    <summary className="eventSummary">{t("common.advanced")}</summary>
-                    <JsonView value={m} />
-                  </details>
-                </li>
-              ))}
+              {messagesAsc.map((m) => {
+                const pinned = pinnedSet.has(pinKey("message", m.message_id));
+                return (
+                  <li key={m.message_id} className="compactRow">
+                    <div className="compactTop">
+                      <div className="mono">{`${m.sender_type}:${m.sender_id}`}</div>
+                      <div className="compactTopActions">
+                        <div className="muted">{formatTimestamp(m.created_at)}</div>
+                        <button
+                          type="button"
+                          className="ghostButton"
+                          onClick={() => {
+                            const snippet = m.content_md.trim().replaceAll("\n", " ").slice(0, 80);
+                            setPins((prev) =>
+                              togglePin(prev, {
+                                kind: "message",
+                                entity_id: m.message_id,
+                                room_id: m.room_id,
+                                thread_id: m.thread_id,
+                                label: snippet ? `${m.sender_type}:${m.sender_id} ${snippet}` : m.message_id,
+                                created_at: m.created_at,
+                              }),
+                            );
+                          }}
+                          disabled={!m.room_id || !m.thread_id}
+                        >
+                          {pinned ? t("work.pins.unpin") : t("work.pins.pin")}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="compactMeta">
+                      <span className="mono">{m.message_id}</span>
+                      {m.run_id ? <span className="mono">{m.run_id}</span> : null}
+                    </div>
+                    <div className="workMessageBody">{m.content_md}</div>
+                    <details className="eventDetails">
+                      <summary className="eventSummary">{t("common.advanced")}</summary>
+                      <JsonView value={m} />
+                    </details>
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
 

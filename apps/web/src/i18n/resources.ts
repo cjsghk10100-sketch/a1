@@ -84,6 +84,13 @@ export const resources = {
       "work.thread.empty": "No threads yet.",
       "work.thread.select_prompt": "Select a thread to view messages.",
 
+      "work.pins.title": "Pins",
+      "work.pins.empty": "No pins yet.",
+      "work.pins.pin": "Pin",
+      "work.pins.unpin": "Unpin",
+      "work.pins.kind.thread": "Thread",
+      "work.pins.kind.message": "Message",
+
       "work.section.messages": "Messages",
       "work.message.empty": "No messages yet.",
       "work.message.compose_title": "Compose",
@@ -408,6 +415,13 @@ export const resources = {
       "work.thread.button_create": "스레드 만들기",
       "work.thread.empty": "아직 스레드가 없습니다.",
       "work.thread.select_prompt": "스레드를 선택하면 메시지를 볼 수 있습니다.",
+
+      "work.pins.title": "핀",
+      "work.pins.empty": "아직 핀이 없습니다.",
+      "work.pins.pin": "핀",
+      "work.pins.unpin": "핀 해제",
+      "work.pins.kind.thread": "스레드",
+      "work.pins.kind.message": "메시지",
 
       "work.section.messages": "메시지",
       "work.message.empty": "아직 메시지가 없습니다.",
