@@ -104,7 +104,7 @@ export async function failRun(
 
 export async function createStep(
   runId: string,
-  payload: { kind: string; title?: string; input?: Record<string, unknown> },
+  payload: { kind: string; title?: string; input?: unknown },
 ): Promise<{ step_id: string }> {
   return apiPost<{ step_id: string }>(`/v1/runs/${encodeURIComponent(runId)}/steps`, payload);
 }
