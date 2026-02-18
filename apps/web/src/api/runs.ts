@@ -90,14 +90,14 @@ export async function startRun(runId: string): Promise<void> {
 
 export async function completeRun(
   runId: string,
-  payload?: { summary?: string; output?: Record<string, unknown> },
+  payload?: { summary?: string; output?: unknown },
 ): Promise<void> {
   await apiPost<{ ok: true }>(`/v1/runs/${encodeURIComponent(runId)}/complete`, payload ?? {});
 }
 
 export async function failRun(
   runId: string,
-  payload?: { message?: string; error?: Record<string, unknown> },
+  payload?: { message?: string; error?: unknown },
 ): Promise<void> {
   await apiPost<{ ok: true }>(`/v1/runs/${encodeURIComponent(runId)}/fail`, payload ?? {});
 }
