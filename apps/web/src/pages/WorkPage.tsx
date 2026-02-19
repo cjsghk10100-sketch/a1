@@ -470,8 +470,8 @@ export function WorkPage(): JSX.Element {
     const room = targetRoomId.trim();
     const run = runId.trim();
     if (!room || !run) return;
-    saveStepsRunId(room, run);
     if (roomIdRef.current === room) {
+      saveStepsRunId(room, run);
       setStepsRunId(run);
     }
   }
