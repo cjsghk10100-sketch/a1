@@ -308,13 +308,12 @@ export function WorkPage(): JSX.Element {
       const stored = loadThreadId(id).trim();
       const stillExists = stored && res.some((trow) => trow.thread_id === stored);
       if (stillExists && !forcePickFirst) {
-        setThreadId(stored);
+        selectThreadForRoom(id, stored);
         return;
       }
 
       const first = res[0]?.thread_id ?? "";
-      setThreadId(first);
-      saveThreadId(id, first);
+      selectThreadForRoom(id, first);
     } catch (e) {
       if (roomIdRef.current !== id) return;
       setThreadsError(toErrorCode(e));
@@ -434,6 +433,16 @@ export function WorkPage(): JSX.Element {
       if (artifactsStepIdRef.current !== id) return;
       setArtifactsError(toErrorCode(e));
       setArtifactsState("error");
+    }
+  }
+
+  function selectThreadForRoom(targetRoomId: string, targetThreadId: string): void {
+    const room = targetRoomId.trim();
+    if (!room) return;
+    const thread = targetThreadId.trim();
+    saveThreadId(room, thread);
+    if (roomIdRef.current === room) {
+      setThreadId(thread);
     }
   }
 
@@ -1054,15 +1063,16 @@ export function WorkPage(): JSX.Element {
                 onClick={() => {
                   void (async () => {
                     const title = createThreadTitle.trim();
-                    if (!roomId.trim() || !title) return;
+                    const nextRoomId = roomId.trim();
+                    if (!nextRoomId || !title) return;
 
                     setCreateThreadState("loading");
                     setCreateThreadError(null);
                     try {
-                      const newThreadId = await createThread(roomId, { title });
+                      const newThreadId = await createThread(nextRoomId, { title });
                       setCreateThreadTitle("");
-                      await reloadThreads(roomId, true);
-                      setThreadId(newThreadId);
+                      await reloadThreads(nextRoomId, true);
+                      selectThreadForRoom(nextRoomId, newThreadId);
                       setCreateThreadState("idle");
                     } catch (e) {
                       setCreateThreadError(toErrorCode(e));
