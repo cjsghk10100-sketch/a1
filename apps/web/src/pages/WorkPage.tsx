@@ -174,6 +174,7 @@ export function WorkPage(): JSX.Element {
   const [createdRunId, setCreatedRunId] = useState<string | null>(null);
   const [runActionId, setRunActionId] = useState<string | null>(null);
   const [runActionError, setRunActionError] = useState<string | null>(null);
+  const runActionRequestRef = useRef<number>(0);
   const [runCompleteSummary, setRunCompleteSummary] = useState<string>("");
   const [runCompleteOutputJson, setRunCompleteOutputJson] = useState<string>("");
   const [runFailMessage, setRunFailMessage] = useState<string>("");
@@ -207,6 +208,7 @@ export function WorkPage(): JSX.Element {
   const [createdToolCallId, setCreatedToolCallId] = useState<string | null>(null);
   const [toolCallActionId, setToolCallActionId] = useState<string | null>(null);
   const [toolCallActionError, setToolCallActionError] = useState<string | null>(null);
+  const toolCallActionRequestRef = useRef<number>(0);
   const [toolCallSucceedOutputJson, setToolCallSucceedOutputJson] = useState<string>("");
   const [toolCallFailMessage, setToolCallFailMessage] = useState<string>("");
   const [toolCallFailErrorJson, setToolCallFailErrorJson] = useState<string>("");
@@ -631,6 +633,7 @@ export function WorkPage(): JSX.Element {
     setCreatedRunId(null);
     setCreateRunTitle("");
     setCreateRunGoal("");
+    runActionRequestRef.current += 1;
     setRunActionId(null);
     setRunActionError(null);
     setCreateStepError(null);
@@ -772,6 +775,7 @@ export function WorkPage(): JSX.Element {
     setCreateToolCallState("idle");
     setToolCallActionId(null);
     setToolCallActionError(null);
+    toolCallActionRequestRef.current += 1;
     setToolCallSucceedOutputJson("");
     setToolCallFailMessage("");
     setToolCallFailErrorJson("");
@@ -1324,17 +1328,24 @@ export function WorkPage(): JSX.Element {
                                 void (async () => {
                                   const nextRoomId = roomId.trim();
                                   if (!nextRoomId) return;
-
-                                  setRunActionId(r.run_id);
-                                  setRunActionError(null);
+                                  const requestId = runActionRequestRef.current + 1;
+                                  runActionRequestRef.current = requestId;
+                                  if (roomIdRef.current === nextRoomId) {
+                                    setRunActionId(r.run_id);
+                                    setRunActionError(null);
+                                  }
                                   try {
                                     await startRun(r.run_id);
                                     await reloadRuns(nextRoomId);
                                     selectStepsRunForRoom(nextRoomId, r.run_id);
                                   } catch (e) {
-                                    setRunActionError(toErrorCode(e));
+                                    if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                                      setRunActionError(toErrorCode(e));
+                                    }
                                   } finally {
-                                    setRunActionId(null);
+                                    if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                                      setRunActionId(null);
+                                    }
                                   }
                                 })();
                               }}
@@ -1354,7 +1365,9 @@ export function WorkPage(): JSX.Element {
                                     const nextRoomId = roomId.trim();
                                     if (!nextRoomId) return;
 
-                                    setRunActionError(null);
+                                    if (roomIdRef.current === nextRoomId) {
+                                      setRunActionError(null);
+                                    }
 
                                     const summary = runCompleteSummary.trim();
                                     const rawOutput = runCompleteOutputJson.trim();
@@ -1369,15 +1382,23 @@ export function WorkPage(): JSX.Element {
                                       }
                                     }
 
-                                    setRunActionId(r.run_id);
+                                    const requestId = runActionRequestRef.current + 1;
+                                    runActionRequestRef.current = requestId;
+                                    if (roomIdRef.current === nextRoomId) {
+                                      setRunActionId(r.run_id);
+                                    }
                                     try {
                                       await completeRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
                                       selectStepsRunForRoom(nextRoomId, r.run_id);
                                     } catch (e) {
-                                      setRunActionError(toErrorCode(e));
+                                      if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                                        setRunActionError(toErrorCode(e));
+                                      }
                                     } finally {
-                                      setRunActionId(null);
+                                      if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                                        setRunActionId(null);
+                                      }
                                     }
                                   })();
                                 }}
@@ -1393,7 +1414,9 @@ export function WorkPage(): JSX.Element {
                                     const nextRoomId = roomId.trim();
                                     if (!nextRoomId) return;
 
-                                    setRunActionError(null);
+                                    if (roomIdRef.current === nextRoomId) {
+                                      setRunActionError(null);
+                                    }
 
                                     const message = runFailMessage.trim();
                                     const rawError = runFailErrorJson.trim();
@@ -1408,15 +1431,23 @@ export function WorkPage(): JSX.Element {
                                       }
                                     }
 
-                                    setRunActionId(r.run_id);
+                                    const requestId = runActionRequestRef.current + 1;
+                                    runActionRequestRef.current = requestId;
+                                    if (roomIdRef.current === nextRoomId) {
+                                      setRunActionId(r.run_id);
+                                    }
                                     try {
                                       await failRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
                                       selectStepsRunForRoom(nextRoomId, r.run_id);
                                     } catch (e) {
-                                      setRunActionError(toErrorCode(e));
+                                      if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                                        setRunActionError(toErrorCode(e));
+                                      }
                                     } finally {
-                                      setRunActionId(null);
+                                      if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                                        setRunActionId(null);
+                                      }
                                     }
                                   })();
                                 }}
@@ -1859,7 +1890,9 @@ export function WorkPage(): JSX.Element {
                                     const step_id = toolCallsStepId.trim();
                                     if (!step_id) return;
 
-                                    setToolCallActionError(null);
+                                    if (toolCallsStepIdRef.current === step_id) {
+                                      setToolCallActionError(null);
+                                    }
                                     const rawOutput = toolCallSucceedOutputJson.trim();
                                     let payload: { output?: unknown } = {};
                                     if (rawOutput) {
@@ -1871,16 +1904,30 @@ export function WorkPage(): JSX.Element {
                                       }
                                     }
 
-                                    setToolCallActionId(tc.tool_call_id);
+                                    const requestId = toolCallActionRequestRef.current + 1;
+                                    toolCallActionRequestRef.current = requestId;
+                                    if (toolCallsStepIdRef.current === step_id) {
+                                      setToolCallActionId(tc.tool_call_id);
+                                    }
                                     try {
                                       await succeedToolCall(tc.tool_call_id, payload);
                                       await reloadToolCalls(step_id);
                                       const run_id = tc.run_id?.trim();
                                       if (run_id) await reloadSteps(run_id);
                                     } catch (e) {
-                                      setToolCallActionError(toErrorCode(e));
+                                      if (
+                                        toolCallActionRequestRef.current === requestId &&
+                                        toolCallsStepIdRef.current === step_id
+                                      ) {
+                                        setToolCallActionError(toErrorCode(e));
+                                      }
                                     } finally {
-                                      setToolCallActionId(null);
+                                      if (
+                                        toolCallActionRequestRef.current === requestId &&
+                                        toolCallsStepIdRef.current === step_id
+                                      ) {
+                                        setToolCallActionId(null);
+                                      }
                                     }
                                   })();
                                 }}
@@ -1896,7 +1943,9 @@ export function WorkPage(): JSX.Element {
                                     const step_id = toolCallsStepId.trim();
                                     if (!step_id) return;
 
-                                    setToolCallActionError(null);
+                                    if (toolCallsStepIdRef.current === step_id) {
+                                      setToolCallActionError(null);
+                                    }
                                     const message = toolCallFailMessage.trim();
 
                                     const rawError = toolCallFailErrorJson.trim();
@@ -1911,16 +1960,30 @@ export function WorkPage(): JSX.Element {
                                       }
                                     }
 
-                                    setToolCallActionId(tc.tool_call_id);
+                                    const requestId = toolCallActionRequestRef.current + 1;
+                                    toolCallActionRequestRef.current = requestId;
+                                    if (toolCallsStepIdRef.current === step_id) {
+                                      setToolCallActionId(tc.tool_call_id);
+                                    }
                                     try {
                                       await failToolCall(tc.tool_call_id, payload);
                                       await reloadToolCalls(step_id);
                                       const run_id = tc.run_id?.trim();
                                       if (run_id) await reloadSteps(run_id);
                                     } catch (e) {
-                                      setToolCallActionError(toErrorCode(e));
+                                      if (
+                                        toolCallActionRequestRef.current === requestId &&
+                                        toolCallsStepIdRef.current === step_id
+                                      ) {
+                                        setToolCallActionError(toErrorCode(e));
+                                      }
                                     } finally {
-                                      setToolCallActionId(null);
+                                      if (
+                                        toolCallActionRequestRef.current === requestId &&
+                                        toolCallsStepIdRef.current === step_id
+                                      ) {
+                                        setToolCallActionId(null);
+                                      }
                                     }
                                   })();
                                 }}
