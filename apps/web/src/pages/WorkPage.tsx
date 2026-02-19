@@ -124,6 +124,7 @@ export function WorkPage(): JSX.Element {
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [roomsState, setRoomsState] = useState<ConnState>("idle");
   const [roomsError, setRoomsError] = useState<string | null>(null);
+  const roomsRequestRef = useRef<number>(0);
 
   const [roomId, setRoomId] = useState<string>(() => localStorage.getItem(roomStorageKey) ?? "");
   const roomIdRef = useRef<string>(roomId);
@@ -287,15 +288,23 @@ export function WorkPage(): JSX.Element {
   }, [steps, artifactsStepId]);
 
   async function reloadRooms(): Promise<void> {
-    setRoomsState("loading");
-    setRoomsError(null);
+    const requestId = roomsRequestRef.current + 1;
+    roomsRequestRef.current = requestId;
+    if (roomsRequestRef.current === requestId) {
+      setRoomsState("loading");
+      setRoomsError(null);
+    }
     try {
       const res = await listRooms();
-      setRooms(res);
-      setRoomsState("idle");
+      if (roomsRequestRef.current === requestId) {
+        setRooms(res);
+        setRoomsState("idle");
+      }
     } catch (e) {
-      setRoomsError(toErrorCode(e));
-      setRoomsState("error");
+      if (roomsRequestRef.current === requestId) {
+        setRoomsError(toErrorCode(e));
+        setRoomsState("error");
+      }
     }
   }
 
