@@ -1244,6 +1244,7 @@ export function WorkPage(): JSX.Element {
                                   try {
                                     await startRun(r.run_id);
                                     await reloadRuns(nextRoomId);
+                                    setStepsRunId(r.run_id);
                                   } catch (e) {
                                     setRunActionError(toErrorCode(e));
                                   } finally {
@@ -1286,6 +1287,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await completeRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
+                                      setStepsRunId(r.run_id);
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
                                     } finally {
@@ -1324,6 +1326,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await failRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
+                                      setStepsRunId(r.run_id);
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
                                     } finally {
