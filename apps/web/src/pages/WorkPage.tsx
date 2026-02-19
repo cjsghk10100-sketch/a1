@@ -179,6 +179,7 @@ export function WorkPage(): JSX.Element {
   const [runFailErrorJson, setRunFailErrorJson] = useState<string>("");
 
   const [stepsRunId, setStepsRunId] = useState<string>(() => (roomId ? loadStepsRunId(roomId) : ""));
+  const stepsRunIdRef = useRef<string>(stepsRunId);
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [stepsState, setStepsState] = useState<ConnState>("idle");
   const [stepsError, setStepsError] = useState<string | null>(null);
@@ -191,6 +192,7 @@ export function WorkPage(): JSX.Element {
   const [createdStepId, setCreatedStepId] = useState<string | null>(null);
 
   const [toolCallsStepId, setToolCallsStepId] = useState<string>("");
+  const toolCallsStepIdRef = useRef<string>(toolCallsStepId);
   const [toolCalls, setToolCalls] = useState<ToolCallRow[]>([]);
   const [toolCallsState, setToolCallsState] = useState<ConnState>("idle");
   const [toolCallsError, setToolCallsError] = useState<string | null>(null);
@@ -209,6 +211,7 @@ export function WorkPage(): JSX.Element {
   const [toolCallFailErrorJson, setToolCallFailErrorJson] = useState<string>("");
 
   const [artifactsStepId, setArtifactsStepId] = useState<string>("");
+  const artifactsStepIdRef = useRef<string>(artifactsStepId);
   const [artifacts, setArtifacts] = useState<ArtifactRow[]>([]);
   const [artifactsState, setArtifactsState] = useState<ConnState>("idle");
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
@@ -371,9 +374,11 @@ export function WorkPage(): JSX.Element {
     setStepsError(null);
     try {
       const res = await listRunSteps(id);
+      if (stepsRunIdRef.current !== id) return;
       setSteps(res);
       setStepsState("idle");
     } catch (e) {
+      if (stepsRunIdRef.current !== id) return;
       setStepsError(toErrorCode(e));
       setStepsState("error");
     }
@@ -392,9 +397,11 @@ export function WorkPage(): JSX.Element {
     setToolCallsError(null);
     try {
       const res = await listToolCalls({ step_id: id, limit: 50 });
+      if (toolCallsStepIdRef.current !== id) return;
       setToolCalls(res);
       setToolCallsState("idle");
     } catch (e) {
+      if (toolCallsStepIdRef.current !== id) return;
       setToolCallsError(toErrorCode(e));
       setToolCallsState("error");
     }
@@ -413,9 +420,11 @@ export function WorkPage(): JSX.Element {
     setArtifactsError(null);
     try {
       const res = await listArtifacts({ step_id: id, limit: 50 });
+      if (artifactsStepIdRef.current !== id) return;
       setArtifacts(res);
       setArtifactsState("idle");
     } catch (e) {
+      if (artifactsStepIdRef.current !== id) return;
       setArtifactsError(toErrorCode(e));
       setArtifactsState("error");
     }
@@ -428,6 +437,18 @@ export function WorkPage(): JSX.Element {
     saveStepsRunId(room, run);
     if (roomIdRef.current === room) {
       setStepsRunId(run);
+    }
+  }
+
+  function selectDownstreamStepForRun(targetRunId: string, stepId: string): void {
+    const run = targetRunId.trim();
+    const step = stepId.trim();
+    if (!run || !step) return;
+    saveToolCallsStepId(run, step);
+    saveArtifactsStepId(run, step);
+    if (stepsRunIdRef.current === run) {
+      setToolCallsStepId(step);
+      setArtifactsStepId(step);
     }
   }
 
@@ -532,6 +553,18 @@ export function WorkPage(): JSX.Element {
   useEffect(() => {
     roomIdRef.current = roomId;
   }, [roomId]);
+
+  useEffect(() => {
+    stepsRunIdRef.current = stepsRunId;
+  }, [stepsRunId]);
+
+  useEffect(() => {
+    toolCallsStepIdRef.current = toolCallsStepId;
+  }, [toolCallsStepId]);
+
+  useEffect(() => {
+    artifactsStepIdRef.current = artifactsStepId;
+  }, [artifactsStepId]);
 
   useEffect(() => {
     localStorage.setItem(senderTypeStorageKey, senderType);
@@ -1505,8 +1538,7 @@ export function WorkPage(): JSX.Element {
                       setCreatedStepId(res.step_id);
                       await reloadSteps(run_id);
                       // Ensure the next actions (tool calls / artifacts) default to the newly created step.
-                      setToolCallsStepId(res.step_id);
-                      setArtifactsStepId(res.step_id);
+                      selectDownstreamStepForRun(run_id, res.step_id);
                       setCreateStepState("idle");
                     } catch (e) {
                       setCreateStepError(toErrorCode(e));
