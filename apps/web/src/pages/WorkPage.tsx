@@ -140,6 +140,7 @@ export function WorkPage(): JSX.Element {
   const [threadsError, setThreadsError] = useState<string | null>(null);
 
   const [threadId, setThreadId] = useState<string>(() => (roomId ? loadThreadId(roomId) : ""));
+  const threadIdRef = useRef<string>(threadId);
   const [createThreadTitle, setCreateThreadTitle] = useState<string>("");
   const [createThreadState, setCreateThreadState] = useState<ConnState>("idle");
   const [createThreadError, setCreateThreadError] = useState<string | null>(null);
@@ -300,6 +301,7 @@ export function WorkPage(): JSX.Element {
     setThreadsError(null);
     try {
       const res = await listRoomThreads(id, { limit: 200 });
+      if (roomIdRef.current !== id) return;
       setThreads(res);
       setThreadsState("idle");
 
@@ -314,6 +316,7 @@ export function WorkPage(): JSX.Element {
       setThreadId(first);
       saveThreadId(id, first);
     } catch (e) {
+      if (roomIdRef.current !== id) return;
       setThreadsError(toErrorCode(e));
       setThreadsState("error");
     }
@@ -332,9 +335,11 @@ export function WorkPage(): JSX.Element {
     setMessagesError(null);
     try {
       const res = await listThreadMessages(id, { limit: 80 });
+      if (threadIdRef.current !== id) return;
       setMessages(res);
       setMessagesState("idle");
     } catch (e) {
+      if (threadIdRef.current !== id) return;
       setMessagesError(toErrorCode(e));
       setMessagesState("error");
     }
@@ -353,9 +358,11 @@ export function WorkPage(): JSX.Element {
     setRunsError(null);
     try {
       const res = await listRuns({ room_id: id, limit: 20 });
+      if (roomIdRef.current !== id) return;
       setRuns(res);
       setRunsState("idle");
     } catch (e) {
+      if (roomIdRef.current !== id) return;
       setRunsError(toErrorCode(e));
       setRunsState("error");
     }
@@ -553,6 +560,10 @@ export function WorkPage(): JSX.Element {
   useEffect(() => {
     roomIdRef.current = roomId;
   }, [roomId]);
+
+  useEffect(() => {
+    threadIdRef.current = threadId;
+  }, [threadId]);
 
   useEffect(() => {
     stepsRunIdRef.current = stepsRunId;
