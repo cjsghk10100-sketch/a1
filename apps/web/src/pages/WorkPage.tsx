@@ -420,6 +420,77 @@ export function WorkPage(): JSX.Element {
     }
   }
 
+  async function submitCreateRun(startImmediately: boolean): Promise<void> {
+    if (!roomId.trim()) return;
+
+    setCreateRunState("loading");
+    setCreateRunError(null);
+    setCreatedRunId(null);
+
+    const rawJson = createRunInputJson.trim();
+    let inputJson: unknown | undefined = undefined;
+    if (rawJson) {
+      try {
+        inputJson = JSON.parse(rawJson) as unknown;
+      } catch {
+        setCreateRunError("invalid_json");
+        setCreateRunState("error");
+        return;
+      }
+    }
+
+    const correlation_id = createRunCorrelationId.trim() || undefined;
+
+    const rawTags = createRunTagsCsv.trim();
+    const tags = rawTags
+      ? rawTags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter((tag) => Boolean(tag))
+      : undefined;
+
+    let createdRun: string | null = null;
+
+    try {
+      const res = await createRun({
+        room_id: roomId,
+        thread_id: threadId.trim() ? threadId.trim() : undefined,
+        title: createRunTitle.trim() ? createRunTitle.trim() : undefined,
+        goal: createRunGoal.trim() ? createRunGoal.trim() : undefined,
+        input: inputJson,
+        tags,
+        correlation_id,
+      });
+      createdRun = res.run_id;
+      setCreatedRunId(res.run_id);
+      setCreateRunTitle("");
+      setCreateRunGoal("");
+      setCreateRunInputJson("");
+      setCreateRunTagsCsv("");
+      setCreateRunCorrelationId("");
+
+      if (startImmediately) {
+        await startRun(res.run_id);
+      }
+
+      await reloadRuns(roomId);
+      // Ensure the next actions (steps/tool calls/artifacts) default to the newly created run.
+      setStepsRunId(res.run_id);
+      setCreateRunState("idle");
+    } catch (e) {
+      if (createdRun) {
+        try {
+          await reloadRuns(roomId);
+        } catch {
+          // Ignore secondary reload errors and keep the primary failure code.
+        }
+        setStepsRunId(createdRun);
+      }
+      setCreateRunError(toErrorCode(e));
+      setCreateRunState("error");
+    }
+  }
+
   async function runSearch(): Promise<void> {
     const q = searchQuery.trim();
     if (!roomId.trim() || q.length < 2) {
@@ -1031,63 +1102,20 @@ export function WorkPage(): JSX.Element {
                 className="primaryButton"
                 disabled={!roomId.trim() || createRunState === "loading"}
                 onClick={() => {
-                  void (async () => {
-                    if (!roomId.trim()) return;
-
-                    setCreateRunState("loading");
-                    setCreateRunError(null);
-                    setCreatedRunId(null);
-
-                    const rawJson = createRunInputJson.trim();
-                    let inputJson: unknown | undefined = undefined;
-                    if (rawJson) {
-                      try {
-                        inputJson = JSON.parse(rawJson) as unknown;
-                      } catch {
-                        setCreateRunError("invalid_json");
-                        setCreateRunState("error");
-                        return;
-                      }
-                    }
-
-                    const correlation_id = createRunCorrelationId.trim() || undefined;
-
-                    const rawTags = createRunTagsCsv.trim();
-                    const tags = rawTags
-                      ? rawTags
-                          .split(",")
-                          .map((tag) => tag.trim())
-                          .filter((tag) => Boolean(tag))
-                      : undefined;
-
-                    try {
-                      const res = await createRun({
-                        room_id: roomId,
-                        thread_id: threadId.trim() ? threadId.trim() : undefined,
-                        title: createRunTitle.trim() ? createRunTitle.trim() : undefined,
-                        goal: createRunGoal.trim() ? createRunGoal.trim() : undefined,
-                        input: inputJson,
-                        tags,
-                        correlation_id,
-                      });
-                      setCreateRunTitle("");
-                      setCreateRunGoal("");
-                      setCreateRunInputJson("");
-                      setCreateRunTagsCsv("");
-                      setCreateRunCorrelationId("");
-                      setCreatedRunId(res.run_id);
-                      await reloadRuns(roomId);
-                      // Ensure the next actions (steps/tool calls/artifacts) default to the newly created run.
-                      setStepsRunId(res.run_id);
-                      setCreateRunState("idle");
-                    } catch (e) {
-                      setCreateRunError(toErrorCode(e));
-                      setCreateRunState("error");
-                    }
-                  })();
+                  void submitCreateRun(false);
                 }}
               >
                 {t("work.runs.button_create")}
+              </button>
+              <button
+                type="button"
+                className="ghostButton"
+                disabled={!roomId.trim() || createRunState === "loading"}
+                onClick={() => {
+                  void submitCreateRun(true);
+                }}
+              >
+                {t("work.runs.button_create_start")}
               </button>
               <button
                 type="button"
