@@ -144,6 +144,7 @@ export function WorkPage(): JSX.Element {
   const [createThreadTitle, setCreateThreadTitle] = useState<string>("");
   const [createThreadState, setCreateThreadState] = useState<ConnState>("idle");
   const [createThreadError, setCreateThreadError] = useState<string | null>(null);
+  const createThreadRequestRef = useRef<number>(0);
 
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [messagesState, setMessagesState] = useState<ConnState>("idle");
@@ -171,6 +172,7 @@ export function WorkPage(): JSX.Element {
   const [createRunCorrelationId, setCreateRunCorrelationId] = useState<string>("");
   const [createRunState, setCreateRunState] = useState<ConnState>("idle");
   const [createRunError, setCreateRunError] = useState<string | null>(null);
+  const createRunRequestRef = useRef<number>(0);
   const [createdRunId, setCreatedRunId] = useState<string | null>(null);
   const [runActionId, setRunActionId] = useState<string | null>(null);
   const [runActionError, setRunActionError] = useState<string | null>(null);
@@ -476,6 +478,8 @@ export function WorkPage(): JSX.Element {
   async function submitCreateRun(startImmediately: boolean): Promise<void> {
     const nextRoomId = roomId.trim();
     if (!nextRoomId) return;
+    const requestId = createRunRequestRef.current + 1;
+    createRunRequestRef.current = requestId;
 
     setCreateRunState("loading");
     setCreateRunError(null);
@@ -487,8 +491,10 @@ export function WorkPage(): JSX.Element {
       try {
         inputJson = JSON.parse(rawJson) as unknown;
       } catch {
-        setCreateRunError("invalid_json");
-        setCreateRunState("error");
+        if (createRunRequestRef.current === requestId) {
+          setCreateRunError("invalid_json");
+          setCreateRunState("error");
+        }
         return;
       }
     }
@@ -532,7 +538,9 @@ export function WorkPage(): JSX.Element {
       await reloadRuns(nextRoomId);
       // Ensure the next actions (steps/tool calls/artifacts) default to the newly created run.
       selectStepsRunForRoom(nextRoomId, res.run_id);
-      setCreateRunState("idle");
+      if (createRunRequestRef.current === requestId) {
+        setCreateRunState("idle");
+      }
     } catch (e) {
       if (createdRun) {
         try {
@@ -542,8 +550,10 @@ export function WorkPage(): JSX.Element {
         }
         selectStepsRunForRoom(nextRoomId, createdRun);
       }
-      setCreateRunError(toErrorCode(e));
-      setCreateRunState("error");
+      if (createRunRequestRef.current === requestId) {
+        setCreateRunError(toErrorCode(e));
+        setCreateRunState("error");
+      }
     }
   }
 
@@ -628,6 +638,8 @@ export function WorkPage(): JSX.Element {
     setMessagesError(null);
     setRunsError(null);
     setStepsError(null);
+    createRunRequestRef.current += 1;
+    createThreadRequestRef.current += 1;
     setSendError(null);
     setSearchError(null);
     setSearchResults([]);
@@ -1082,20 +1094,26 @@ export function WorkPage(): JSX.Element {
                     const title = createThreadTitle.trim();
                     const nextRoomId = roomId.trim();
                     if (!nextRoomId || !title) return;
+                    const requestId = createThreadRequestRef.current + 1;
+                    createThreadRequestRef.current = requestId;
 
                     setCreateThreadState("loading");
                     setCreateThreadError(null);
                     try {
                       const newThreadId = await createThread(nextRoomId, { title });
-                      if (roomIdRef.current === nextRoomId) {
+                      if (createThreadRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
                         setCreateThreadTitle("");
                       }
                       await reloadThreads(nextRoomId, true);
                       selectThreadForRoom(nextRoomId, newThreadId);
-                      setCreateThreadState("idle");
+                      if (createThreadRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                        setCreateThreadState("idle");
+                      }
                     } catch (e) {
-                      setCreateThreadError(toErrorCode(e));
-                      setCreateThreadState("error");
+                      if (createThreadRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
+                        setCreateThreadError(toErrorCode(e));
+                        setCreateThreadState("error");
+                      }
                     }
                   })();
                 }}
