@@ -158,9 +158,11 @@ export function WorkPage(): JSX.Element {
   const [sendError, setSendError] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const searchQueryRef = useRef<string>(searchQuery);
   const [searchResults, setSearchResults] = useState<SearchDocRow[]>([]);
   const [searchState, setSearchState] = useState<ConnState>("idle");
   const [searchError, setSearchError] = useState<string | null>(null);
+  const searchRequestRef = useRef<number>(0);
 
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [runsState, setRunsState] = useState<ConnState>("idle");
@@ -559,21 +561,31 @@ export function WorkPage(): JSX.Element {
   }
 
   async function runSearch(): Promise<void> {
+    const nextRoomId = roomId.trim();
     const q = searchQuery.trim();
-    if (!roomId.trim() || q.length < 2) {
+    if (!nextRoomId || q.length < 2) {
+      searchRequestRef.current += 1;
       setSearchResults([]);
       setSearchState("idle");
       setSearchError(null);
       return;
     }
 
+    const requestId = searchRequestRef.current + 1;
+    searchRequestRef.current = requestId;
     setSearchState("loading");
     setSearchError(null);
     try {
-      const docs = await searchDocs({ q, room_id: roomId, limit: 20 });
+      const docs = await searchDocs({ q, room_id: nextRoomId, limit: 20 });
+      if (searchRequestRef.current !== requestId) return;
+      if (roomIdRef.current !== nextRoomId) return;
+      if (searchQueryRef.current.trim() !== q) return;
       setSearchResults(docs);
       setSearchState("idle");
     } catch (e) {
+      if (searchRequestRef.current !== requestId) return;
+      if (roomIdRef.current !== nextRoomId) return;
+      if (searchQueryRef.current.trim() !== q) return;
       setSearchError(toErrorCode(e));
       setSearchState("error");
     }
@@ -587,6 +599,10 @@ export function WorkPage(): JSX.Element {
   useEffect(() => {
     roomIdRef.current = roomId;
   }, [roomId]);
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
 
   useEffect(() => {
     threadIdRef.current = threadId;
@@ -644,6 +660,7 @@ export function WorkPage(): JSX.Element {
     setSendError(null);
     setSearchError(null);
     setSearchResults([]);
+    searchRequestRef.current += 1;
     setCreateRunError(null);
     setCreateRunState("idle");
     setCreatedRunId(null);
