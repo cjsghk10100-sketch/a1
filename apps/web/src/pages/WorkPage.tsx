@@ -156,6 +156,7 @@ export function WorkPage(): JSX.Element {
   const [senderId, setSenderId] = useState<string>(() => loadSenderId());
   const [sendState, setSendState] = useState<ConnState>("idle");
   const [sendError, setSendError] = useState<string | null>(null);
+  const sendRequestRef = useRef<number>(0);
 
   const [searchQuery, setSearchQuery] = useState<string>("");
   const searchQueryRef = useRef<string>(searchQuery);
@@ -657,7 +658,9 @@ export function WorkPage(): JSX.Element {
     setStepsError(null);
     createRunRequestRef.current += 1;
     createThreadRequestRef.current += 1;
+    sendRequestRef.current += 1;
     setSendError(null);
+    setSendState("idle");
     setSearchError(null);
     setSearchResults([]);
     searchRequestRef.current += 1;
@@ -718,6 +721,8 @@ export function WorkPage(): JSX.Element {
   }, [roomId]);
 
   useEffect(() => {
+    sendRequestRef.current += 1;
+    setSendState("idle");
     saveThreadId(roomId, threadId);
     setMessages([]);
     setMessagesError(null);
@@ -2547,29 +2552,41 @@ export function WorkPage(): JSX.Element {
                   void (async () => {
                     const content_md = composeContent.trim();
                     const sender_id = senderId.trim();
-                    if (!threadId.trim() || !content_md) return;
+                    const targetThreadId = threadId.trim();
+                    if (!targetThreadId || !content_md) return;
                     if (!sender_id) {
                       setSendError("sender_id_required");
                       setSendState("error");
                       return;
                     }
 
-                    setSendState("loading");
-                    setSendError(null);
+                    const requestId = sendRequestRef.current + 1;
+                    sendRequestRef.current = requestId;
+                    if (sendRequestRef.current === requestId) {
+                      setSendState("loading");
+                      setSendError(null);
+                    }
 
                     try {
-                      await postThreadMessage(threadId, {
+                      await postThreadMessage(targetThreadId, {
                         sender_type: senderType,
                         sender_id,
                         content_md,
                         lang: messageLang,
                       });
-                      setComposeContent("");
-                      await reloadMessages(threadId);
-                      setSendState("idle");
+                      if (sendRequestRef.current !== requestId) return;
+                      if (threadIdRef.current === targetThreadId) {
+                        setComposeContent("");
+                      }
+                      await reloadMessages(targetThreadId);
+                      if (sendRequestRef.current === requestId && threadIdRef.current === targetThreadId) {
+                        setSendState("idle");
+                      }
                     } catch (e) {
-                      setSendError(toErrorCode(e));
-                      setSendState("error");
+                      if (sendRequestRef.current === requestId && threadIdRef.current === targetThreadId) {
+                        setSendError(toErrorCode(e));
+                        setSendState("error");
+                      }
                     }
                   })();
                 }}
