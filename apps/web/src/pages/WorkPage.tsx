@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -126,6 +126,7 @@ export function WorkPage(): JSX.Element {
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
   const [roomId, setRoomId] = useState<string>(() => localStorage.getItem(roomStorageKey) ?? "");
+  const roomIdRef = useRef<string>(roomId);
   const [manualRoomId, setManualRoomId] = useState<string>("");
 
   const [createRoomTitle, setCreateRoomTitle] = useState<string>("");
@@ -420,8 +421,19 @@ export function WorkPage(): JSX.Element {
     }
   }
 
+  function selectStepsRunForRoom(targetRoomId: string, runId: string): void {
+    const room = targetRoomId.trim();
+    const run = runId.trim();
+    if (!room || !run) return;
+    saveStepsRunId(room, run);
+    if (roomIdRef.current === room) {
+      setStepsRunId(run);
+    }
+  }
+
   async function submitCreateRun(startImmediately: boolean): Promise<void> {
-    if (!roomId.trim()) return;
+    const nextRoomId = roomId.trim();
+    if (!nextRoomId) return;
 
     setCreateRunState("loading");
     setCreateRunError(null);
@@ -453,7 +465,7 @@ export function WorkPage(): JSX.Element {
 
     try {
       const res = await createRun({
-        room_id: roomId,
+        room_id: nextRoomId,
         thread_id: threadId.trim() ? threadId.trim() : undefined,
         title: createRunTitle.trim() ? createRunTitle.trim() : undefined,
         goal: createRunGoal.trim() ? createRunGoal.trim() : undefined,
@@ -473,18 +485,18 @@ export function WorkPage(): JSX.Element {
         await startRun(res.run_id);
       }
 
-      await reloadRuns(roomId);
+      await reloadRuns(nextRoomId);
       // Ensure the next actions (steps/tool calls/artifacts) default to the newly created run.
-      setStepsRunId(res.run_id);
+      selectStepsRunForRoom(nextRoomId, res.run_id);
       setCreateRunState("idle");
     } catch (e) {
       if (createdRun) {
         try {
-          await reloadRuns(roomId);
+          await reloadRuns(nextRoomId);
         } catch {
           // Ignore secondary reload errors and keep the primary failure code.
         }
-        setStepsRunId(createdRun);
+        selectStepsRunForRoom(nextRoomId, createdRun);
       }
       setCreateRunError(toErrorCode(e));
       setCreateRunState("error");
@@ -516,6 +528,10 @@ export function WorkPage(): JSX.Element {
     void reloadRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
 
   useEffect(() => {
     localStorage.setItem(senderTypeStorageKey, senderType);
@@ -1229,6 +1245,18 @@ export function WorkPage(): JSX.Element {
                           </div>
                         </button>
                         <div className="compactTopActions">
+                          <button
+                            type="button"
+                            className="ghostButton"
+                            disabled={!roomId.trim() || runsState === "loading"}
+                            onClick={() => {
+                              const nextRoomId = roomId.trim();
+                              if (!nextRoomId) return;
+                              selectStepsRunForRoom(nextRoomId, r.run_id);
+                            }}
+                          >
+                            {t("work.runs.button_use_in_steps")}
+                          </button>
                           {r.status === "queued" ? (
                             <button
                               type="button"
@@ -1244,7 +1272,7 @@ export function WorkPage(): JSX.Element {
                                   try {
                                     await startRun(r.run_id);
                                     await reloadRuns(nextRoomId);
-                                    setStepsRunId(r.run_id);
+                                    selectStepsRunForRoom(nextRoomId, r.run_id);
                                   } catch (e) {
                                     setRunActionError(toErrorCode(e));
                                   } finally {
@@ -1287,7 +1315,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await completeRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
-                                      setStepsRunId(r.run_id);
+                                      selectStepsRunForRoom(nextRoomId, r.run_id);
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
                                     } finally {
@@ -1326,7 +1354,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await failRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
-                                      setStepsRunId(r.run_id);
+                                      selectStepsRunForRoom(nextRoomId, r.run_id);
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
                                     } finally {
