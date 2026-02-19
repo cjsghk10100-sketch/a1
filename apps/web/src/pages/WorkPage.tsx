@@ -134,6 +134,7 @@ export function WorkPage(): JSX.Element {
   const [createRoomLang, setCreateRoomLang] = useState<"en" | "ko">(() => normalizeLang(i18n.language));
   const [createRoomState, setCreateRoomState] = useState<ConnState>("idle");
   const [createRoomError, setCreateRoomError] = useState<string | null>(null);
+  const createRoomRequestRef = useRef<number>(0);
 
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [threadsState, setThreadsState] = useState<ConnState>("idle");
@@ -935,9 +936,14 @@ export function WorkPage(): JSX.Element {
                 void (async () => {
                   const title = createRoomTitle.trim();
                   if (!title) return;
+                  const requestId = createRoomRequestRef.current + 1;
+                  createRoomRequestRef.current = requestId;
+                  const roomAtRequest = roomIdRef.current;
 
-                  setCreateRoomState("loading");
-                  setCreateRoomError(null);
+                  if (createRoomRequestRef.current === requestId) {
+                    setCreateRoomState("loading");
+                    setCreateRoomError(null);
+                  }
 
                   try {
                     const newId = await createRoom({
@@ -945,13 +951,20 @@ export function WorkPage(): JSX.Element {
                       room_mode: createRoomMode,
                       default_lang: createRoomLang,
                     });
+                    if (createRoomRequestRef.current !== requestId) return;
                     setCreateRoomTitle("");
                     await reloadRooms();
-                    setRoomId(newId);
-                    setCreateRoomState("idle");
+                    if (roomIdRef.current === roomAtRequest) {
+                      setRoomId(newId);
+                    }
+                    if (createRoomRequestRef.current === requestId) {
+                      setCreateRoomState("idle");
+                    }
                   } catch (e) {
-                    setCreateRoomError(toErrorCode(e));
-                    setCreateRoomState("error");
+                    if (createRoomRequestRef.current === requestId) {
+                      setCreateRoomError(toErrorCode(e));
+                      setCreateRoomState("error");
+                    }
                   }
                 })();
               }}
