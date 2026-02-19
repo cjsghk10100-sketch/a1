@@ -511,12 +511,14 @@ export function WorkPage(): JSX.Element {
         correlation_id,
       });
       createdRun = res.run_id;
-      setCreatedRunId(res.run_id);
-      setCreateRunTitle("");
-      setCreateRunGoal("");
-      setCreateRunInputJson("");
-      setCreateRunTagsCsv("");
-      setCreateRunCorrelationId("");
+      if (roomIdRef.current === nextRoomId) {
+        setCreatedRunId(res.run_id);
+        setCreateRunTitle("");
+        setCreateRunGoal("");
+        setCreateRunInputJson("");
+        setCreateRunTagsCsv("");
+        setCreateRunCorrelationId("");
+      }
 
       if (startImmediately) {
         await startRun(res.run_id);
@@ -1070,7 +1072,9 @@ export function WorkPage(): JSX.Element {
                     setCreateThreadError(null);
                     try {
                       const newThreadId = await createThread(nextRoomId, { title });
-                      setCreateThreadTitle("");
+                      if (roomIdRef.current === nextRoomId) {
+                        setCreateThreadTitle("");
+                      }
                       await reloadThreads(nextRoomId, true);
                       selectThreadForRoom(nextRoomId, newThreadId);
                       setCreateThreadState("idle");
@@ -1554,9 +1558,11 @@ export function WorkPage(): JSX.Element {
                         title: createStepTitle.trim() ? createStepTitle.trim() : undefined,
                         input: inputJson,
                       });
-                      setCreateStepTitle("");
-                      setCreateStepInputJson("");
-                      setCreatedStepId(res.step_id);
+                      if (stepsRunIdRef.current === run_id) {
+                        setCreateStepTitle("");
+                        setCreateStepInputJson("");
+                        setCreatedStepId(res.step_id);
+                      }
                       await reloadSteps(run_id);
                       // Ensure the next actions (tool calls / artifacts) default to the newly created step.
                       selectDownstreamStepForRun(run_id, res.step_id);
@@ -1720,6 +1726,7 @@ export function WorkPage(): JSX.Element {
                     const step_id = toolCallsStepId.trim();
                     const tool_name = createToolCallName.trim();
                     if (!step_id || !tool_name) return;
+                    const run_id = selectedStepForToolCalls?.run_id?.trim() ?? stepsRunIdRef.current.trim();
 
                     setCreateToolCallState("loading");
                     setCreateToolCallError(null);
@@ -1745,12 +1752,13 @@ export function WorkPage(): JSX.Element {
                         agent_id: createToolCallAgentId.trim() ? createToolCallAgentId.trim() : undefined,
                       });
 
-                      setCreateToolCallTitle("");
-                      setCreateToolCallInputJson("");
-                      setCreatedToolCallId(res.tool_call_id);
+                      if (toolCallsStepIdRef.current === step_id) {
+                        setCreateToolCallTitle("");
+                        setCreateToolCallInputJson("");
+                        setCreatedToolCallId(res.tool_call_id);
+                      }
 
                       await reloadToolCalls(step_id);
-                      const run_id = stepsRunId.trim();
                       if (run_id) await reloadSteps(run_id);
 
                       setCreateToolCallState("idle");
@@ -1867,7 +1875,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await succeedToolCall(tc.tool_call_id, payload);
                                       await reloadToolCalls(step_id);
-                                      const run_id = stepsRunId.trim();
+                                      const run_id = tc.run_id?.trim();
                                       if (run_id) await reloadSteps(run_id);
                                     } catch (e) {
                                       setToolCallActionError(toErrorCode(e));
@@ -1907,7 +1915,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await failToolCall(tc.tool_call_id, payload);
                                       await reloadToolCalls(step_id);
-                                      const run_id = stepsRunId.trim();
+                                      const run_id = tc.run_id?.trim();
                                       if (run_id) await reloadSteps(run_id);
                                     } catch (e) {
                                       setToolCallActionError(toErrorCode(e));
@@ -2101,6 +2109,7 @@ export function WorkPage(): JSX.Element {
                     const step_id = artifactsStepId.trim();
                     const kind = createArtifactKind.trim();
                     if (!step_id || !kind) return;
+                    const run_id = selectedStepForArtifacts?.run_id?.trim() ?? stepsRunIdRef.current.trim();
 
                     setCreateArtifactState("loading");
                     setCreateArtifactError(null);
@@ -2150,16 +2159,19 @@ export function WorkPage(): JSX.Element {
                         metadata,
                       });
 
-                      setCreateArtifactTitle("");
-                      setCreateArtifactMimeType("");
-                      setCreateArtifactText("");
-                      setCreateArtifactJson("");
-                      setCreateArtifactUri("");
-                      setCreateArtifactMetadataJson("");
-                      setCreateArtifactContentType("none");
-                      setCreatedArtifactId(res.artifact_id);
+                      if (artifactsStepIdRef.current === step_id) {
+                        setCreateArtifactTitle("");
+                        setCreateArtifactMimeType("");
+                        setCreateArtifactText("");
+                        setCreateArtifactJson("");
+                        setCreateArtifactUri("");
+                        setCreateArtifactMetadataJson("");
+                        setCreateArtifactContentType("none");
+                        setCreatedArtifactId(res.artifact_id);
+                      }
 
                       await reloadArtifacts(step_id);
+                      if (run_id) await reloadSteps(run_id);
 
                       setCreateArtifactState("idle");
                     } catch (e) {
