@@ -191,6 +191,7 @@ export function WorkPage(): JSX.Element {
   const [createStepInputJson, setCreateStepInputJson] = useState<string>("");
   const [createStepState, setCreateStepState] = useState<ConnState>("idle");
   const [createStepError, setCreateStepError] = useState<string | null>(null);
+  const createStepRequestRef = useRef<number>(0);
   const [createdStepId, setCreatedStepId] = useState<string | null>(null);
 
   const [toolCallsStepId, setToolCallsStepId] = useState<string>("");
@@ -205,6 +206,7 @@ export function WorkPage(): JSX.Element {
   const [createToolCallInputJson, setCreateToolCallInputJson] = useState<string>("");
   const [createToolCallState, setCreateToolCallState] = useState<ConnState>("idle");
   const [createToolCallError, setCreateToolCallError] = useState<string | null>(null);
+  const createToolCallRequestRef = useRef<number>(0);
   const [createdToolCallId, setCreatedToolCallId] = useState<string | null>(null);
   const [toolCallActionId, setToolCallActionId] = useState<string | null>(null);
   const [toolCallActionError, setToolCallActionError] = useState<string | null>(null);
@@ -229,6 +231,7 @@ export function WorkPage(): JSX.Element {
   const [createArtifactMetadataJson, setCreateArtifactMetadataJson] = useState<string>("");
   const [createArtifactState, setCreateArtifactState] = useState<ConnState>("idle");
   const [createArtifactError, setCreateArtifactError] = useState<string | null>(null);
+  const createArtifactRequestRef = useRef<number>(0);
   const [createdArtifactId, setCreatedArtifactId] = useState<string | null>(null);
 
   const [pins, setPins] = useState<PinItemV1[]>(() => loadPins());
@@ -638,6 +641,7 @@ export function WorkPage(): JSX.Element {
     setRunActionError(null);
     setCreateStepError(null);
     setCreateStepState("idle");
+    createStepRequestRef.current += 1;
     setCreatedStepId(null);
     setCreateStepKind("tool");
     setCreateStepTitle("");
@@ -650,6 +654,7 @@ export function WorkPage(): JSX.Element {
     setCreateToolCallTitle("");
     setCreateToolCallAgentId("");
     setCreateToolCallInputJson("");
+    createToolCallRequestRef.current += 1;
     setCreateToolCallError(null);
     setCreateToolCallState("idle");
     setCreatedToolCallId(null);
@@ -670,6 +675,7 @@ export function WorkPage(): JSX.Element {
     setCreateArtifactText("");
     setCreateArtifactJson("");
     setCreateArtifactUri("");
+    createArtifactRequestRef.current += 1;
     setCreateArtifactError(null);
     setCreateArtifactState("idle");
     setCreatedArtifactId(null);
@@ -708,10 +714,12 @@ export function WorkPage(): JSX.Element {
   useEffect(() => {
     setSteps([]);
     setStepsError(null);
+    createStepRequestRef.current += 1;
     setCreatedStepId(null);
     setCreateStepError(null);
     setCreateStepState("idle");
 
+    createToolCallRequestRef.current += 1;
     setToolCallsStepId("");
     setToolCalls([]);
     setToolCallsError(null);
@@ -720,6 +728,7 @@ export function WorkPage(): JSX.Element {
     setCreateToolCallError(null);
     setCreateToolCallState("idle");
 
+    createArtifactRequestRef.current += 1;
     setArtifactsStepId("");
     setArtifacts([]);
     setArtifactsError(null);
@@ -770,6 +779,7 @@ export function WorkPage(): JSX.Element {
     setToolCalls([]);
     setToolCallsError(null);
     setToolCallsState("idle");
+    createToolCallRequestRef.current += 1;
     setCreatedToolCallId(null);
     setCreateToolCallError(null);
     setCreateToolCallState("idle");
@@ -790,6 +800,7 @@ export function WorkPage(): JSX.Element {
     setArtifacts([]);
     setArtifactsError(null);
     setArtifactsState("idle");
+    createArtifactRequestRef.current += 1;
     setCreatedArtifactId(null);
     setCreateArtifactError(null);
     setCreateArtifactState("idle");
@@ -1566,6 +1577,8 @@ export function WorkPage(): JSX.Element {
                     const run_id = stepsRunId.trim();
                     const kind = createStepKind.trim();
                     if (!run_id || !kind) return;
+                    const requestId = createStepRequestRef.current + 1;
+                    createStepRequestRef.current = requestId;
 
                     setCreateStepState("loading");
                     setCreateStepError(null);
@@ -1577,8 +1590,10 @@ export function WorkPage(): JSX.Element {
                       try {
                         inputJson = JSON.parse(rawJson) as unknown;
                       } catch {
-                        setCreateStepError("invalid_json");
-                        setCreateStepState("error");
+                        if (createStepRequestRef.current === requestId) {
+                          setCreateStepError("invalid_json");
+                          setCreateStepState("error");
+                        }
                         return;
                       }
                     }
@@ -1597,10 +1612,14 @@ export function WorkPage(): JSX.Element {
                       await reloadSteps(run_id);
                       // Ensure the next actions (tool calls / artifacts) default to the newly created step.
                       selectDownstreamStepForRun(run_id, res.step_id);
-                      setCreateStepState("idle");
+                      if (createStepRequestRef.current === requestId) {
+                        setCreateStepState("idle");
+                      }
                     } catch (e) {
-                      setCreateStepError(toErrorCode(e));
-                      setCreateStepState("error");
+                      if (createStepRequestRef.current === requestId) {
+                        setCreateStepError(toErrorCode(e));
+                        setCreateStepState("error");
+                      }
                     }
                   })();
                 }}
@@ -1758,6 +1777,8 @@ export function WorkPage(): JSX.Element {
                     const tool_name = createToolCallName.trim();
                     if (!step_id || !tool_name) return;
                     const run_id = selectedStepForToolCalls?.run_id?.trim() ?? stepsRunIdRef.current.trim();
+                    const requestId = createToolCallRequestRef.current + 1;
+                    createToolCallRequestRef.current = requestId;
 
                     setCreateToolCallState("loading");
                     setCreateToolCallError(null);
@@ -1769,8 +1790,10 @@ export function WorkPage(): JSX.Element {
                       try {
                         inputJson = JSON.parse(rawJson) as unknown;
                       } catch {
-                        setCreateToolCallError("invalid_json");
-                        setCreateToolCallState("error");
+                        if (createToolCallRequestRef.current === requestId) {
+                          setCreateToolCallError("invalid_json");
+                          setCreateToolCallState("error");
+                        }
                         return;
                       }
                     }
@@ -1792,10 +1815,14 @@ export function WorkPage(): JSX.Element {
                       await reloadToolCalls(step_id);
                       if (run_id) await reloadSteps(run_id);
 
-                      setCreateToolCallState("idle");
+                      if (createToolCallRequestRef.current === requestId) {
+                        setCreateToolCallState("idle");
+                      }
                     } catch (e) {
-                      setCreateToolCallError(toErrorCode(e));
-                      setCreateToolCallState("error");
+                      if (createToolCallRequestRef.current === requestId) {
+                        setCreateToolCallError(toErrorCode(e));
+                        setCreateToolCallState("error");
+                      }
                     }
                   })();
                 }}
@@ -2173,6 +2200,8 @@ export function WorkPage(): JSX.Element {
                     const kind = createArtifactKind.trim();
                     if (!step_id || !kind) return;
                     const run_id = selectedStepForArtifacts?.run_id?.trim() ?? stepsRunIdRef.current.trim();
+                    const requestId = createArtifactRequestRef.current + 1;
+                    createArtifactRequestRef.current = requestId;
 
                     setCreateArtifactState("loading");
                     setCreateArtifactError(null);
@@ -2190,8 +2219,10 @@ export function WorkPage(): JSX.Element {
                         try {
                           content = { type: "json", json: JSON.parse(rawJson) as unknown };
                         } catch {
-                          setCreateArtifactError("invalid_json");
-                          setCreateArtifactState("error");
+                          if (createArtifactRequestRef.current === requestId) {
+                            setCreateArtifactError("invalid_json");
+                            setCreateArtifactState("error");
+                          }
                           return;
                         }
                       } else {
@@ -2207,8 +2238,10 @@ export function WorkPage(): JSX.Element {
                       try {
                         metadata = JSON.parse(rawMetadata) as unknown;
                       } catch {
-                        setCreateArtifactError("invalid_json");
-                        setCreateArtifactState("error");
+                        if (createArtifactRequestRef.current === requestId) {
+                          setCreateArtifactError("invalid_json");
+                          setCreateArtifactState("error");
+                        }
                         return;
                       }
                     }
@@ -2236,10 +2269,14 @@ export function WorkPage(): JSX.Element {
                       await reloadArtifacts(step_id);
                       if (run_id) await reloadSteps(run_id);
 
-                      setCreateArtifactState("idle");
+                      if (createArtifactRequestRef.current === requestId) {
+                        setCreateArtifactState("idle");
+                      }
                     } catch (e) {
-                      setCreateArtifactError(toErrorCode(e));
-                      setCreateArtifactState("error");
+                      if (createArtifactRequestRef.current === requestId) {
+                        setCreateArtifactError(toErrorCode(e));
+                        setCreateArtifactState("error");
+                      }
                     }
                   })();
                 }}
