@@ -1287,7 +1287,7 @@ export function WorkPage(): JSX.Element {
                 {runs.map((r) => {
                   const title = (r.title ?? "").trim();
                   const label = title ? title : r.run_id;
-                  const actionDisabled = !roomId.trim() || runsState === "loading" || runActionId === r.run_id;
+                  const actionDisabled = !roomId.trim() || runsState === "loading" || runActionId != null;
                   return (
                     <li key={r.run_id}>
                       <div className="timelineRoomRow">
