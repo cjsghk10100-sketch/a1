@@ -2,8 +2,8 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import type { RedactionLogRow } from "../api/audit";
-import { listRedactionLogs } from "../api/audit";
+import type { HashChainVerifyResult, RedactionLogRow } from "../api/audit";
+import { listRedactionLogs, verifyHashChain } from "../api/audit";
 import type { ArtifactRow } from "../api/artifacts";
 import { listArtifacts } from "../api/artifacts";
 import type { EventDetail, EventRow } from "../api/events";
@@ -43,6 +43,11 @@ function uniqueNonNull(values: Array<string | null>): string[] {
   return [...set];
 }
 
+function normalizeAuditStreamType(raw: string): "room" | "thread" | "workspace" | null {
+  if (raw === "room" || raw === "thread" || raw === "workspace") return raw;
+  return null;
+}
+
 export function InspectorPage(): JSX.Element {
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -74,10 +79,14 @@ export function InspectorPage(): JSX.Element {
   const [redactionLogs, setRedactionLogs] = useState<RedactionLogRow[]>([]);
   const [redactionState, setRedactionState] = useState<ConnState>("idle");
   const [redactionError, setRedactionError] = useState<string | null>(null);
+  const [hashVerifyResult, setHashVerifyResult] = useState<HashChainVerifyResult | null>(null);
+  const [hashVerifyState, setHashVerifyState] = useState<ConnState>("idle");
+  const [hashVerifyError, setHashVerifyError] = useState<string | null>(null);
 
   const loadTokenRef = useRef<number>(0);
   const eventTokenRef = useRef<number>(0);
   const redactionTokenRef = useRef<number>(0);
+  const hashVerifyTokenRef = useRef<number>(0);
 
   const runIdsFromEvents = useMemo(() => uniqueNonNull(events.map((e) => e.run_id)), [events]);
   const recentRunsPickUnknown = useMemo(() => {
@@ -183,6 +192,42 @@ export function InspectorPage(): JSX.Element {
     })();
   }, [selectedEventId]);
 
+  useEffect(() => {
+    hashVerifyTokenRef.current += 1;
+    setHashVerifyResult(null);
+    setHashVerifyState("idle");
+    setHashVerifyError(null);
+  }, [selectedEventId]);
+
+  async function runHashChainVerify(detail: EventDetail): Promise<void> {
+    const streamType = normalizeAuditStreamType(detail.stream_type);
+    if (!streamType) {
+      setHashVerifyError("invalid_stream_type");
+      setHashVerifyState("error");
+      return;
+    }
+
+    const token = ++hashVerifyTokenRef.current;
+    setHashVerifyState("loading");
+    setHashVerifyError(null);
+    setHashVerifyResult(null);
+
+    try {
+      const result = await verifyHashChain({
+        stream_type: streamType,
+        stream_id: detail.stream_id,
+        limit: Math.max(200, limit),
+      });
+      if (token !== hashVerifyTokenRef.current) return;
+      setHashVerifyResult(result);
+      setHashVerifyState("idle");
+    } catch (e) {
+      if (token !== hashVerifyTokenRef.current) return;
+      setHashVerifyError(toErrorCode(e));
+      setHashVerifyState("error");
+    }
+  }
+
   async function loadByRun(nextRunId: string, nextLimit: number, updateUrl: boolean): Promise<void> {
     const id = nextRunId.trim();
     if (!id) return;
@@ -203,6 +248,9 @@ export function InspectorPage(): JSX.Element {
     setRedactionLogs([]);
     setRedactionError(null);
     setRedactionState("idle");
+    setHashVerifyResult(null);
+    setHashVerifyState("idle");
+    setHashVerifyError(null);
     setSelectedEventId(null);
 
     try {
@@ -263,6 +311,9 @@ export function InspectorPage(): JSX.Element {
     setRedactionLogs([]);
     setRedactionError(null);
     setRedactionState("idle");
+    setHashVerifyResult(null);
+    setHashVerifyState("idle");
+    setHashVerifyError(null);
     setSelectedEventId(null);
 
     try {
@@ -298,6 +349,7 @@ export function InspectorPage(): JSX.Element {
     loadTokenRef.current += 1;
     eventTokenRef.current += 1;
     redactionTokenRef.current += 1;
+    hashVerifyTokenRef.current += 1;
 
     setRunId("");
     setCorrelationId("");
@@ -315,6 +367,9 @@ export function InspectorPage(): JSX.Element {
     setRedactionLogs([]);
     setRedactionState("idle");
     setRedactionError(null);
+    setHashVerifyResult(null);
+    setHashVerifyState("idle");
+    setHashVerifyError(null);
     setSearchParams({});
   }
 
@@ -796,6 +851,53 @@ export function InspectorPage(): JSX.Element {
                       </li>
                     ))}
                   </ul>
+                ) : null}
+              </div>
+              <div className="detailSection">
+                <div className="detailSectionTitle">{t("inspector.section.hash_chain")}</div>
+                <div className="compactMeta">
+                  <span className="mono">
+                    {t("inspector.hash_chain.stream", {
+                      stream: `${eventDetail.stream_type}:${eventDetail.stream_id}`,
+                    })}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  onClick={() => void runHashChainVerify(eventDetail)}
+                  disabled={hashVerifyState === "loading"}
+                >
+                  {t("inspector.hash_chain.button_verify")}
+                </button>
+                {hashVerifyState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+                {hashVerifyState === "error" && hashVerifyError ? (
+                  <div className="errorBox">{t("error.load_failed", { code: hashVerifyError })}</div>
+                ) : null}
+                {hashVerifyState === "idle" && !hashVerifyResult ? (
+                  <div className="placeholder">{t("inspector.hash_chain.not_run")}</div>
+                ) : null}
+                {hashVerifyResult ? (
+                  <>
+                    <div className="kvGrid">
+                      <div className="kvKey">{t("inspector.hash_chain.status")}</div>
+                      <div className="kvVal">
+                        {hashVerifyResult.valid
+                          ? t("inspector.hash_chain.valid")
+                          : t("inspector.hash_chain.invalid")}
+                      </div>
+
+                      <div className="kvKey">{t("inspector.hash_chain.checked")}</div>
+                      <div className="kvVal mono">{hashVerifyResult.checked}</div>
+
+                      <div className="kvKey">{t("inspector.hash_chain.last_event_hash")}</div>
+                      <div className="kvVal mono">{hashVerifyResult.last_event_hash ?? "-"}</div>
+                    </div>
+                    <div className="detailSection">
+                      <div className="detailSectionTitle">{t("inspector.hash_chain.first_mismatch")}</div>
+                      <JsonView value={hashVerifyResult.first_mismatch} />
+                    </div>
+                  </>
                 ) : null}
               </div>
             </>
