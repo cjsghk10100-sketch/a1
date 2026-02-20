@@ -91,9 +91,13 @@ function skillPackageStatusPill(status: SkillVerificationStatus): string {
 type PermissionState = "allowed" | "limited" | "blocked";
 type ZoneState = "active" | "limited" | "blocked";
 type TrendState = "up" | "down" | "flat";
+type ApprovalMode = "auto" | "post" | "pre" | "blocked";
 
-function statePillClass(state: PermissionState | ZoneState | TrendState): string {
-  if (state === "allowed" || state === "active" || state === "up") return "statusPill statusApproved";
+function statePillClass(state: PermissionState | ZoneState | TrendState | ApprovalMode): string {
+  if (state === "allowed" || state === "active" || state === "up" || state === "auto")
+    return "statusPill statusApproved";
+  if (state === "post") return "statusPill statusHeld";
+  if (state === "pre") return "statusPill statusHeld";
   if (state === "limited" || state === "flat") return "statusPill statusHeld";
   return "statusPill statusDenied";
 }
@@ -373,6 +377,39 @@ export function AgentProfilePage(): JSX.Element {
       { key: "high_stakes", label: t("agent_profile.zone.high_stakes"), state: highStakesState },
     ] as Array<{ key: string; label: string; state: ZoneState }>;
   }, [scopeUnion, isQuarantined, t]);
+
+  const approvalRecommendations = useMemo(() => {
+    const trustScore = trust?.trust_score ?? 0;
+    const hasWriteScope = scopeUnion.dataWrite.length > 0 || scopeUnion.actions.some((a) => isWriteAction(a));
+    const hasExternalScope = scopeUnion.egress.length > 0;
+    const hasHighStakesScope = scopeUnion.actions.some((a) => isHighStakesAction(a));
+
+    let internalWriteMode: ApprovalMode = "blocked";
+    if (hasWriteScope) {
+      if (isQuarantined) internalWriteMode = "pre";
+      else if (trustScore >= 0.75) internalWriteMode = "auto";
+      else if (trustScore >= 0.45) internalWriteMode = "post";
+      else internalWriteMode = "pre";
+    }
+
+    let externalWriteMode: ApprovalMode = "blocked";
+    if (hasExternalScope) {
+      if (isQuarantined) externalWriteMode = "blocked";
+      else if (trustScore >= 0.8) externalWriteMode = "post";
+      else externalWriteMode = "pre";
+    }
+
+    let highStakesMode: ApprovalMode = "blocked";
+    if (hasHighStakesScope) {
+      highStakesMode = isQuarantined ? "blocked" : "pre";
+    }
+
+    return [
+      { key: "internal_write", label: t("agent_profile.approval.target.internal_write"), mode: internalWriteMode },
+      { key: "external_write", label: t("agent_profile.approval.target.external_write"), mode: externalWriteMode },
+      { key: "high_stakes", label: t("agent_profile.approval.target.high_stakes"), mode: highStakesMode },
+    ] as Array<{ key: string; label: string; mode: ApprovalMode }>;
+  }, [scopeUnion, trust, isQuarantined, t]);
 
   const trustDelta7d = useMemo(() => {
     if (!latestSnapshot || !baselineSnapshot) return null;
@@ -861,6 +898,17 @@ export function AgentProfilePage(): JSX.Element {
                     <div key={zone.key} className="zoneChip">
                       <span className="mono">{zone.label}</span>
                       <span className={statePillClass(zone.state)}>{t(`agent_profile.zone.state.${zone.state}`)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="detailSectionTitle">{t("agent_profile.approval_recommendation")}</div>
+                <div className="permissionMatrix">
+                  {approvalRecommendations.map((row) => (
+                    <div key={row.key} className="permissionRow">
+                      <div className="permissionLabel">{row.label}</div>
+                      <div className="permissionMeta">{t("agent_profile.approval.basis")}</div>
+                      <span className={statePillClass(row.mode)}>{t(`agent_profile.approval.mode.${row.mode}`)}</span>
                     </div>
                   ))}
                 </div>
