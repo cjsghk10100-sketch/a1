@@ -222,6 +222,50 @@ async function main(): Promise<void> {
     assert.equal(detail.event.event_id, stepCreated.event_id);
     assert.equal(detail.event.event_type, "step.created");
     assert.equal(detail.event.correlation_id, created.correlation_id);
+
+    const agent = await postJson<{ agent_id: string; principal_id: string }>(
+      baseUrl,
+      "/v1/agents",
+      { display_name: "Events Subject Agent" },
+      workspaceHeader,
+    );
+
+    await postJson<{ agent_id: string; principal_id: string; quarantined_at: string | null }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/quarantine`,
+      { actor_type: "user", actor_id: "contract" },
+      workspaceHeader,
+    );
+
+    const subjectByAgent = await getJson<{
+      events: Array<{ event_type: string; data: Record<string, unknown> }>;
+    }>(
+      baseUrl,
+      `/v1/events?event_types=${encodeURIComponent("agent.quarantined,agent.unquarantined")}&subject_agent_id=${encodeURIComponent(agent.agent_id)}&limit=50`,
+      workspaceHeader,
+    );
+    assert.ok(subjectByAgent.events.some((e) => e.event_type === "agent.quarantined"));
+    assert.equal(
+      subjectByAgent.events.every((e) => e.data.agent_id === agent.agent_id),
+      true,
+    );
+
+    const subjectByPrincipal = await getJson<{
+      events: Array<{ event_type: string; data: Record<string, unknown> }>;
+    }>(
+      baseUrl,
+      `/v1/events?event_types=${encodeURIComponent("agent.quarantined,agent.capability.granted,agent.capability.revoked")}&subject_principal_id=${encodeURIComponent(agent.principal_id)}&limit=100`,
+      workspaceHeader,
+    );
+    assert.ok(subjectByPrincipal.events.length >= 1);
+    assert.equal(
+      subjectByPrincipal.events.every(
+        (e) =>
+          e.data.principal_id === agent.principal_id ||
+          e.data.issued_to_principal_id === agent.principal_id,
+      ),
+      true,
+    );
   } finally {
     await app.close();
   }

@@ -1083,6 +1083,7 @@ export function AgentProfilePage(): JSX.Element {
 
   async function reloadChangeEvents(nextAgentId?: string): Promise<void> {
     const agent_id = (nextAgentId ?? agentId).trim();
+    const subject_principal_id = principalId?.trim() || undefined;
     if (!agent_id) {
       setChangeEvents([]);
       setChangeEventsError(null);
@@ -1095,6 +1096,8 @@ export function AgentProfilePage(): JSX.Element {
     try {
       const rows = await listEvents({
         event_types: [...agentChangeEventTypes],
+        subject_agent_id: agent_id,
+        subject_principal_id,
         limit: 300,
       });
       setChangeEvents(rows);
@@ -1246,7 +1249,7 @@ export function AgentProfilePage(): JSX.Element {
   useEffect(() => {
     void reloadChangeEvents(agentId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
+  }, [agentId, principalId]);
 
   const agentOptions = useMemo(() => {
     return agents.map((a) => ({

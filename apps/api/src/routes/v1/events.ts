@@ -78,6 +78,8 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
       correlation_id?: string;
       event_type?: string;
       event_types?: string | string[];
+      subject_agent_id?: string;
+      subject_principal_id?: string;
 
       before_recorded_at?: string;
     };
@@ -147,6 +149,21 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
       }
       args.push(event_types);
       where += ` AND event_type = ANY($${args.length}::text[])`;
+    }
+
+    const subject_agent_id = normalizeId(req.query.subject_agent_id);
+    if (subject_agent_id) {
+      args.push(subject_agent_id);
+      where += ` AND data->>'agent_id' = $${args.length}`;
+    }
+
+    const subject_principal_id = normalizeId(req.query.subject_principal_id);
+    if (subject_principal_id) {
+      args.push(subject_principal_id);
+      where += ` AND (
+        data->>'principal_id' = $${args.length}
+        OR data->>'issued_to_principal_id' = $${args.length}
+      )`;
     }
 
     if (before_recorded_at) {

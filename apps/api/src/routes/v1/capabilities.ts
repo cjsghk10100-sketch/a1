@@ -488,6 +488,16 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
       return reply.code(200).send({ ok: true, already_revoked: true });
     }
 
+    const tokenMeta = await pool.query<{ issued_to_principal_id: string }>(
+      `SELECT issued_to_principal_id
+       FROM sec_capability_tokens
+       WHERE workspace_id = $1
+         AND token_id = $2
+       LIMIT 1`,
+      [workspace_id, token_id],
+    );
+    const issued_to_principal_id = tokenMeta.rows[0]?.issued_to_principal_id ?? null;
+
     await appendToStream(pool, {
       event_id: randomUUID(),
       event_type: "agent.capability.revoked",
@@ -499,6 +509,7 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
       correlation_id: randomUUID(),
       data: {
         token_id,
+        issued_to_principal_id,
         revoked_at,
         reason: typeof req.body.reason === "string" ? req.body.reason : undefined,
       },

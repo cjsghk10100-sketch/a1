@@ -51,6 +51,8 @@ export async function listEvents(params: {
   correlation_id?: string;
   event_type?: string;
   event_types?: string[];
+  subject_agent_id?: string;
+  subject_principal_id?: string;
   before_recorded_at?: string;
   limit?: number;
 }): Promise<EventRow[]> {
@@ -67,6 +69,8 @@ export async function listEvents(params: {
   if (params.event_types && params.event_types.length > 0) {
     qs.set("event_types", params.event_types.join(","));
   }
+  if (params.subject_agent_id) qs.set("subject_agent_id", params.subject_agent_id);
+  if (params.subject_principal_id) qs.set("subject_principal_id", params.subject_principal_id);
   if (params.before_recorded_at) qs.set("before_recorded_at", params.before_recorded_at);
   if (params.limit) qs.set("limit", String(params.limit));
   const url = `/v1/events${qs.size ? `?${qs.toString()}` : ""}`;
