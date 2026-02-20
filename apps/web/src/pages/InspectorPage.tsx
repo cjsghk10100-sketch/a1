@@ -2,6 +2,8 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import type { RedactionLogRow } from "../api/audit";
+import { listRedactionLogs } from "../api/audit";
 import type { ArtifactRow } from "../api/artifacts";
 import { listArtifacts } from "../api/artifacts";
 import type { EventDetail, EventRow } from "../api/events";
@@ -69,9 +71,13 @@ export function InspectorPage(): JSX.Element {
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
   const [eventState, setEventState] = useState<ConnState>("idle");
   const [eventError, setEventError] = useState<string | null>(null);
+  const [redactionLogs, setRedactionLogs] = useState<RedactionLogRow[]>([]);
+  const [redactionState, setRedactionState] = useState<ConnState>("idle");
+  const [redactionError, setRedactionError] = useState<string | null>(null);
 
   const loadTokenRef = useRef<number>(0);
   const eventTokenRef = useRef<number>(0);
+  const redactionTokenRef = useRef<number>(0);
 
   const runIdsFromEvents = useMemo(() => uniqueNonNull(events.map((e) => e.run_id)), [events]);
   const recentRunsPickUnknown = useMemo(() => {
@@ -150,6 +156,33 @@ export function InspectorPage(): JSX.Element {
     })();
   }, [selectedEventId]);
 
+  useEffect(() => {
+    if (!selectedEventId) {
+      setRedactionLogs([]);
+      setRedactionState("idle");
+      setRedactionError(null);
+      return;
+    }
+
+    const token = ++redactionTokenRef.current;
+    setRedactionLogs([]);
+    setRedactionState("loading");
+    setRedactionError(null);
+
+    void (async () => {
+      try {
+        const rows = await listRedactionLogs({ event_id: selectedEventId, limit: 50 });
+        if (token !== redactionTokenRef.current) return;
+        setRedactionLogs(rows);
+        setRedactionState("idle");
+      } catch (e) {
+        if (token !== redactionTokenRef.current) return;
+        setRedactionError(toErrorCode(e));
+        setRedactionState("error");
+      }
+    })();
+  }, [selectedEventId]);
+
   async function loadByRun(nextRunId: string, nextLimit: number, updateUrl: boolean): Promise<void> {
     const id = nextRunId.trim();
     if (!id) return;
@@ -167,6 +200,9 @@ export function InspectorPage(): JSX.Element {
     setEventDetail(null);
     setEventError(null);
     setEventState("idle");
+    setRedactionLogs([]);
+    setRedactionError(null);
+    setRedactionState("idle");
     setSelectedEventId(null);
 
     try {
@@ -224,6 +260,9 @@ export function InspectorPage(): JSX.Element {
     setEventDetail(null);
     setEventError(null);
     setEventState("idle");
+    setRedactionLogs([]);
+    setRedactionError(null);
+    setRedactionState("idle");
     setSelectedEventId(null);
 
     try {
@@ -258,6 +297,7 @@ export function InspectorPage(): JSX.Element {
   function reset(): void {
     loadTokenRef.current += 1;
     eventTokenRef.current += 1;
+    redactionTokenRef.current += 1;
 
     setRunId("");
     setCorrelationId("");
@@ -272,6 +312,9 @@ export function InspectorPage(): JSX.Element {
     setError(null);
     setEventState("idle");
     setEventError(null);
+    setRedactionLogs([]);
+    setRedactionState("idle");
+    setRedactionError(null);
     setSearchParams({});
   }
 
@@ -702,6 +745,58 @@ export function InspectorPage(): JSX.Element {
               <div className="detailSection">
                 <div className="detailSectionTitle">{t("inspector.fields.display")}</div>
                 <JsonView value={eventDetail.display} />
+              </div>
+              <div className="detailSection">
+                <div className="detailSectionTitle">
+                  {t("inspector.section.redactions", { count: redactionLogs.length })}
+                </div>
+                {redactionState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+                {redactionState === "error" && redactionError ? (
+                  <div className="errorBox">{t("error.load_failed", { code: redactionError })}</div>
+                ) : null}
+                {redactionState === "idle" && redactionLogs.length === 0 ? (
+                  <div className="placeholder">{t("inspector.empty.redactions")}</div>
+                ) : null}
+                {redactionLogs.length ? (
+                  <ul className="compactList">
+                    {redactionLogs.map((row) => (
+                      <li key={row.redaction_log_id} className="compactRow">
+                        <div className="compactTop">
+                          <div>{t(`inspector.redaction.action.${row.action}`)}</div>
+                          <div className="muted">{formatTimestamp(row.created_at)}</div>
+                        </div>
+                        <div className="compactMeta">
+                          <span className="mono">{row.rule_id}</span>
+                          <span className="mono">{`${row.stream_type}:${row.stream_id}`}</span>
+                          <span className="mono">{row.detector_version}</span>
+                        </div>
+                        <details className="eventDetails">
+                          <summary className="eventSummary">{t("inspector.details")}</summary>
+                          <div className="detailSection">
+                            <div className="detailSectionTitle">{t("inspector.fields.redaction_action")}</div>
+                            <div>{t(`inspector.redaction.action.${row.action}`)}</div>
+                          </div>
+                          <div className="detailSection">
+                            <div className="detailSectionTitle">{t("inspector.fields.rule_id")}</div>
+                            <div className="mono">{row.rule_id}</div>
+                          </div>
+                          <div className="detailSection">
+                            <div className="detailSectionTitle">{t("inspector.fields.match_preview")}</div>
+                            <div className="mono">{row.match_preview || "-"}</div>
+                          </div>
+                          <div className="detailSection">
+                            <div className="detailSectionTitle">{t("inspector.fields.detector_version")}</div>
+                            <div className="mono">{row.detector_version}</div>
+                          </div>
+                          <div className="detailSection">
+                            <div className="detailSectionTitle">{t("inspector.fields.data")}</div>
+                            <JsonView value={row.details} />
+                          </div>
+                        </details>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             </>
           ) : null}
