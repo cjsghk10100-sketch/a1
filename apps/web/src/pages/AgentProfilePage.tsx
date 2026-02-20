@@ -47,6 +47,8 @@ import { ensureLegacyPrincipal } from "../api/principals";
 import { JsonView } from "../components/JsonView";
 import type { ActionRegistryRow } from "../api/actionRegistry";
 import { listActionRegistry } from "../api/actionRegistry";
+import type { EventRow } from "../api/events";
+import { listEvents } from "../api/events";
 
 type TabKey = "permissions" | "growth";
 
@@ -279,6 +281,86 @@ function unionScopes(tokens: CapabilityTokenRow[]): ScopeSummary {
 const agentStorageKey = "agentapp.agent_id";
 const operatorStorageKey = "agentapp.operator_actor_id";
 
+const agentChangeEventTypes = [
+  "agent.capability.granted",
+  "agent.capability.revoked",
+  "agent.trust.increased",
+  "agent.trust.decreased",
+  "autonomy.upgrade.recommended",
+  "autonomy.upgrade.approved",
+  "agent.quarantined",
+  "agent.unquarantined",
+  "constraint.learned",
+  "mistake.repeated",
+  "daily.agent.snapshot",
+] as const;
+
+function asObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function shortId(value: unknown): string {
+  const v = readString(value);
+  if (!v) return "-";
+  if (v.length <= 18) return v;
+  return `${v.slice(0, 8)}…${v.slice(-6)}`;
+}
+
+function summarizeAgentChangeEvent(event: EventRow): string {
+  const data = asObject(event.data);
+  if (event.event_type === "agent.trust.increased" || event.event_type === "agent.trust.decreased") {
+    const prev = readNumber(data.previous_score);
+    const next = readNumber(data.trust_score);
+    if (prev != null && next != null) return `${prev.toFixed(3)} -> ${next.toFixed(3)}`;
+  }
+  if (event.event_type === "agent.capability.granted") {
+    const token = shortId(data.token_id);
+    return `#${token}`;
+  }
+  if (event.event_type === "agent.capability.revoked") {
+    const token = shortId(data.token_id);
+    const reason = readString(data.reason);
+    return reason ? `#${token} (${reason})` : `#${token}`;
+  }
+  if (event.event_type === "autonomy.upgrade.recommended") {
+    return shortId(data.recommendation_id);
+  }
+  if (event.event_type === "autonomy.upgrade.approved") {
+    return `${shortId(data.recommendation_id)} / ${shortId(data.token_id)}`;
+  }
+  if (event.event_type === "agent.quarantined") {
+    const reason = readString(data.quarantine_reason);
+    return reason ? reason : "-";
+  }
+  if (event.event_type === "agent.unquarantined") {
+    const reason = readString(data.previous_quarantine_reason);
+    return reason ? reason : "-";
+  }
+  if (event.event_type === "constraint.learned" || event.event_type === "mistake.repeated") {
+    const reasonCode = readString(data.reason_code) ?? "-";
+    const repeat = readNumber(data.repeat_count);
+    return repeat != null ? `${reasonCode} (x${repeat})` : reasonCode;
+  }
+  if (event.event_type === "daily.agent.snapshot") {
+    const date = readString(data.snapshot_date) ?? "-";
+    const trust = readNumber(data.trust_score);
+    if (trust != null) return `${date} / ${trust.toFixed(3)}`;
+    return date;
+  }
+  return "-";
+}
+
 export function AgentProfilePage(): JSX.Element {
   const { t } = useTranslation();
 
@@ -356,6 +438,10 @@ export function AgentProfilePage(): JSX.Element {
   const [mistakesError, setMistakesError] = useState<string | null>(null);
   const [mistakesLoading, setMistakesLoading] = useState<boolean>(false);
 
+  const [changeEvents, setChangeEvents] = useState<EventRow[]>([]);
+  const [changeEventsError, setChangeEventsError] = useState<string | null>(null);
+  const [changeEventsLoading, setChangeEventsLoading] = useState<boolean>(false);
+
   const [skillPackages, setSkillPackages] = useState<SkillPackageRecordV1[]>([]);
   const [skillPackagesError, setSkillPackagesError] = useState<string | null>(null);
   const [skillPackagesLoading, setSkillPackagesLoading] = useState<boolean>(false);
@@ -404,6 +490,37 @@ export function AgentProfilePage(): JSX.Element {
   }, [skillImportResult]);
   const delegationSummary = useMemo(() => delegationDepthSummary(tokens), [tokens]);
   const delegationRows = useMemo(() => delegationGraphRows(tokens).slice(0, 40), [tokens]);
+  const agentTokenIds = useMemo(() => new Set(tokens.map((tok) => tok.token_id)), [tokens]);
+  const relevantChangeEvents = useMemo(() => {
+    const nextAgentId = agentId.trim();
+    if (!nextAgentId) return [];
+
+    const nextPrincipalId = principalId?.trim() ?? null;
+    return changeEvents
+      .filter((event) => {
+        const data = asObject(event.data);
+        const eventAgentId = readString(data.agent_id);
+        if (eventAgentId && eventAgentId === nextAgentId) return true;
+
+        if (nextPrincipalId) {
+          if (readString(data.principal_id) === nextPrincipalId) return true;
+          if (readString(data.issued_to_principal_id) === nextPrincipalId) return true;
+        }
+
+        const tokenId = readString(data.token_id);
+        if (tokenId && agentTokenIds.has(tokenId)) return true;
+        return false;
+      })
+      .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+  }, [changeEvents, agentId, principalId, agentTokenIds]);
+  const changeTimelineRows = useMemo(
+    () =>
+      relevantChangeEvents.slice(0, 20).map((event) => ({
+        ...event,
+        summary: summarizeAgentChangeEvent(event),
+      })),
+    [relevantChangeEvents],
+  );
   const scopedActionRegistryRows = useMemo(() => {
     if (!scopeUnion.actions.length || !actionRegistryRows.length) return [];
     const registryByType = new Map<string, ActionRegistryRow>();
@@ -784,6 +901,9 @@ export function AgentProfilePage(): JSX.Element {
     setSnapshotsError(null);
     setConstraintsError(null);
     setMistakesError(null);
+    setChangeEvents([]);
+    setChangeEventsError(null);
+    setChangeEventsLoading(false);
     setApprovalRecommendationData(null);
     setApprovalRecommendationError(null);
     setApprovalRecommendationLoading(false);
@@ -803,6 +923,7 @@ export function AgentProfilePage(): JSX.Element {
       setSnapshotsLoading(false);
       setConstraintsLoading(false);
       setMistakesLoading(false);
+      setChangeEventsLoading(false);
       setTokensLoading(false);
       setApprovalRecommendationLoading(false);
       return;
@@ -960,6 +1081,30 @@ export function AgentProfilePage(): JSX.Element {
     }
   }
 
+  async function reloadChangeEvents(nextAgentId?: string): Promise<void> {
+    const agent_id = (nextAgentId ?? agentId).trim();
+    if (!agent_id) {
+      setChangeEvents([]);
+      setChangeEventsError(null);
+      setChangeEventsLoading(false);
+      return;
+    }
+
+    setChangeEventsLoading(true);
+    setChangeEventsError(null);
+    try {
+      const rows = await listEvents({
+        event_types: [...agentChangeEventTypes],
+        limit: 300,
+      });
+      setChangeEvents(rows);
+    } catch (e) {
+      setChangeEventsError(toErrorCode(e));
+    } finally {
+      setChangeEventsLoading(false);
+    }
+  }
+
   async function ensureOperatorPrincipalId(): Promise<string> {
     const actor_id = operatorActorId.trim() || "anon";
     const principal = await ensureLegacyPrincipal({ actor_type: "user", actor_id });
@@ -1097,6 +1242,11 @@ export function AgentProfilePage(): JSX.Element {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    void reloadChangeEvents(agentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
 
   const agentOptions = useMemo(() => {
     return agents.map((a) => ({
@@ -2493,6 +2643,63 @@ export function AgentProfilePage(): JSX.Element {
             <details className="advancedDetails">
               <summary className="advancedSummary">{t("common.advanced")}</summary>
               <JsonView value={{ constraints, mistakes }} />
+            </details>
+          </div>
+
+          <div className="detailCard" style={{ gridColumn: "1 / -1" }}>
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.section.change_timeline")}</div>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => {
+                  void reloadChangeEvents();
+                }}
+                disabled={changeEventsLoading || !agentId.trim()}
+              >
+                {t("common.refresh")}
+              </button>
+            </div>
+
+            {changeEventsError ? <div className="errorBox">{t("error.load_failed", { code: changeEventsError })}</div> : null}
+            {changeEventsLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {!changeEventsLoading && !changeEventsError && changeTimelineRows.length === 0 ? (
+              <div className="placeholder">{t("agent_profile.change_timeline.empty")}</div>
+            ) : null}
+
+            {changeTimelineRows.length ? (
+              <ul className="constraintList">
+                {changeTimelineRows.map((event) => (
+                  <li key={event.event_id} className="constraintRow">
+                    <div className="constraintTop">
+                      <span className="mono">
+                        {t(`agent_profile.change_timeline.type.${event.event_type}`, {
+                          defaultValue: event.event_type,
+                        })}
+                      </span>
+                      <span className="muted">{formatTimestamp(event.occurred_at)}</span>
+                    </div>
+                    <div className="muted">
+                      <span className="mono">
+                        {t("agent_profile.change_timeline.actor")}: {event.actor_type}/{event.actor_id}
+                      </span>
+                      <span className="muted"> · </span>
+                      <span className="mono">
+                        {t("agent_profile.change_timeline.zone")}: {event.zone}
+                      </span>
+                      <span className="muted"> · </span>
+                      <span className="mono">
+                        {t("agent_profile.change_timeline.summary")}: {event.summary}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            <details className="advancedDetails">
+              <summary className="advancedSummary">{t("common.advanced")}</summary>
+              <JsonView value={{ change_events: relevantChangeEvents }} />
             </details>
           </div>
         </div>

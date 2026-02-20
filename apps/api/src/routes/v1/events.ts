@@ -42,6 +42,27 @@ function normalizeId(raw: unknown): string | null {
   return v.length ? v : null;
 }
 
+function normalizeEventTypes(raw: unknown): string[] {
+  const input = Array.isArray(raw) ? raw : [raw];
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of input) {
+    if (typeof item !== "string") continue;
+    const parts = item.split(",");
+    for (const part of parts) {
+      const v = part.trim();
+      if (!v) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+      if (out.length >= 20) return out;
+    }
+  }
+
+  return out;
+}
+
 export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.get<{
     Querystring: {
@@ -56,6 +77,7 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
       step_id?: string;
       correlation_id?: string;
       event_type?: string;
+      event_types?: string | string[];
 
       before_recorded_at?: string;
     };
@@ -115,9 +137,16 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
     }
 
     const event_type = normalizeId(req.query.event_type);
-    if (event_type) {
+    const event_types = normalizeEventTypes(req.query.event_types);
+    if (event_type && event_types.length === 0) {
       args.push(event_type);
       where += ` AND event_type = $${args.length}`;
+    } else if (event_types.length > 0) {
+      if (event_type && !event_types.includes(event_type)) {
+        event_types.push(event_type);
+      }
+      args.push(event_types);
+      where += ` AND event_type = ANY($${args.length}::text[])`;
     }
 
     if (before_recorded_at) {

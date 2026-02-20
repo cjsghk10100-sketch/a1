@@ -179,6 +179,27 @@ async function main(): Promise<void> {
     assert.equal(stepCreated.correlation_id, created.correlation_id);
     assert.equal(stepCreated.causation_id, started.event_id);
 
+    const multiTypeEvents = await getJson<{
+      events: Array<{
+        event_id: string;
+        event_type: string;
+      }>;
+    }>(
+      baseUrl,
+      `/v1/events?run_id=${encodeURIComponent(run_id)}&event_types=${encodeURIComponent("run.created,step.created")}`,
+      workspaceHeader,
+    );
+
+    assert.equal(multiTypeEvents.events.length >= 2, true);
+    assert.equal(
+      multiTypeEvents.events.every(
+        (e) => e.event_type === "run.created" || e.event_type === "step.created",
+      ),
+      true,
+    );
+    assert.ok(multiTypeEvents.events.some((e) => e.event_type === "run.created"));
+    assert.ok(multiTypeEvents.events.some((e) => e.event_type === "step.created"));
+
     // Correlation query should include the same chain.
     const corrEvents = await getJson<{
       events: Array<{ event_id: string; event_type: string; correlation_id: string }>;
@@ -211,4 +232,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-

@@ -14,6 +14,8 @@ export interface EventRow {
 
   actor_type: string;
   actor_id: string;
+  actor_principal_id: string | null;
+  zone: string;
 
   run_id: string | null;
   step_id: string | null;
@@ -48,6 +50,7 @@ export async function listEvents(params: {
   step_id?: string;
   correlation_id?: string;
   event_type?: string;
+  event_types?: string[];
   before_recorded_at?: string;
   limit?: number;
 }): Promise<EventRow[]> {
@@ -61,6 +64,9 @@ export async function listEvents(params: {
   if (params.step_id) qs.set("step_id", params.step_id);
   if (params.correlation_id) qs.set("correlation_id", params.correlation_id);
   if (params.event_type) qs.set("event_type", params.event_type);
+  if (params.event_types && params.event_types.length > 0) {
+    qs.set("event_types", params.event_types.join(","));
+  }
   if (params.before_recorded_at) qs.set("before_recorded_at", params.before_recorded_at);
   if (params.limit) qs.set("limit", String(params.limit));
   const url = `/v1/events${qs.size ? `?${qs.toString()}` : ""}`;
