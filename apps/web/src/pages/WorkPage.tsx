@@ -844,6 +844,8 @@ export function WorkPage(): JSX.Element {
   }, [stepsRunId]);
 
   useEffect(() => {
+    if (stepsState === "loading") return;
+
     if (!steps.length) {
       if (toolCallsStepId) setToolCallsStepId("");
       return;
@@ -857,9 +859,11 @@ export function WorkPage(): JSX.Element {
     const preferred = run_id ? loadToolCallsStepId(run_id).trim() : "";
     const next = preferred && steps.some((s) => s.step_id === preferred) ? preferred : steps[0]?.step_id ?? "";
     if (next && next !== toolCallsStepId) setToolCallsStepId(next);
-  }, [steps, stepsRunId, toolCallsStepId]);
+  }, [steps, stepsState, stepsRunId, toolCallsStepId]);
 
   useEffect(() => {
+    if (stepsState === "loading") return;
+
     if (!steps.length) {
       if (artifactsStepId) setArtifactsStepId("");
       return;
@@ -873,7 +877,7 @@ export function WorkPage(): JSX.Element {
     const preferred = run_id ? loadArtifactsStepId(run_id).trim() : "";
     const next = preferred && steps.some((s) => s.step_id === preferred) ? preferred : steps[0]?.step_id ?? "";
     if (next && next !== artifactsStepId) setArtifactsStepId(next);
-  }, [steps, stepsRunId, artifactsStepId]);
+  }, [steps, stepsState, stepsRunId, artifactsStepId]);
 
   useEffect(() => {
     setToolCalls([]);
