@@ -79,6 +79,24 @@ async function postJson<T>(
   return JSON.parse(text) as T;
 }
 
+async function getJson<T>(
+  baseUrl: string,
+  urlPath: string,
+  headers?: Record<string, string>,
+): Promise<T> {
+  const res = await fetch(`${baseUrl}${urlPath}`, {
+    method: "GET",
+    headers: {
+      ...(headers ?? {}),
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`GET ${urlPath} failed: ${res.status} ${text}`);
+  }
+  return JSON.parse(text) as T;
+}
+
 async function main(): Promise<void> {
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
@@ -160,6 +178,25 @@ async function main(): Promise<void> {
       // When the previous event has a hash, the next should link to it.
       assert.equal(cur.prev_event_hash, prev.event_hash);
     }
+
+    const verify = await getJson<{
+      stream_type: string;
+      stream_id: string;
+      checked: number;
+      valid: boolean;
+      first_mismatch: unknown | null;
+      last_event_hash: string | null;
+    }>(
+      baseUrl,
+      `/v1/audit/hash-chain/verify?stream_type=room&stream_id=${encodeURIComponent(room_id)}&limit=100`,
+      workspaceHeader,
+    );
+    assert.equal(verify.stream_type, "room");
+    assert.equal(verify.stream_id, room_id);
+    assert.ok(verify.checked >= 3);
+    assert.equal(verify.valid, true);
+    assert.equal(verify.first_mismatch, null);
+    assert.ok(typeof verify.last_event_hash === "string" && verify.last_event_hash.length > 0);
   } finally {
     await db.end();
     await app.close();
