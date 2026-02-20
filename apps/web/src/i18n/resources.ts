@@ -329,6 +329,7 @@ export const resources = {
       "agent_profile.section.snapshots": "Daily snapshots",
       "agent_profile.section.skills": "Skills",
       "agent_profile.section.constraints": "Constraints",
+      "agent_profile.section.action_registry": "Action registry",
 
       "agent_profile.autonomy.operator_actor_id": "Operator (actor_id)",
       "agent_profile.autonomy.operator_actor_id_placeholder": "e.g. anon",
@@ -428,6 +429,11 @@ export const resources = {
       "agent_profile.growth.kpi.skills_none": "No new skills",
       "agent_profile.growth.kpi.mistakes_present": "Repeated mistakes",
       "agent_profile.growth.kpi.mistakes_clear": "No repeated mistakes",
+      "agent_profile.action_registry.action": "Action",
+      "agent_profile.action_registry.reversible": "Reversible",
+      "agent_profile.action_registry.zone_required": "Zone",
+      "agent_profile.action_registry.pre_approval": "Pre-approval",
+      "agent_profile.action_registry.post_review": "Post-review",
 
       "agent_profile.snapshots_empty": "No snapshots yet. Run the daily snapshot job.",
       "agent_profile.snapshot.date": "Date",
@@ -800,6 +806,7 @@ export const resources = {
       "agent_profile.section.snapshots": "일일 스냅샷",
       "agent_profile.section.skills": "스킬",
       "agent_profile.section.constraints": "제약/실수",
+      "agent_profile.section.action_registry": "액션 레지스트리",
 
       "agent_profile.autonomy.operator_actor_id": "운영자(actor_id)",
       "agent_profile.autonomy.operator_actor_id_placeholder": "예: anon",
@@ -899,6 +906,11 @@ export const resources = {
       "agent_profile.growth.kpi.skills_none": "신규 스킬 없음",
       "agent_profile.growth.kpi.mistakes_present": "반복 실수 존재",
       "agent_profile.growth.kpi.mistakes_clear": "반복 실수 없음",
+      "agent_profile.action_registry.action": "액션",
+      "agent_profile.action_registry.reversible": "복구 가능",
+      "agent_profile.action_registry.zone_required": "존",
+      "agent_profile.action_registry.pre_approval": "사전 승인",
+      "agent_profile.action_registry.post_review": "사후 검토",
 
       "agent_profile.snapshots_empty": "스냅샷이 없습니다. 일일 스냅샷 잡을 실행하세요.",
       "agent_profile.snapshot.date": "날짜",

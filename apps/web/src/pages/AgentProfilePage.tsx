@@ -39,6 +39,8 @@ import { listSkillPackages, quarantineSkillPackage, verifySkillPackage } from ".
 import { ApiError } from "../api/http";
 import { ensureLegacyPrincipal } from "../api/principals";
 import { JsonView } from "../components/JsonView";
+import type { ActionRegistryRow } from "../api/actionRegistry";
+import { listActionRegistry } from "../api/actionRegistry";
 
 type TabKey = "permissions" | "growth";
 
@@ -329,6 +331,9 @@ export function AgentProfilePage(): JSX.Element {
     useState<string>("manual_quarantine");
   const [skillPackagesActionId, setSkillPackagesActionId] = useState<string | null>(null);
   const [skillPackagesActionError, setSkillPackagesActionError] = useState<string | null>(null);
+  const [actionRegistryRows, setActionRegistryRows] = useState<ActionRegistryRow[]>([]);
+  const [actionRegistryLoading, setActionRegistryLoading] = useState<boolean>(false);
+  const [actionRegistryError, setActionRegistryError] = useState<string | null>(null);
 
   const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
   const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
@@ -717,6 +722,29 @@ export function AgentProfilePage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    setActionRegistryLoading(true);
+    setActionRegistryError(null);
+
+    void (async () => {
+      try {
+        const rows = await listActionRegistry();
+        if (cancelled) return;
+        setActionRegistryRows(rows);
+      } catch (e) {
+        if (cancelled) return;
+        setActionRegistryError(toErrorCode(e));
+      } finally {
+        if (!cancelled) setActionRegistryLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const agentOptions = useMemo(() => {
     return agents.map((a) => ({
       value: a.agent_id,
@@ -959,6 +987,73 @@ export function AgentProfilePage(): JSX.Element {
             <details className="advancedDetails">
               <summary className="advancedSummary">{t("common.advanced")}</summary>
               <JsonView value={{ tokens }} />
+            </details>
+          </div>
+
+          <div className="detailCard">
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.section.action_registry")}</div>
+              <button
+                type="button"
+                className="ghostButton"
+                disabled={actionRegistryLoading}
+                onClick={() => {
+                  void (async () => {
+                    setActionRegistryLoading(true);
+                    setActionRegistryError(null);
+                    try {
+                      const rows = await listActionRegistry();
+                      setActionRegistryRows(rows);
+                    } catch (e) {
+                      setActionRegistryError(toErrorCode(e));
+                    } finally {
+                      setActionRegistryLoading(false);
+                    }
+                  })();
+                }}
+              >
+                {t("common.refresh")}
+              </button>
+            </div>
+
+            {actionRegistryError ? (
+              <div className="errorBox">{t("error.load_failed", { code: actionRegistryError })}</div>
+            ) : null}
+            {actionRegistryLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {!actionRegistryLoading && !actionRegistryError && actionRegistryRows.length === 0 ? (
+              <div className="placeholder">{t("common.not_available")}</div>
+            ) : null}
+
+            {actionRegistryRows.length ? (
+              <div className="tableWrap">
+                <table className="dataTable">
+                  <thead>
+                    <tr>
+                      <th>{t("agent_profile.action_registry.action")}</th>
+                      <th>{t("agent_profile.action_registry.reversible")}</th>
+                      <th>{t("agent_profile.action_registry.zone_required")}</th>
+                      <th>{t("agent_profile.action_registry.pre_approval")}</th>
+                      <th>{t("agent_profile.action_registry.post_review")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {actionRegistryRows.slice(0, 30).map((row) => (
+                      <tr key={row.action_type}>
+                        <td className="mono">{row.action_type}</td>
+                        <td className="mono">{row.reversible ? t("common.yes") : t("common.no")}</td>
+                        <td className="mono">{row.zone_required}</td>
+                        <td className="mono">{row.requires_pre_approval ? t("common.yes") : t("common.no")}</td>
+                        <td className="mono">{row.post_review_required ? t("common.yes") : t("common.no")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            <details className="advancedDetails">
+              <summary className="advancedSummary">{t("common.advanced")}</summary>
+              <JsonView value={{ actions: actionRegistryRows }} />
             </details>
           </div>
 
