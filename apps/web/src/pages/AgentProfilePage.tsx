@@ -11,8 +11,12 @@ import type {
 } from "@agentapp/shared";
 
 import type {
+  AgentApprovalRecommendationRow,
+  AgentApprovalRecommendationTargetRow,
   AgentSkillRow,
   AgentTrustRow,
+  ApprovalRecommendationBasisCode,
+  ApprovalRecommendationTarget,
   CapabilityTokenRow,
   ConstraintLearnedRow,
   DailyAgentSnapshotRow,
@@ -22,6 +26,7 @@ import type {
 import {
   approveAutonomyUpgrade,
   getAgent,
+  getAgentApprovalRecommendation,
   getAgentTrust,
   importAgentSkills,
   listAgentSkills,
@@ -364,6 +369,11 @@ export function AgentProfilePage(): JSX.Element {
   const [actionRegistryRows, setActionRegistryRows] = useState<ActionRegistryRow[]>([]);
   const [actionRegistryLoading, setActionRegistryLoading] = useState<boolean>(false);
   const [actionRegistryError, setActionRegistryError] = useState<string | null>(null);
+  const [approvalRecommendationData, setApprovalRecommendationData] = useState<AgentApprovalRecommendationRow | null>(
+    null,
+  );
+  const [approvalRecommendationLoading, setApprovalRecommendationLoading] = useState<boolean>(false);
+  const [approvalRecommendationError, setApprovalRecommendationError] = useState<string | null>(null);
 
   const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
   const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
@@ -498,7 +508,7 @@ export function AgentProfilePage(): JSX.Element {
     ] as Array<{ key: string; label: string; state: ZoneState }>;
   }, [scopeUnion, actionPolicyFlags.highStakes, actionPolicyFlags.supervised, isQuarantined, t]);
 
-  const approvalRecommendations = useMemo(() => {
+  const localApprovalRecommendations = useMemo(() => {
     const trustScore = trust?.trust_score ?? 0;
     const hasWriteScope = scopeUnion.dataWrite.length > 0 || scopeUnion.actions.some((a) => isWriteAction(a));
     const hasExternalScope = scopeUnion.egress.length > 0;
@@ -649,6 +659,55 @@ export function AgentProfilePage(): JSX.Element {
     ] as Array<{ key: string; label: string; mode: ApprovalMode; basis: string }>;
   }, [scopeUnion, actionPolicyFlags, trust, isQuarantined, latestSnapshot, t]);
 
+  const apiApprovalRecommendations = useMemo(() => {
+    if (!approvalRecommendationData) return null;
+
+    const toLabel = (target: ApprovalRecommendationTarget): string => {
+      if (target === "internal_write") return t("agent_profile.approval.target.internal_write");
+      if (target === "external_write") return t("agent_profile.approval.target.external_write");
+      return t("agent_profile.approval.target.high_stakes");
+    };
+
+    const toBasisText = (basisCodes: ApprovalRecommendationBasisCode[]): string => {
+      if (!basisCodes.length) return t("agent_profile.approval.basis.default");
+      const unique = [...new Set(basisCodes)];
+      return unique
+        .map((code) => t(`agent_profile.approval.basis.${code}`))
+        .join(" · ");
+    };
+
+    const byTarget = new Map<ApprovalRecommendationTarget, AgentApprovalRecommendationTargetRow>();
+    for (const target of approvalRecommendationData.targets ?? []) {
+      byTarget.set(target.target, target);
+    }
+
+    const orderedTargets: ApprovalRecommendationTarget[] = [
+      "internal_write",
+      "external_write",
+      "high_stakes",
+    ];
+
+    return orderedTargets.map((target) => {
+      const row = byTarget.get(target);
+      if (!row) {
+        return {
+          key: target,
+          label: toLabel(target),
+          mode: "blocked" as ApprovalMode,
+          basis: t("agent_profile.approval.basis.no_scope"),
+        };
+      }
+      return {
+        key: target,
+        label: toLabel(target),
+        mode: row.mode as ApprovalMode,
+        basis: toBasisText(row.basis_codes ?? []),
+      };
+    });
+  }, [approvalRecommendationData, t]);
+
+  const approvalRecommendations = apiApprovalRecommendations ?? localApprovalRecommendations;
+
   const trustDelta7d = useMemo(() => {
     if (!latestSnapshot || !baselineSnapshot) return null;
     return latestSnapshot.trust_score - baselineSnapshot.trust_score;
@@ -724,6 +783,9 @@ export function AgentProfilePage(): JSX.Element {
     setSnapshotsError(null);
     setConstraintsError(null);
     setMistakesError(null);
+    setApprovalRecommendationData(null);
+    setApprovalRecommendationError(null);
+    setApprovalRecommendationLoading(false);
 
     setAutonomyRecommendation(null);
     setAutonomyRecommendationId("");
@@ -741,6 +803,7 @@ export function AgentProfilePage(): JSX.Element {
       setConstraintsLoading(false);
       setMistakesLoading(false);
       setTokensLoading(false);
+      setApprovalRecommendationLoading(false);
       return;
     }
     let cancelled = false;
@@ -765,32 +828,45 @@ export function AgentProfilePage(): JSX.Element {
     setSnapshotsLoading(true);
     setConstraintsLoading(true);
     setMistakesLoading(true);
+    setApprovalRecommendationLoading(true);
 
     void (async () => {
       try {
-        const [trustRes, skillsRes, snapshotsRes, constraintsRes, mistakesRes] = await Promise.all([
-          getAgentTrust(agentId),
-          listAgentSkills({ agent_id: agentId, limit: 50 }),
-          listAgentSnapshots({ agent_id: agentId, days: 30 }),
-          listConstraintLearnedEvents({ agent_id: agentId, limit: 200 }),
-          listMistakeRepeatedEvents({ agent_id: agentId, limit: 200 }),
+        const [coreResult, recommendationResult] = await Promise.allSettled([
+          Promise.all([
+            getAgentTrust(agentId),
+            listAgentSkills({ agent_id: agentId, limit: 50 }),
+            listAgentSnapshots({ agent_id: agentId, days: 30 }),
+            listConstraintLearnedEvents({ agent_id: agentId, limit: 200 }),
+            listMistakeRepeatedEvents({ agent_id: agentId, limit: 200 }),
+          ]),
+          getAgentApprovalRecommendation(agentId),
         ]);
 
         if (cancelled) return;
-        setTrust(trustRes);
-        setSkills(skillsRes);
-        setSnapshots(snapshotsRes);
-        setConstraints(constraintsRes);
-        setMistakes(mistakesRes);
-      } catch (e) {
-        if (cancelled) return;
-        const code = toErrorCode(e);
-        // We load these in parallel; if any fails, show the code in each section.
-        setTrustError(code);
-        setSkillsError(code);
-        setSnapshotsError(code);
-        setConstraintsError(code);
-        setMistakesError(code);
+
+        if (coreResult.status === "fulfilled") {
+          const [trustRes, skillsRes, snapshotsRes, constraintsRes, mistakesRes] = coreResult.value;
+          setTrust(trustRes);
+          setSkills(skillsRes);
+          setSnapshots(snapshotsRes);
+          setConstraints(constraintsRes);
+          setMistakes(mistakesRes);
+        } else {
+          const code = toErrorCode(coreResult.reason);
+          setTrustError(code);
+          setSkillsError(code);
+          setSnapshotsError(code);
+          setConstraintsError(code);
+          setMistakesError(code);
+        }
+
+        if (recommendationResult.status === "fulfilled") {
+          setApprovalRecommendationData(recommendationResult.value);
+          setApprovalRecommendationError(null);
+        } else {
+          setApprovalRecommendationError(toErrorCode(recommendationResult.reason));
+        }
       } finally {
         if (cancelled) return;
         setTrustLoading(false);
@@ -798,6 +874,7 @@ export function AgentProfilePage(): JSX.Element {
         setSnapshotsLoading(false);
         setConstraintsLoading(false);
         setMistakesLoading(false);
+        setApprovalRecommendationLoading(false);
       }
     })();
 
@@ -1173,6 +1250,10 @@ export function AgentProfilePage(): JSX.Element {
                 </div>
 
                 <div className="detailSectionTitle">{t("agent_profile.approval_recommendation")}</div>
+                {approvalRecommendationLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+                {approvalRecommendationError ? (
+                  <div className="muted">{t("error.load_failed", { code: approvalRecommendationError })}</div>
+                ) : null}
                 <div className="permissionMatrix">
                   {approvalRecommendations.map((row) => (
                     <div key={row.key} className="permissionRow">

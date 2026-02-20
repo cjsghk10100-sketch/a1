@@ -116,6 +116,71 @@ export async function getAgentTrust(agent_id: string): Promise<AgentTrustRow> {
   return res.trust;
 }
 
+export type ApprovalRecommendationMode = "auto" | "post" | "pre" | "blocked";
+export type ApprovalRecommendationTarget = "internal_write" | "external_write" | "high_stakes";
+export type ApprovalRecommendationBasisCode =
+  | "default"
+  | "no_scope"
+  | "quarantine"
+  | "pre_required"
+  | "post_required"
+  | "irreversible"
+  | "high_stakes"
+  | "high_trust"
+  | "repeated_mistakes"
+  | "low_autonomy"
+  | "high_cost"
+  | "medium_cost"
+  | "hard_recovery";
+
+export interface AgentApprovalRecommendationTargetRow {
+  target: ApprovalRecommendationTarget;
+  mode: ApprovalRecommendationMode;
+  basis_codes: ApprovalRecommendationBasisCode[];
+}
+
+export interface AgentApprovalRecommendationContext {
+  trust_score: number;
+  repeated_mistakes_7d: number;
+  autonomy_rate_7d: number | null;
+  is_quarantined: boolean;
+  scope_union: {
+    rooms: string[];
+    tools: string[];
+    data_read: string[];
+    data_write: string[];
+    egress: string[];
+    actions: string[];
+  };
+  action_policy_flags: {
+    highStakes: number;
+    supervised: number;
+    sandbox: number;
+    preRequired: boolean;
+    postRequired: boolean;
+    irreversible: boolean;
+    reversible: number;
+    highCost: number;
+    mediumCost: number;
+    hardRecovery: number;
+    moderateRecovery: number;
+  };
+}
+
+export interface AgentApprovalRecommendationRow {
+  workspace_id: string;
+  agent_id: string;
+  targets: AgentApprovalRecommendationTargetRow[];
+  context: AgentApprovalRecommendationContext;
+}
+
+export async function getAgentApprovalRecommendation(agent_id: string): Promise<AgentApprovalRecommendationRow> {
+  const res = await apiGet<{ recommendation: AgentApprovalRecommendationRow }>(
+    `/v1/agents/${encodeURIComponent(agent_id)}/approval-recommendation`,
+  );
+  return res.recommendation;
+}
+
 export async function recommendAutonomyUpgrade(
   agent_id: string,
   payload: AutonomyRecommendRequestV1,
