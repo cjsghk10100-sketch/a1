@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   PolicyDecision,
+  type CapabilityScopesV1,
   type PolicyCheckInputV1,
   type PolicyCheckResultV1,
   type Zone,
@@ -37,6 +38,225 @@ interface NegativeDecisionMeta {
   event_id: string;
   correlation_id: string;
   occurred_at: string;
+}
+
+interface CapabilityTokenRow {
+  token_id: string;
+  issued_to_principal_id: string;
+  scopes: CapabilityScopesV1 | null;
+  valid_until: string | null;
+  revoked_at: string | null;
+}
+
+function normalizeAction(action: string): string {
+  const a = action.trim();
+  if (a === "external_write") return "external.write";
+  if (a === "data_read") return "data.read";
+  if (a === "data_write") return "data.write";
+  return a;
+}
+
+function normalizeScopeList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const out = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const v = value.trim();
+    if (!v) continue;
+    out.add(v);
+  }
+  return [...out];
+}
+
+function normalizeString(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  return value.length ? value : null;
+}
+
+function normalizeRecord(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null;
+  return raw as Record<string, unknown>;
+}
+
+function listAllowsValue(values: string[], candidates: string[]): boolean {
+  if (!values.length) return false;
+  const set = new Set(values);
+  if (set.has("*")) return true;
+  for (const candidate of candidates) {
+    if (set.has(candidate)) return true;
+  }
+  return false;
+}
+
+function domainAllowed(patterns: string[], rawDomain: string): boolean {
+  const domain = rawDomain.trim().toLowerCase();
+  if (!domain) return false;
+  for (const patternRaw of patterns) {
+    const pattern = patternRaw.trim().toLowerCase();
+    if (!pattern) continue;
+    if (pattern === "*") return true;
+    if (pattern.startsWith("*.")) {
+      const suffix = pattern.slice(2);
+      if (domain === suffix || domain.endsWith(`.${suffix}`)) return true;
+      continue;
+    }
+    if (domain === pattern) return true;
+  }
+  return false;
+}
+
+function dataAccessCandidates(input: AuthorizeInputV2): string[] {
+  const out = new Set<string>();
+  if (input.room_id?.trim()) out.add(`room:${input.room_id.trim()}`);
+
+  const context = normalizeRecord(input.context);
+  const dataAccess = normalizeRecord(context?.data_access);
+  const resourceType = normalizeString(dataAccess?.resource_type);
+  const resourceId = normalizeString(dataAccess?.resource_id);
+
+  if (resourceType) {
+    out.add(resourceType);
+    out.add(`resource_type:${resourceType}`);
+  }
+  if (resourceType && resourceId) out.add(`resource:${resourceType}:${resourceId}`);
+
+  return [...out];
+}
+
+function buildTokenDenied(reason_code: string, reason: string): PolicyCheckResultV1 {
+  return {
+    decision: PolicyDecision.Deny,
+    reason_code,
+    reason,
+  };
+}
+
+async function evaluateCapabilityToken(
+  pool: DbPool,
+  category: AuthorizeCategory,
+  input: AuthorizeInputV2,
+): Promise<PolicyCheckResultV1 | null> {
+  const capability_token_id = input.capability_token_id?.trim();
+  if (!capability_token_id) return null;
+
+  const tokenRes = await pool.query<CapabilityTokenRow>(
+    `SELECT
+       token_id,
+       issued_to_principal_id,
+       scopes,
+       valid_until,
+       revoked_at
+     FROM sec_capability_tokens
+     WHERE workspace_id = $1
+       AND token_id = $2
+     LIMIT 1`,
+    [input.workspace_id, capability_token_id],
+  );
+  if (tokenRes.rowCount !== 1) {
+    return buildTokenDenied("capability_token_not_found", "Capability token was not found.");
+  }
+
+  const token = tokenRes.rows[0];
+  if (token.revoked_at) {
+    return buildTokenDenied("capability_token_revoked", "Capability token has been revoked.");
+  }
+  if (token.valid_until && new Date(token.valid_until).getTime() <= Date.now()) {
+    return buildTokenDenied("capability_token_expired", "Capability token has expired.");
+  }
+
+  const principal_id = input.principal_id?.trim();
+  if (principal_id && token.issued_to_principal_id !== principal_id) {
+    return buildTokenDenied(
+      "capability_token_principal_mismatch",
+      "Capability token does not belong to the provided principal.",
+    );
+  }
+
+  const scopes = token.scopes ?? {};
+  const room_id = input.room_id?.trim();
+  if (room_id) {
+    const roomScopes = normalizeScopeList(scopes.rooms);
+    if (!roomScopes.length) {
+      return buildTokenDenied(
+        "capability_scope_room_required",
+        "Capability token is missing room scope for this request.",
+      );
+    }
+    if (!listAllowsValue(roomScopes, [room_id])) {
+      return buildTokenDenied(
+        "capability_scope_room_not_allowed",
+        `Capability token does not allow room '${room_id}'.`,
+      );
+    }
+  }
+
+  if (category === "action" || category === "egress") {
+    const actionScopes = normalizeScopeList(scopes.action_types);
+    if (!actionScopes.length) {
+      return buildTokenDenied(
+        "capability_scope_action_type_required",
+        "Capability token is missing action_types scope for this request.",
+      );
+    }
+    const action = normalizeAction(input.action);
+    if (!listAllowsValue(actionScopes, [action, input.action.trim()])) {
+      return buildTokenDenied(
+        "capability_scope_action_not_allowed",
+        `Capability token does not allow action '${action}'.`,
+      );
+    }
+  }
+
+  if (category === "data_access") {
+    const action = normalizeAction(input.action);
+    const dataAccessScopes =
+      action === "data.write"
+        ? normalizeScopeList(scopes.data_access?.write)
+        : action === "data.read"
+          ? normalizeScopeList(scopes.data_access?.read)
+          : [];
+    if (!dataAccessScopes.length) {
+      return buildTokenDenied(
+        "capability_scope_data_access_required",
+        "Capability token is missing data_access scope for this request.",
+      );
+    }
+    if (!listAllowsValue(dataAccessScopes, dataAccessCandidates(input))) {
+      return buildTokenDenied(
+        "capability_scope_data_access_not_allowed",
+        "Capability token does not allow this data access target.",
+      );
+    }
+  }
+
+  if (category === "egress") {
+    const egressDomains = normalizeScopeList(scopes.egress_domains);
+    if (!egressDomains.length) {
+      return buildTokenDenied(
+        "capability_scope_egress_domain_required",
+        "Capability token is missing egress_domains scope for this request.",
+      );
+    }
+    const context = normalizeRecord(input.context);
+    const egressContext = normalizeRecord(context?.egress);
+    const targetDomain =
+      normalizeString(egressContext?.target_domain) ?? normalizeString(context?.target_domain);
+    if (!targetDomain) {
+      return buildTokenDenied(
+        "capability_scope_context_missing_egress_domain",
+        "Egress target domain is required for capability scope enforcement.",
+      );
+    }
+    if (!domainAllowed(egressDomains, targetDomain)) {
+      return buildTokenDenied(
+        "capability_scope_domain_not_allowed",
+        `Capability token does not allow egress domain '${targetDomain}'.`,
+      );
+    }
+  }
+
+  return null;
 }
 
 async function isQuarantinedAgentPrincipal(
@@ -177,33 +397,39 @@ async function authorizeCore(
   category: AuthorizeCategory,
   input: AuthorizeInputV2,
 ): Promise<AuthorizeResultV2> {
+  const capabilityDecision = await evaluateCapabilityToken(pool, category, input);
   const quarantined =
-    category === "egress" ? await isQuarantinedAgentPrincipal(pool, input.principal_id) : null;
+    category === "egress" && !capabilityDecision
+      ? await isQuarantinedAgentPrincipal(pool, input.principal_id)
+      : null;
   const quotaDecision =
-    category === "egress"
+    category === "egress" && !capabilityDecision
       ? await checkEgressQuota(pool, input.workspace_id, input.actor, input.principal_id)
       : null;
 
-  const policyBase = quarantined
-    ? {
-        decision: PolicyDecision.Deny,
-        reason_code: "agent_quarantined",
-        reason: quarantined.quarantine_reason
-          ? `Agent is quarantined: ${quarantined.quarantine_reason}`
-          : "Agent is quarantined.",
-      }
-    : await evaluatePolicyDbV1(pool, {
-        action: input.action,
-        actor: input.actor,
-        workspace_id: input.workspace_id,
-        room_id: input.room_id,
-        thread_id: input.thread_id,
-        run_id: input.run_id,
-        step_id: input.step_id,
-        context: input.context,
-      });
+  const policyBase =
+    capabilityDecision ??
+    (quarantined
+      ? {
+          decision: PolicyDecision.Deny,
+          reason_code: "agent_quarantined",
+          reason: quarantined.quarantine_reason
+            ? `Agent is quarantined: ${quarantined.quarantine_reason}`
+            : "Agent is quarantined.",
+        }
+      : await evaluatePolicyDbV1(pool, {
+          action: input.action,
+          actor: input.actor,
+          workspace_id: input.workspace_id,
+          room_id: input.room_id,
+          thread_id: input.thread_id,
+          run_id: input.run_id,
+          step_id: input.step_id,
+          context: input.context,
+        }));
 
   const base =
+    !capabilityDecision &&
     !quarantined &&
     quotaDecision &&
     policyBase.decision !== PolicyDecision.Deny

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
-import type { ActorType, PolicyCheckResultV1 } from "@agentapp/shared";
+import type { ActorType, PolicyCheckResultV1, Zone } from "@agentapp/shared";
 
 import type { DbPool } from "../../db/pool.js";
 import { authorize_action } from "../../policy/authorize.js";
@@ -19,6 +19,17 @@ function normalizeActorType(raw: unknown): ActorType {
   return raw === "service" ? "service" : "user";
 }
 
+function normalizeOptionalString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const v = raw.trim();
+  return v.length ? v : undefined;
+}
+
+function normalizeZone(raw: unknown): Zone | undefined {
+  if (raw === "sandbox" || raw === "supervised" || raw === "high_stakes") return raw;
+  return undefined;
+}
+
 export async function registerPolicyRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.post<{
     Body: {
@@ -30,6 +41,9 @@ export async function registerPolicyRoutes(app: FastifyInstance, pool: DbPool): 
       run_id?: string;
       step_id?: string;
       context?: Record<string, unknown>;
+      principal_id?: string;
+      capability_token_id?: string;
+      zone?: Zone;
     };
   }>("/v1/policy/evaluate", async (req): Promise<PolicyCheckResultV1> => {
     const workspace_id = workspaceIdFromReq(req);
@@ -47,6 +61,9 @@ export async function registerPolicyRoutes(app: FastifyInstance, pool: DbPool): 
       run_id: req.body.run_id,
       step_id: req.body.step_id,
       context: req.body.context,
+      principal_id: normalizeOptionalString(req.body.principal_id),
+      capability_token_id: normalizeOptionalString(req.body.capability_token_id),
+      zone: normalizeZone(req.body.zone),
     });
 
     if (result.reason) {

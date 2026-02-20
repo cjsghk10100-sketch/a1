@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -128,6 +129,68 @@ async function main(): Promise<void> {
       { title: "Egress Contract Room", room_mode: "default", default_lang: "en" },
       workspaceHeader,
     );
+
+    const scopedPrincipalId = randomUUID();
+    const scopedGrantorId = randomUUID();
+    await db.query(
+      `INSERT INTO sec_principals (principal_id, principal_type)
+       VALUES ($1, 'agent'), ($2, 'user')`,
+      [scopedPrincipalId, scopedGrantorId],
+    );
+
+    const scopedToken = await postJson<{ token_id: string }>(
+      baseUrl,
+      "/v1/capabilities/grant",
+      {
+        issued_to_principal_id: scopedPrincipalId,
+        granted_by_principal_id: scopedGrantorId,
+        scopes: {
+          rooms: [room_id],
+          action_types: ["internal.read"],
+          egress_domains: ["example.com"],
+        },
+      },
+      workspaceHeader,
+    );
+
+    const scopedAllowed = await postJson<{
+      egress_request_id: string;
+      decision: string;
+      reason_code: string;
+    }>(
+      baseUrl,
+      "/v1/egress/requests",
+      {
+        action: "internal.read",
+        target_url: "https://example.com/scoped",
+        method: "GET",
+        room_id,
+        principal_id: scopedPrincipalId,
+        capability_token_id: scopedToken.token_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(scopedAllowed.decision, "allow");
+
+    const scopedDeniedDomain = await postJson<{
+      egress_request_id: string;
+      decision: string;
+      reason_code: string;
+    }>(
+      baseUrl,
+      "/v1/egress/requests",
+      {
+        action: "internal.read",
+        target_url: "https://not-allowed.example.net/blocked",
+        method: "GET",
+        room_id,
+        principal_id: scopedPrincipalId,
+        capability_token_id: scopedToken.token_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(scopedDeniedDomain.decision, "deny");
+    assert.equal(scopedDeniedDomain.reason_code, "capability_scope_domain_not_allowed");
 
     const allowed = await postJson<{
       egress_request_id: string;

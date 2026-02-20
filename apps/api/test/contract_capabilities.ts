@@ -164,6 +164,21 @@ async function main(): Promise<void> {
     );
     assert.ok(list.tokens.some((t) => t.token_id === grant.token_id));
 
+    const principalMismatch = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "internal.read",
+        actor_type: "user",
+        actor_id: "tester",
+        principal_id: randomUUID(),
+        capability_token_id: grant.token_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(principalMismatch.decision, "deny");
+    assert.equal(principalMismatch.reason_code, "capability_token_principal_mismatch");
+
     const revoke = await postJson<{ ok: boolean }>(
       baseUrl,
       "/v1/capabilities/revoke",
@@ -171,6 +186,21 @@ async function main(): Promise<void> {
       workspaceHeader,
     );
     assert.equal(revoke.ok, true);
+
+    const revokedDecision = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "internal.read",
+        actor_type: "user",
+        actor_id: "tester",
+        principal_id: issued_to_principal_id,
+        capability_token_id: grant.token_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(revokedDecision.decision, "deny");
+    assert.equal(revokedDecision.reason_code, "capability_token_revoked");
 
     const revoked = await db.query<{ revoked_at: string | null }>(
       "SELECT revoked_at FROM sec_capability_tokens WHERE token_id = $1",
@@ -184,6 +214,36 @@ async function main(): Promise<void> {
       [grant.token_id],
     );
     assert.ok((revokedEvent.rowCount ?? 0) >= 1);
+
+    const expiredTokenId = randomUUID();
+    await db.query(
+      `INSERT INTO sec_capability_tokens (
+         token_id, workspace_id, issued_to_principal_id, granted_by_principal_id, scopes, valid_until
+       ) VALUES ($1,$2,$3,$4,$5::jsonb,$6)`,
+      [
+        expiredTokenId,
+        workspaceHeader["x-workspace-id"],
+        issued_to_principal_id,
+        granted_by_principal_id,
+        JSON.stringify({ action_types: ["internal.read"] }),
+        new Date(Date.now() - 30_000).toISOString(),
+      ],
+    );
+
+    const expiredDecision = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "internal.read",
+        actor_type: "user",
+        actor_id: "tester",
+        principal_id: issued_to_principal_id,
+        capability_token_id: expiredTokenId,
+      },
+      workspaceHeader,
+    );
+    assert.equal(expiredDecision.decision, "deny");
+    assert.equal(expiredDecision.reason_code, "capability_token_expired");
   } finally {
     await db.end();
     await app.close();

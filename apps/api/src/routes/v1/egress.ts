@@ -140,6 +140,7 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
     const run_id = normalizeOptionalString(req.body.run_id);
     const step_id = normalizeOptionalString(req.body.step_id);
     const principal_id = normalizeOptionalString(req.body.principal_id);
+    const capability_token_id = normalizeOptionalString(req.body.capability_token_id);
     const zone = normalizeZone(req.body.zone);
 
     const actor_type = normalizeActorType(req.body.actor_type);
@@ -152,6 +153,14 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
     const stream = room_id
       ? { stream_type: "room" as const, stream_id: room_id }
       : { stream_type: "workspace" as const, stream_id: workspace_id };
+    const policy_context: Record<string, unknown> = {
+      ...(req.body.context ?? {}),
+      egress: {
+        target_url: target.target_url,
+        target_domain: target.target_domain,
+        method,
+      },
+    };
 
     await appendToStream(pool, {
       event_id: randomUUID(),
@@ -173,6 +182,7 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
         method,
         target_url: target.target_url,
         target_domain: target.target_domain,
+        capability_token_id,
       },
       policy_context: {},
       model_context: {},
@@ -186,8 +196,9 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
       room_id,
       run_id,
       step_id,
-      context: req.body.context,
+      context: policy_context,
       principal_id,
+      capability_token_id,
       zone,
     });
 
@@ -286,8 +297,9 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
         blocked: policy.blocked,
         enforcement_mode: policy.enforcement_mode,
         approval_id,
+        capability_token_id,
       },
-      policy_context: req.body.context ?? {},
+      policy_context,
       model_context: {},
       display: {},
     });
@@ -314,8 +326,9 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
           target_domain: target.target_domain,
           reason_code: policy.reason_code,
           reason: policy.reason,
+          capability_token_id,
         },
-        policy_context: req.body.context ?? {},
+        policy_context,
         model_context: {},
         display: {},
       });

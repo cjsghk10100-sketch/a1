@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -241,6 +242,61 @@ async function main(): Promise<void> {
       ["ws_contract", a.room_id, "mem_test_1"],
     );
     assert.equal(justifiedEvent.rowCount, 1);
+
+    const principal_id = randomUUID();
+    const grantor_id = randomUUID();
+    await db.query(
+      `INSERT INTO sec_principals (principal_id, principal_type)
+       VALUES ($1, 'agent'), ($2, 'user')`,
+      [principal_id, grantor_id],
+    );
+
+    const scopedToken = await postJson<{ token_id: string }>(
+      baseUrl,
+      "/v1/capabilities/grant",
+      {
+        issued_to_principal_id: principal_id,
+        granted_by_principal_id: grantor_id,
+        scopes: {
+          rooms: [a.room_id],
+          data_access: {
+            read: ["resource_type:artifact"],
+          },
+        },
+      },
+      workspaceHeader,
+    );
+
+    const scopedAllow = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/data/access/requests",
+      {
+        action: "data.read",
+        resource_type: "artifact",
+        resource_id: "art_scoped_1",
+        room_id: a.room_id,
+        principal_id,
+        capability_token_id: scopedToken.token_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(scopedAllow.decision, "allow");
+
+    const scopedDeny = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/data/access/requests",
+      {
+        action: "data.read",
+        resource_type: "memory",
+        resource_id: "mem_scoped_1",
+        room_id: a.room_id,
+        principal_id,
+        capability_token_id: scopedToken.token_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(scopedDeny.decision, "deny");
+    assert.equal(scopedDeny.reason_code, "capability_scope_data_access_not_allowed");
   } finally {
     await db.end();
     await app.close();

@@ -11,6 +11,7 @@ export interface EgressRequestCreateV1 {
   actor_type?: ActorType;
   actor_id?: string;
   principal_id?: string;
+  capability_token_id?: string;
   zone?: Zone;
   context?: Record<string, unknown>;
   correlation_id?: string;
@@ -50,4 +51,3 @@ export interface EgressRequestRecordV1 {
   correlation_id: string;
   created_at: string;
 }
-
