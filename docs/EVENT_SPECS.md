@@ -88,6 +88,7 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `incident.rca.updated` (v1)
 - `incident.learning.logged` (v1)
 - `incident.closed` (v1)
+- `survival.ledger.rolled_up` (v1)
 
 ## Planned Event Families (vNext)
 

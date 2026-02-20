@@ -14,5 +14,6 @@ export * from "./secrets.js";
 export * from "./snapshots.js";
 export * from "./skills_ledger.js";
 export * from "./skills_supply_chain.js";
+export * from "./survival.js";
 export * from "./tools.js";
 export * from "./trust.js";
