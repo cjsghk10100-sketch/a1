@@ -771,13 +771,28 @@ export function WorkPage(): JSX.Element {
   useEffect(() => {
     sendRequestRef.current += 1;
     setSendState("idle");
-    saveThreadId(roomId, threadId);
+    const room = roomId.trim();
+    const thread = threadId.trim();
+    const belongsToRoom = thread
+      ? threads.some((trow) => trow.thread_id === thread && trow.room_id === room)
+      : false;
+
+    if (room && !thread) {
+      saveThreadId(room, "");
+    }
+
+    if (room && thread && belongsToRoom) {
+      saveThreadId(room, thread);
+    }
+
     setMessages([]);
     setMessagesError(null);
     setSendError(null);
-    void reloadMessages(threadId);
+    if (thread && belongsToRoom) {
+      void reloadMessages(thread);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
+  }, [threadId, roomId, threads]);
 
   useEffect(() => {
     if (!runs.length) {
