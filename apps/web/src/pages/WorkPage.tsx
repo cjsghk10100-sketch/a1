@@ -660,12 +660,38 @@ export function WorkPage(): JSX.Element {
   }, [roomId, stepsRunId, runs]);
 
   useEffect(() => {
-    saveToolCallsStepId(stepsRunId, toolCallsStepId);
-  }, [stepsRunId, toolCallsStepId]);
+    const run = stepsRunId.trim();
+    if (!run) return;
+
+    const step = toolCallsStepId.trim();
+    if (!step) {
+      saveToolCallsStepId(run, "");
+      return;
+    }
+
+    // Persist only if this step belongs to the currently selected run.
+    const belongsToRun = steps.some((s) => s.step_id === step && s.run_id === run);
+    if (!belongsToRun) return;
+
+    saveToolCallsStepId(run, step);
+  }, [stepsRunId, toolCallsStepId, steps]);
 
   useEffect(() => {
-    saveArtifactsStepId(stepsRunId, artifactsStepId);
-  }, [stepsRunId, artifactsStepId]);
+    const run = stepsRunId.trim();
+    if (!run) return;
+
+    const step = artifactsStepId.trim();
+    if (!step) {
+      saveArtifactsStepId(run, "");
+      return;
+    }
+
+    // Persist only if this step belongs to the currently selected run.
+    const belongsToRun = steps.some((s) => s.step_id === step && s.run_id === run);
+    if (!belongsToRun) return;
+
+    saveArtifactsStepId(run, step);
+  }, [stepsRunId, artifactsStepId, steps]);
 
   useEffect(() => {
     localStorage.setItem(roomStorageKey, roomId);
