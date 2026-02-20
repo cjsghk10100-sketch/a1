@@ -852,6 +852,51 @@ body {
   background: rgba(73, 211, 255, 0.08);
 }
 
+.permissionMatrix {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.permissionRow {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.permissionLabel {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.permissionMeta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.zoneRing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.zoneChip {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
 @media (max-width: 720px) {
   .appHeader {
     flex-wrap: wrap;

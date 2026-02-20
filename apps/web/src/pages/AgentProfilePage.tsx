@@ -60,6 +60,19 @@ function formatPct01(value: number): string {
   return `${pct}%`;
 }
 
+function formatSigned(value: number, digits = 3): string {
+  if (!Number.isFinite(value)) return "0";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(digits)}`;
+}
+
+function formatSignedPct01(value: number): string {
+  if (!Number.isFinite(value)) return "0.0pp";
+  const pct = value * 100;
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(1)}pp`;
+}
+
 function isTokenActive(token: CapabilityTokenRow): boolean {
   if (token.revoked_at) return false;
   if (token.valid_until) {
@@ -73,6 +86,74 @@ function skillPackageStatusPill(status: SkillVerificationStatus): string {
   if (status === "verified") return "statusPill statusApproved";
   if (status === "quarantined") return "statusPill statusDenied";
   return "statusPill statusHeld";
+}
+
+type PermissionState = "allowed" | "limited" | "blocked";
+type ZoneState = "active" | "limited" | "blocked";
+type TrendState = "up" | "down" | "flat";
+
+function statePillClass(state: PermissionState | ZoneState | TrendState): string {
+  if (state === "allowed" || state === "active" || state === "up") return "statusPill statusApproved";
+  if (state === "limited" || state === "flat") return "statusPill statusHeld";
+  return "statusPill statusDenied";
+}
+
+function isWriteAction(action: string): boolean {
+  const v = action.toLowerCase();
+  return (
+    v.includes("write") ||
+    v.includes("create") ||
+    v.includes("update") ||
+    v.includes("delete") ||
+    v.includes("mutating")
+  );
+}
+
+function isHighStakesAction(action: string): boolean {
+  const v = action.toLowerCase();
+  return (
+    v.includes("high_stakes") ||
+    v.includes("payment") ||
+    v.includes("wallet") ||
+    v.includes("transfer") ||
+    v.includes("email.send") ||
+    v.includes("delete") ||
+    v.includes("mutating")
+  );
+}
+
+function delegationDepthSummary(tokens: CapabilityTokenRow[]): {
+  maxDepth: number;
+  rootTokens: number;
+  delegatedTokens: number;
+} {
+  const byId = new Map<string, CapabilityTokenRow>();
+  for (const tok of tokens) byId.set(tok.token_id, tok);
+
+  let maxDepth = 0;
+  let rootTokens = 0;
+  let delegatedTokens = 0;
+
+  for (const tok of tokens) {
+    if (!tok.parent_token_id) {
+      rootTokens += 1;
+      continue;
+    }
+    delegatedTokens += 1;
+    let depth = 0;
+    let current: CapabilityTokenRow | undefined = tok;
+    const seen = new Set<string>();
+    while (current?.parent_token_id) {
+      if (seen.has(current.token_id)) break;
+      seen.add(current.token_id);
+      depth += 1;
+      current = byId.get(current.parent_token_id);
+      if (!current) break;
+    }
+    if (depth > maxDepth) maxDepth = depth;
+  }
+
+  return { maxDepth, rootTokens, delegatedTokens };
 }
 
 type ScopeSummary = {
@@ -221,6 +302,11 @@ export function AgentProfilePage(): JSX.Element {
   const primarySkill = useMemo(() => skills.find((s) => s.is_primary) ?? null, [skills]);
   const topSkills = useMemo(() => skills.slice(0, 6), [skills]);
   const latestSnapshot = useMemo(() => (snapshots.length ? snapshots[0] : null), [snapshots]);
+  const baselineSnapshot = useMemo(() => {
+    if (!snapshots.length) return null;
+    const idx = Math.min(6, snapshots.length - 1);
+    return snapshots[idx] ?? null;
+  }, [snapshots]);
   const snapshotRowsForTable = useMemo(() => snapshots.slice(0, 14), [snapshots]);
   const pendingImportPackageIds = useMemo(() => {
     if (!skillImportResult) return [];
@@ -228,6 +314,82 @@ export function AgentProfilePage(): JSX.Element {
       .filter((it) => it.status === "pending")
       .map((it) => it.skill_package_id);
   }, [skillImportResult]);
+  const delegationSummary = useMemo(() => delegationDepthSummary(tokens), [tokens]);
+
+  const permissionMatrix = useMemo(() => {
+    const readScopeCount = scopeUnion.rooms.length + scopeUnion.dataRead.length;
+    const writeActionCount = scopeUnion.actions.filter((a) => isWriteAction(a)).length;
+    const highStakesCount = scopeUnion.actions.filter((a) => isHighStakesAction(a)).length;
+    const writeScopeCount = scopeUnion.dataWrite.length + writeActionCount;
+    const externalScopeCount = scopeUnion.egress.length;
+
+    const readState: PermissionState = readScopeCount > 0 ? "allowed" : "blocked";
+    const writeState: PermissionState =
+      writeScopeCount > 0 ? (isQuarantined ? "limited" : "allowed") : "blocked";
+    const externalState: PermissionState =
+      externalScopeCount > 0 ? (isQuarantined ? "blocked" : "allowed") : "blocked";
+    const highStakesState: PermissionState =
+      highStakesCount > 0 ? (isQuarantined ? "blocked" : "allowed") : "blocked";
+
+    return [
+      { key: "read", label: t("agent_profile.permission.read"), scopeCount: readScopeCount, state: readState },
+      { key: "write", label: t("agent_profile.permission.write"), scopeCount: writeScopeCount, state: writeState },
+      {
+        key: "external",
+        label: t("agent_profile.permission.external"),
+        scopeCount: externalScopeCount,
+        state: externalState,
+      },
+      {
+        key: "high_stakes",
+        label: t("agent_profile.permission.high_stakes"),
+        scopeCount: highStakesCount,
+        state: highStakesState,
+      },
+    ] as Array<{ key: string; label: string; scopeCount: number; state: PermissionState }>;
+  }, [scopeUnion, isQuarantined, t]);
+
+  const zoneRing = useMemo(() => {
+    const writeActionCount = scopeUnion.actions.filter((a) => isWriteAction(a)).length;
+    const highStakesCount = scopeUnion.actions.filter((a) => isHighStakesAction(a)).length;
+    const hasSupervisedScope = scopeUnion.dataWrite.length + writeActionCount + scopeUnion.egress.length > 0;
+    const hasHighStakesScope = highStakesCount > 0;
+
+    const sandboxState: ZoneState = "active";
+    const supervisedState: ZoneState = hasSupervisedScope
+      ? isQuarantined
+        ? "limited"
+        : "active"
+      : "blocked";
+    const highStakesState: ZoneState = hasHighStakesScope
+      ? isQuarantined
+        ? "blocked"
+        : "active"
+      : "blocked";
+
+    return [
+      { key: "sandbox", label: t("agent_profile.zone.sandbox"), state: sandboxState },
+      { key: "supervised", label: t("agent_profile.zone.supervised"), state: supervisedState },
+      { key: "high_stakes", label: t("agent_profile.zone.high_stakes"), state: highStakesState },
+    ] as Array<{ key: string; label: string; state: ZoneState }>;
+  }, [scopeUnion, isQuarantined, t]);
+
+  const trustDelta7d = useMemo(() => {
+    if (!latestSnapshot || !baselineSnapshot) return null;
+    return latestSnapshot.trust_score - baselineSnapshot.trust_score;
+  }, [latestSnapshot, baselineSnapshot]);
+  const autonomyDelta7d = useMemo(() => {
+    if (!latestSnapshot || !baselineSnapshot) return null;
+    return latestSnapshot.autonomy_rate_7d - baselineSnapshot.autonomy_rate_7d;
+  }, [latestSnapshot, baselineSnapshot]);
+  const trustTrend: TrendState = useMemo(() => {
+    if (trustDelta7d == null || Math.abs(trustDelta7d) < 0.0001) return "flat";
+    return trustDelta7d > 0 ? "up" : "down";
+  }, [trustDelta7d]);
+  const autonomyTrend: TrendState = useMemo(() => {
+    if (autonomyDelta7d == null || Math.abs(autonomyDelta7d) < 0.0001) return "flat";
+    return autonomyDelta7d > 0 ? "up" : "down";
+  }, [autonomyDelta7d]);
 
   useEffect(() => {
     let cancelled = false;
@@ -678,6 +840,33 @@ export function AgentProfilePage(): JSX.Element {
               </div>
             ) : null}
 
+            {tokens.length ? (
+              <div className="detailSection">
+                <div className="detailSectionTitle">{t("agent_profile.permissions_matrix")}</div>
+                <div className="permissionMatrix">
+                  {permissionMatrix.map((row) => (
+                    <div key={row.key} className="permissionRow">
+                      <div className="permissionLabel">{row.label}</div>
+                      <div className="permissionMeta mono">
+                        {t("agent_profile.scope_count", { count: row.scopeCount })}
+                      </div>
+                      <span className={statePillClass(row.state)}>{t(`agent_profile.permission.state.${row.state}`)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="detailSectionTitle">{t("agent_profile.zone_ring")}</div>
+                <div className="zoneRing">
+                  {zoneRing.map((zone) => (
+                    <div key={zone.key} className="zoneChip">
+                      <span className="mono">{zone.label}</span>
+                      <span className={statePillClass(zone.state)}>{t(`agent_profile.zone.state.${zone.state}`)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <details className="advancedDetails">
               <summary className="advancedSummary">{t("common.advanced")}</summary>
               <JsonView value={{ tokens }} />
@@ -871,40 +1060,53 @@ export function AgentProfilePage(): JSX.Element {
             {!tokens.length ? <div className="placeholder">{t("agent_profile.tokens_empty")}</div> : null}
 
             {tokens.length ? (
-              <ul className="agentChainList">
-                {tokens.slice(0, 20).map((tok) => (
-                  <li key={tok.token_id} className="agentChainRow">
-                    <div className="agentChainTop">
-                      <span className="mono">{tok.token_id}</span>
-                      <span className={isTokenActive(tok) ? "statusPill statusApproved" : "statusPill statusHeld"}>
-                        {isTokenActive(tok) ? t("agent_profile.token.active") : t("agent_profile.token.inactive")}
-                      </span>
-                    </div>
-                    <div className="agentChainMeta muted">
-                      {tok.parent_token_id ? (
-                        <span className="mono">
-                          {t("agent_profile.token.parent")}: {tok.parent_token_id}
+              <>
+                <div className="kvGrid" style={{ marginBottom: 10 }}>
+                  <div className="kvKey">{t("agent_profile.delegation.max_depth")}</div>
+                  <div className="kvVal mono">{delegationSummary.maxDepth}</div>
+
+                  <div className="kvKey">{t("agent_profile.delegation.root_tokens")}</div>
+                  <div className="kvVal mono">{delegationSummary.rootTokens}</div>
+
+                  <div className="kvKey">{t("agent_profile.delegation.delegated_tokens")}</div>
+                  <div className="kvVal mono">{delegationSummary.delegatedTokens}</div>
+                </div>
+
+                <ul className="agentChainList">
+                  {tokens.slice(0, 20).map((tok) => (
+                    <li key={tok.token_id} className="agentChainRow">
+                      <div className="agentChainTop">
+                        <span className="mono">{tok.token_id}</span>
+                        <span className={isTokenActive(tok) ? "statusPill statusApproved" : "statusPill statusHeld"}>
+                          {isTokenActive(tok) ? t("agent_profile.token.active") : t("agent_profile.token.inactive")}
                         </span>
-              ) : (
-                <span className="muted">{t("agent_profile.token.no_parent")}</span>
-              )}
-              <span className="muted">
-                {t("agent_profile.token.created")}: {formatTimestamp(tok.created_at)}
-              </span>
-                      {tok.valid_until ? (
+                      </div>
+                      <div className="agentChainMeta muted">
+                        {tok.parent_token_id ? (
+                          <span className="mono">
+                            {t("agent_profile.token.parent")}: {tok.parent_token_id}
+                          </span>
+                        ) : (
+                          <span className="muted">{t("agent_profile.token.no_parent")}</span>
+                        )}
                         <span className="muted">
-                          {t("agent_profile.token.valid_until")}: {formatTimestamp(tok.valid_until)}
+                          {t("agent_profile.token.created")}: {formatTimestamp(tok.created_at)}
                         </span>
-                      ) : null}
-                      {tok.revoked_at ? (
-                        <span className="muted">
-                          {t("agent_profile.token.revoked_at")}: {formatTimestamp(tok.revoked_at)}
-                        </span>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+                        {tok.valid_until ? (
+                          <span className="muted">
+                            {t("agent_profile.token.valid_until")}: {formatTimestamp(tok.valid_until)}
+                          </span>
+                        ) : null}
+                        {tok.revoked_at ? (
+                          <span className="muted">
+                            {t("agent_profile.token.revoked_at")}: {formatTimestamp(tok.revoked_at)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
             ) : null}
           </div>
 
@@ -1428,6 +1630,22 @@ export function AgentProfilePage(): JSX.Element {
 
                 <div className="kvKey">{t("agent_profile.time_in_service_days")}</div>
                 <div className="kvVal mono">{trust.time_in_service_days}</div>
+
+                <div className="kvKey">{t("agent_profile.growth.delta_trust_7d")}</div>
+                <div className="kvVal">
+                  <span className="mono">{trustDelta7d == null ? "—" : formatSigned(trustDelta7d)}</span>
+                  <span className={statePillClass(trustTrend)} style={{ marginLeft: 8 }}>
+                    {t(`agent_profile.growth.trend.${trustTrend}`)}
+                  </span>
+                </div>
+
+                <div className="kvKey">{t("agent_profile.growth.delta_autonomy_7d")}</div>
+                <div className="kvVal">
+                  <span className="mono">{autonomyDelta7d == null ? "—" : formatSignedPct01(autonomyDelta7d)}</span>
+                  <span className={statePillClass(autonomyTrend)} style={{ marginLeft: 8 }}>
+                    {t(`agent_profile.growth.trend.${autonomyTrend}`)}
+                  </span>
+                </div>
               </div>
             ) : null}
 
