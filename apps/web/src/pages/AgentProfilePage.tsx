@@ -83,6 +83,26 @@ function formatSignedPct01(value: number): string {
   return `${sign}${pct.toFixed(1)}pp`;
 }
 
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const total = values.reduce((acc, value) => acc + value, 0);
+  if (!Number.isFinite(total)) return null;
+  return total / values.length;
+}
+
+function growthRate(current: number | null, previous: number | null): number | null {
+  if (current == null || previous == null) return null;
+  if (Math.abs(previous) < 1e-9) return null;
+  return (current - previous) / Math.abs(previous);
+}
+
+function formatSignedPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0.0%";
+  const pct = value * 100;
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
 function isTokenActive(token: CapabilityTokenRow): boolean {
   if (token.revoked_at) return false;
   if (token.valid_until) {
@@ -842,6 +862,26 @@ export function AgentProfilePage(): JSX.Element {
     if (autonomyDelta7d == null || Math.abs(autonomyDelta7d) < 0.0001) return "flat";
     return autonomyDelta7d > 0 ? "up" : "down";
   }, [autonomyDelta7d]);
+  const trustGrowthPct = useMemo(() => {
+    if (snapshots.length < 14) return null;
+    const currentAvg = average(snapshots.slice(0, 7).map((s) => s.trust_score));
+    const previousAvg = average(snapshots.slice(7, 14).map((s) => s.trust_score));
+    return growthRate(currentAvg, previousAvg);
+  }, [snapshots]);
+  const autonomyGrowthPct = useMemo(() => {
+    if (snapshots.length < 14) return null;
+    const currentAvg = average(snapshots.slice(0, 7).map((s) => s.autonomy_rate_7d));
+    const previousAvg = average(snapshots.slice(7, 14).map((s) => s.autonomy_rate_7d));
+    return growthRate(currentAvg, previousAvg);
+  }, [snapshots]);
+  const trustGrowthTrend: TrendState = useMemo(() => {
+    if (trustGrowthPct == null || Math.abs(trustGrowthPct) < 0.0001) return "flat";
+    return trustGrowthPct > 0 ? "up" : "down";
+  }, [trustGrowthPct]);
+  const autonomyGrowthTrend: TrendState = useMemo(() => {
+    if (autonomyGrowthPct == null || Math.abs(autonomyGrowthPct) < 0.0001) return "flat";
+    return autonomyGrowthPct > 0 ? "up" : "down";
+  }, [autonomyGrowthPct]);
   const latestNewSkills7d = latestSnapshot?.new_skills_learned_7d ?? 0;
   const latestRepeatedMistakes7d = latestSnapshot?.repeated_mistakes_7d ?? 0;
 
@@ -2395,6 +2435,22 @@ export function AgentProfilePage(): JSX.Element {
               </div>
 
               <div className="kpiCard">
+                <div className="kpiLabel">{t("agent_profile.growth.trust_growth_pct_7d")}</div>
+                <div className="kpiValue mono">{trustGrowthPct == null ? "—" : formatSignedPercent(trustGrowthPct)}</div>
+                <div className="kpiSub">
+                  <span className={statePillClass(trustGrowthTrend)}>{t(`agent_profile.growth.trend.${trustGrowthTrend}`)}</span>
+                </div>
+              </div>
+
+              <div className="kpiCard">
+                <div className="kpiLabel">{t("agent_profile.growth.autonomy_growth_pct_7d")}</div>
+                <div className="kpiValue mono">{autonomyGrowthPct == null ? "—" : formatSignedPercent(autonomyGrowthPct)}</div>
+                <div className="kpiSub">
+                  <span className={statePillClass(autonomyGrowthTrend)}>{t(`agent_profile.growth.trend.${autonomyGrowthTrend}`)}</span>
+                </div>
+              </div>
+
+              <div className="kpiCard">
                 <div className="kpiLabel">{t("agent_profile.new_skills_learned_7d")}</div>
                 <div className="kpiValue mono">{latestSnapshot ? latestNewSkills7d : "—"}</div>
                 <div className="kpiSub">
@@ -2457,6 +2513,22 @@ export function AgentProfilePage(): JSX.Element {
                   <span className="mono">{autonomyDelta7d == null ? "—" : formatSignedPct01(autonomyDelta7d)}</span>
                   <span className={statePillClass(autonomyTrend)} style={{ marginLeft: 8 }}>
                     {t(`agent_profile.growth.trend.${autonomyTrend}`)}
+                  </span>
+                </div>
+
+                <div className="kvKey">{t("agent_profile.growth.trust_growth_pct_7d")}</div>
+                <div className="kvVal">
+                  <span className="mono">{trustGrowthPct == null ? "—" : formatSignedPercent(trustGrowthPct)}</span>
+                  <span className={statePillClass(trustGrowthTrend)} style={{ marginLeft: 8 }}>
+                    {t(`agent_profile.growth.trend.${trustGrowthTrend}`)}
+                  </span>
+                </div>
+
+                <div className="kvKey">{t("agent_profile.growth.autonomy_growth_pct_7d")}</div>
+                <div className="kvVal">
+                  <span className="mono">{autonomyGrowthPct == null ? "—" : formatSignedPercent(autonomyGrowthPct)}</span>
+                  <span className={statePillClass(autonomyGrowthTrend)} style={{ marginLeft: 8 }}>
+                    {t(`agent_profile.growth.trend.${autonomyGrowthTrend}`)}
                   </span>
                 </div>
               </div>
