@@ -94,6 +94,8 @@ type PermissionState = "allowed" | "limited" | "blocked";
 type ZoneState = "active" | "limited" | "blocked";
 type TrendState = "up" | "down" | "flat";
 type ApprovalMode = "auto" | "post" | "pre" | "blocked";
+type CostImpact = "low" | "medium" | "high";
+type RecoveryDifficulty = "easy" | "moderate" | "hard";
 
 function statePillClass(state: PermissionState | ZoneState | TrendState | ApprovalMode): string {
   if (state === "allowed" || state === "active" || state === "up" || state === "auto")
@@ -102,6 +104,33 @@ function statePillClass(state: PermissionState | ZoneState | TrendState | Approv
   if (state === "pre") return "statusPill statusHeld";
   if (state === "limited" || state === "flat") return "statusPill statusHeld";
   return "statusPill statusDenied";
+}
+
+function parseCostImpact(value: unknown): CostImpact {
+  if (value === "medium" || value === "high") return value;
+  return "low";
+}
+
+function parseRecoveryDifficulty(value: unknown): RecoveryDifficulty {
+  if (value === "moderate" || value === "hard") return value;
+  return "easy";
+}
+
+function readActionMetadata(row: ActionRegistryRow): Record<string, unknown> {
+  if (row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)) {
+    return row.metadata;
+  }
+  return {};
+}
+
+function actionCostImpact(row: ActionRegistryRow): CostImpact {
+  const metadata = readActionMetadata(row);
+  return parseCostImpact(metadata.cost_impact);
+}
+
+function actionRecoveryDifficulty(row: ActionRegistryRow): RecoveryDifficulty {
+  const metadata = readActionMetadata(row);
+  return parseRecoveryDifficulty(metadata.recovery_difficulty);
 }
 
 function isWriteAction(action: string): boolean {
@@ -384,6 +413,10 @@ export function AgentProfilePage(): JSX.Element {
     const postRequired = rows.some((r) => r.post_review_required);
     const irreversible = rows.some((r) => !r.reversible);
     const reversible = rows.filter((r) => r.reversible).length;
+    const highCost = rows.filter((r) => actionCostImpact(r) === "high").length;
+    const mediumCost = rows.filter((r) => actionCostImpact(r) === "medium").length;
+    const hardRecovery = rows.filter((r) => actionRecoveryDifficulty(r) === "hard").length;
+    const moderateRecovery = rows.filter((r) => actionRecoveryDifficulty(r) === "moderate").length;
 
     return {
       highStakes,
@@ -393,6 +426,10 @@ export function AgentProfilePage(): JSX.Element {
       postRequired,
       irreversible,
       reversible,
+      highCost,
+      mediumCost,
+      hardRecovery,
+      moderateRecovery,
     };
   }, [scopedActionRegistryRows]);
 
@@ -471,6 +508,9 @@ export function AgentProfilePage(): JSX.Element {
     const autonomyRate7d = latestSnapshot?.autonomy_rate_7d ?? null;
     const hasRepeatedMistakeRisk = repeatedMistakes7d >= 2;
     const hasLowAutonomyRisk = autonomyRate7d != null && autonomyRate7d < 0.5;
+    const hasHighCostRisk = actionPolicyFlags.highCost > 0;
+    const hasMediumCostRisk = actionPolicyFlags.mediumCost > 0;
+    const hasHardRecoveryRisk = actionPolicyFlags.hardRecovery > 0;
 
     const dedupe = (items: string[]): string[] => [...new Set(items)];
 
@@ -497,6 +537,20 @@ export function AgentProfilePage(): JSX.Element {
       } else {
         internalWriteMode = "pre";
         internalBasis = [t("agent_profile.approval.basis.default")];
+      }
+      if (hasHighCostRisk) {
+        if (internalWriteMode === "auto") internalWriteMode = "post";
+        if (internalWriteMode === "post") internalWriteMode = "pre";
+        internalBasis.push(t("agent_profile.approval.basis.high_cost"));
+      }
+      if (hasHardRecoveryRisk) {
+        if (internalWriteMode === "auto") internalWriteMode = "post";
+        if (internalWriteMode === "post") internalWriteMode = "pre";
+        internalBasis.push(t("agent_profile.approval.basis.hard_recovery"));
+      }
+      if (hasMediumCostRisk) {
+        if (internalWriteMode === "auto") internalWriteMode = "post";
+        internalBasis.push(t("agent_profile.approval.basis.medium_cost"));
       }
       if (hasRepeatedMistakeRisk) {
         if (internalWriteMode === "auto") internalWriteMode = "post";
@@ -532,6 +586,20 @@ export function AgentProfilePage(): JSX.Element {
         externalWriteMode = "post";
         externalBasis = [t("agent_profile.approval.basis.default")];
       }
+      if (hasHighCostRisk) {
+        if (externalWriteMode === "auto") externalWriteMode = "post";
+        if (externalWriteMode === "post") externalWriteMode = "pre";
+        externalBasis.push(t("agent_profile.approval.basis.high_cost"));
+      }
+      if (hasHardRecoveryRisk) {
+        if (externalWriteMode === "auto") externalWriteMode = "post";
+        if (externalWriteMode === "post") externalWriteMode = "pre";
+        externalBasis.push(t("agent_profile.approval.basis.hard_recovery"));
+      }
+      if (hasMediumCostRisk) {
+        if (externalWriteMode === "auto") externalWriteMode = "post";
+        externalBasis.push(t("agent_profile.approval.basis.medium_cost"));
+      }
       if (hasRepeatedMistakeRisk) {
         if (externalWriteMode === "auto") externalWriteMode = "post";
         if (externalWriteMode === "post") externalWriteMode = "pre";
@@ -552,6 +620,9 @@ export function AgentProfilePage(): JSX.Element {
     if (hasHighStakesScope) {
       highStakesMode = isQuarantined ? "blocked" : "pre";
       if (isQuarantined) highStakesBasis.push(t("agent_profile.approval.basis.quarantine"));
+      if (hasHighCostRisk) highStakesBasis.push(t("agent_profile.approval.basis.high_cost"));
+      if (hasHardRecoveryRisk) highStakesBasis.push(t("agent_profile.approval.basis.hard_recovery"));
+      if (hasMediumCostRisk) highStakesBasis.push(t("agent_profile.approval.basis.medium_cost"));
     } else {
       highStakesBasis = [t("agent_profile.approval.basis.no_scope")];
     }
@@ -1162,20 +1233,28 @@ export function AgentProfilePage(): JSX.Element {
                       <th>{t("agent_profile.action_registry.action")}</th>
                       <th>{t("agent_profile.action_registry.reversible")}</th>
                       <th>{t("agent_profile.action_registry.zone_required")}</th>
+                      <th>{t("agent_profile.action_registry.cost_impact")}</th>
+                      <th>{t("agent_profile.action_registry.recovery_difficulty")}</th>
                       <th>{t("agent_profile.action_registry.pre_approval")}</th>
                       <th>{t("agent_profile.action_registry.post_review")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {actionRegistryRows.slice(0, 30).map((row) => (
-                      <tr key={row.action_type}>
-                        <td className="mono">{row.action_type}</td>
-                        <td className="mono">{row.reversible ? t("common.yes") : t("common.no")}</td>
-                        <td className="mono">{row.zone_required}</td>
-                        <td className="mono">{row.requires_pre_approval ? t("common.yes") : t("common.no")}</td>
-                        <td className="mono">{row.post_review_required ? t("common.yes") : t("common.no")}</td>
-                      </tr>
-                    ))}
+                    {actionRegistryRows.slice(0, 30).map((row) => {
+                      const costImpact = actionCostImpact(row);
+                      const recoveryDifficulty = actionRecoveryDifficulty(row);
+                      return (
+                        <tr key={row.action_type}>
+                          <td className="mono">{row.action_type}</td>
+                          <td className="mono">{row.reversible ? t("common.yes") : t("common.no")}</td>
+                          <td className="mono">{row.zone_required}</td>
+                          <td>{t(`agent_profile.action_registry.cost.${costImpact}`)}</td>
+                          <td>{t(`agent_profile.action_registry.recovery.${recoveryDifficulty}`)}</td>
+                          <td className="mono">{row.requires_pre_approval ? t("common.yes") : t("common.no")}</td>
+                          <td className="mono">{row.post_review_required ? t("common.yes") : t("common.no")}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
