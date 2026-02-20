@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import type { FastifyInstance } from "fastify";
 
-import type { ToolCallId, ToolEventV1 } from "@agentapp/shared";
+import { PolicyDecision, type ActorType, type ToolCallId, type ToolEventV1, type Zone } from "@agentapp/shared";
 import { newToolCallId } from "@agentapp/shared";
 
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
+import { authorize_tool_call } from "../../policy/authorize.js";
 import { applyToolEvent } from "../../projectors/toolProjector.js";
 import { trackAgentSkillUsageFromTool } from "./skillsLedger.js";
 
@@ -20,10 +21,35 @@ function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
   return raw?.trim() || "ws_dev";
 }
 
+function normalizeActorType(raw: unknown): ActorType {
+  return raw === "service" ? "service" : "user";
+}
+
+function normalizeOptionalString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const v = raw.trim();
+  return v.length ? v : undefined;
+}
+
+function normalizeZone(raw: unknown): Zone | undefined {
+  if (raw === "sandbox" || raw === "supervised" || raw === "high_stakes") return raw;
+  return undefined;
+}
+
 export async function registerToolCallRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.post<{
     Params: { stepId: string };
-    Body: { tool_name: string; title?: string; input?: Record<string, unknown>; agent_id?: string };
+    Body: {
+      tool_name: string;
+      title?: string;
+      input?: Record<string, unknown>;
+      agent_id?: string;
+      actor_type?: ActorType;
+      actor_id?: string;
+      principal_id?: string;
+      capability_token_id?: string;
+      zone?: Zone;
+    };
   }>("/v1/steps/:stepId/toolcalls", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
 
@@ -66,6 +92,43 @@ export async function registerToolCallRoutes(app: FastifyInstance, pool: DbPool)
       return reply.code(400).send({ error: "missing_tool_name" });
     }
 
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id = normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+    const principal_id = normalizeOptionalString(req.body.principal_id);
+    const capability_token_id = normalizeOptionalString(req.body.capability_token_id);
+    const zone = normalizeZone(req.body.zone);
+
+    const policy = await authorize_tool_call(pool, {
+      action: `tool.call.${req.body.tool_name}`,
+      actor: { actor_type, actor_id },
+      workspace_id,
+      room_id: run.rows[0].room_id ?? step.rows[0].room_id ?? undefined,
+      thread_id: run.rows[0].thread_id ?? step.rows[0].thread_id ?? undefined,
+      run_id: run.rows[0].run_id,
+      step_id: step.rows[0].step_id,
+      context: {
+        tool_call: {
+          tool_name: req.body.tool_name,
+        },
+      },
+      principal_id,
+      capability_token_id,
+      zone,
+    });
+    if (policy.decision !== PolicyDecision.Allow) {
+      if (policy.reason) {
+        return reply.code(200).send({
+          decision: policy.decision,
+          reason_code: policy.reason_code,
+          reason: policy.reason,
+        });
+      }
+      return reply.code(200).send({
+        decision: policy.decision,
+        reason_code: policy.reason_code,
+      });
+    }
+
     const tool_call_id = newToolCallId();
     const occurred_at = new Date().toISOString();
     const causation_id = step.rows[0].last_event_id ?? run.rows[0].last_event_id ?? undefined;
@@ -88,7 +151,9 @@ export async function registerToolCallRoutes(app: FastifyInstance, pool: DbPool)
       thread_id,
       run_id: run.rows[0].run_id,
       step_id: step.rows[0].step_id,
-      actor: { actor_type: "service", actor_id: "api" },
+      actor: { actor_type, actor_id },
+      actor_principal_id: principal_id,
+      zone,
       stream,
       correlation_id: run.rows[0].correlation_id,
       causation_id,

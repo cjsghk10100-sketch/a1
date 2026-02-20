@@ -124,6 +124,12 @@ function dataAccessCandidates(input: AuthorizeInputV2): string[] {
   return [...out];
 }
 
+function toolCallName(input: AuthorizeInputV2): string | null {
+  const context = normalizeRecord(input.context);
+  const toolCallContext = normalizeRecord(context?.tool_call);
+  return normalizeString(toolCallContext?.tool_name) ?? normalizeString(context?.tool_name);
+}
+
 function buildTokenDenied(reason_code: string, reason: string): PolicyCheckResultV1 {
   return {
     decision: PolicyDecision.Deny,
@@ -204,6 +210,29 @@ async function evaluateCapabilityToken(
       return buildTokenDenied(
         "capability_scope_action_not_allowed",
         `Capability token does not allow action '${action}'.`,
+      );
+    }
+  }
+
+  if (category === "tool_call") {
+    const toolScopes = normalizeScopeList(scopes.tools);
+    if (!toolScopes.length) {
+      return buildTokenDenied(
+        "capability_scope_tool_required",
+        "Capability token is missing tools scope for this request.",
+      );
+    }
+    const toolName = toolCallName(input);
+    if (!toolName) {
+      return buildTokenDenied(
+        "capability_scope_context_missing_tool_name",
+        "Tool name is required for capability scope enforcement.",
+      );
+    }
+    if (!listAllowsValue(toolScopes, [toolName])) {
+      return buildTokenDenied(
+        "capability_scope_tool_not_allowed",
+        `Capability token does not allow tool '${toolName}'.`,
       );
     }
   }

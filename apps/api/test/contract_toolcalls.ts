@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -208,6 +209,55 @@ async function main(): Promise<void> {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
     try {
+      const scopedPrincipalId = randomUUID();
+      const scopedGrantorId = randomUUID();
+      await client.query(
+        `INSERT INTO sec_principals (principal_id, principal_type)
+         VALUES ($1, 'agent'), ($2, 'user')`,
+        [scopedPrincipalId, scopedGrantorId],
+      );
+
+      const scopedToken = await postJson<{ token_id: string }>(
+        baseUrl,
+        "/v1/capabilities/grant",
+        {
+          issued_to_principal_id: scopedPrincipalId,
+          granted_by_principal_id: scopedGrantorId,
+          scopes: {
+            rooms: [room_id],
+            tools: ["contract.echo"],
+          },
+        },
+        workspaceHeader,
+      );
+
+      const deniedTool = await postJson<{ decision: string; reason_code: string }>(
+        baseUrl,
+        `/v1/steps/${step_id}/toolcalls`,
+        {
+          tool_name: "contract.blocked",
+          input: { blocked: true },
+          principal_id: scopedPrincipalId,
+          capability_token_id: scopedToken.token_id,
+        },
+        workspaceHeader,
+      );
+      assert.equal(deniedTool.decision, "deny");
+      assert.equal(deniedTool.reason_code, "capability_scope_tool_not_allowed");
+
+      const deniedPolicyEvent = await client.query<{ event_type: string }>(
+        `SELECT event_type
+         FROM evt_events
+         WHERE workspace_id = $1
+           AND run_id = $2
+           AND step_id = $3
+           AND event_type = 'policy.denied'
+         ORDER BY recorded_at DESC
+         LIMIT 1`,
+        ["ws_contract", run_id, step_id],
+      );
+      assert.equal(deniedPolicyEvent.rowCount, 1);
+
       const stepRow = await client.query<{ last_event_id: string | null }>(
         "SELECT last_event_id FROM proj_steps WHERE step_id = $1",
         [step_id],
@@ -241,7 +291,12 @@ async function main(): Promise<void> {
       const { tool_call_id } = await postJson<{ tool_call_id: string }>(
         baseUrl,
         `/v1/steps/${step_id}/toolcalls`,
-        { tool_name: "contract.echo", input: { hello: "world" } },
+        {
+          tool_name: "contract.echo",
+          input: { hello: "world" },
+          principal_id: scopedPrincipalId,
+          capability_token_id: scopedToken.token_id,
+        },
         workspaceHeader,
       );
 
@@ -351,4 +406,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-
