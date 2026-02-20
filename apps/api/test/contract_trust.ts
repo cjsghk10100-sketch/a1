@@ -134,6 +134,134 @@ async function main(): Promise<void> {
       granterPrincipalId,
     ]);
 
+    const lowRiskTokenId = randomUUID();
+    await db.query(
+      `INSERT INTO sec_capability_tokens (
+         token_id,
+         workspace_id,
+         issued_to_principal_id,
+         granted_by_principal_id,
+         parent_token_id,
+         scopes,
+         valid_until,
+         created_at
+       ) VALUES (
+         $1,$2,$3,$4,NULL,$5::jsonb,$6,$7
+       )`,
+      [
+        lowRiskTokenId,
+        "ws_contract",
+        agent.principal_id,
+        granterPrincipalId,
+        JSON.stringify({
+          action_types: ["artifact.create"],
+          data_access: { write: ["artifacts"] },
+        }),
+        new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        new Date().toISOString(),
+      ],
+    );
+
+    const baselineRecommendation = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/approval-recommendation`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(baselineRecommendation.status, 200);
+    const baselineRecommendationBody = baselineRecommendation.json as {
+      recommendation: {
+        targets: Array<{
+          target: string;
+          mode: string;
+          basis_codes: string[];
+        }>;
+        context: {
+          assessment_failed_7d: number;
+          assessment_completed_30d: number;
+          assessment_passed_30d: number;
+          assessment_pass_rate_30d: number | null;
+          is_quarantined: boolean;
+          action_policy_flags: {
+            highCost: number;
+            hardRecovery: number;
+          };
+        };
+      };
+    };
+    const baselineTargetMap = new Map(
+      baselineRecommendationBody.recommendation.targets.map((target) => [target.target, target]),
+    );
+    assert.equal(baselineTargetMap.get("internal_write")?.mode, "post");
+    assert.ok(baselineTargetMap.get("internal_write")?.basis_codes.includes("post_required"));
+    assert.equal(baselineRecommendationBody.recommendation.context.is_quarantined, false);
+    assert.equal(baselineRecommendationBody.recommendation.context.assessment_failed_7d, 0);
+    assert.equal(baselineRecommendationBody.recommendation.context.assessment_completed_30d, 0);
+    assert.equal(baselineRecommendationBody.recommendation.context.assessment_passed_30d, 0);
+    assert.equal(baselineRecommendationBody.recommendation.context.assessment_pass_rate_30d, null);
+
+    const assessedFailedA = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/skills/analysis.skill/assess`,
+      {
+        status: "failed",
+        score: 0.2,
+        suite: { cases: [{ id: "trust-case-1" }] },
+        results: { pass: false },
+      },
+      workspaceHeader,
+    );
+    assert.equal(assessedFailedA.status, 201);
+
+    const assessedFailedB = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/skills/review.skill/assess`,
+      {
+        status: "failed",
+        score: 0.1,
+        suite: { cases: [{ id: "trust-case-2" }] },
+        results: { pass: false },
+      },
+      workspaceHeader,
+    );
+    assert.equal(assessedFailedB.status, 201);
+
+    const regressionRecommendation = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/approval-recommendation`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(regressionRecommendation.status, 200);
+    const regressionRecommendationBody = regressionRecommendation.json as {
+      recommendation: {
+        targets: Array<{
+          target: string;
+          mode: string;
+          basis_codes: string[];
+        }>;
+        context: {
+          assessment_failed_7d: number;
+          assessment_completed_30d: number;
+          assessment_passed_30d: number;
+          assessment_pass_rate_30d: number | null;
+        };
+      };
+    };
+    const regressionTargetMap = new Map(
+      regressionRecommendationBody.recommendation.targets.map((target) => [target.target, target]),
+    );
+    assert.equal(regressionTargetMap.get("internal_write")?.mode, "pre");
+    assert.ok(regressionTargetMap.get("internal_write")?.basis_codes.includes("assessment_regression"));
+    assert.ok(regressionRecommendationBody.recommendation.context.assessment_failed_7d >= 2);
+    assert.ok(regressionRecommendationBody.recommendation.context.assessment_completed_30d >= 2);
+    assert.equal(regressionRecommendationBody.recommendation.context.assessment_passed_30d, 0);
+    assert.equal(regressionRecommendationBody.recommendation.context.assessment_pass_rate_30d, 0);
+
     const capabilityTokenId = randomUUID();
     await db.query(
       `INSERT INTO sec_capability_tokens (

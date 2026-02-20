@@ -27,6 +27,7 @@ type ApprovalBasisCode =
   | "high_trust"
   | "repeated_mistakes"
   | "low_autonomy"
+  | "assessment_regression"
   | "high_cost"
   | "medium_cost"
   | "hard_recovery";
@@ -349,8 +350,21 @@ function computeApprovalModeRecommendations(input: {
   isQuarantined: boolean;
   repeatedMistakes7d: number;
   autonomyRate7d: number | null;
+  assessmentFailures7d: number;
+  assessmentPassRate30d: number | null;
+  assessmentCompleted30d: number;
 }): Array<{ target: ApprovalTargetCode; mode: ApprovalModeCode; basis_codes: ApprovalBasisCode[] }> {
-  const { trustScore, scopeUnion, actionPolicyFlags, isQuarantined, repeatedMistakes7d, autonomyRate7d } = input;
+  const {
+    trustScore,
+    scopeUnion,
+    actionPolicyFlags,
+    isQuarantined,
+    repeatedMistakes7d,
+    autonomyRate7d,
+    assessmentFailures7d,
+    assessmentPassRate30d,
+    assessmentCompleted30d,
+  } = input;
 
   const hasWriteScope = scopeUnion.data_write.length > 0 || scopeUnion.actions.some((a) => isWriteAction(a));
   const hasExternalScope = scopeUnion.egress.length > 0;
@@ -358,6 +372,9 @@ function computeApprovalModeRecommendations(input: {
     actionPolicyFlags.highStakes > 0 || scopeUnion.actions.some((a) => isHighStakesAction(a));
   const hasRepeatedMistakeRisk = repeatedMistakes7d >= 2;
   const hasLowAutonomyRisk = autonomyRate7d != null && autonomyRate7d < 0.5;
+  const hasAssessmentRegressionRisk =
+    assessmentFailures7d >= 2 ||
+    (assessmentCompleted30d >= 3 && assessmentPassRate30d != null && assessmentPassRate30d < 0.6);
   const hasHighCostRisk = actionPolicyFlags.highCost > 0;
   const hasMediumCostRisk = actionPolicyFlags.mediumCost > 0;
   const hasHardRecoveryRisk = actionPolicyFlags.hardRecovery > 0;
@@ -410,6 +427,11 @@ function computeApprovalModeRecommendations(input: {
       if (internalWriteMode === "post") internalWriteMode = "pre";
       internalBasis.push("low_autonomy");
     }
+    if (hasAssessmentRegressionRisk) {
+      if (internalWriteMode === "auto") internalWriteMode = "post";
+      if (internalWriteMode === "post") internalWriteMode = "pre";
+      internalBasis.push("assessment_regression");
+    }
     internalBasis = dedupeBasisCodes(internalBasis);
   } else {
     internalBasis = ["no_scope"];
@@ -459,6 +481,11 @@ function computeApprovalModeRecommendations(input: {
       if (externalWriteMode === "auto") externalWriteMode = "post";
       if (externalWriteMode === "post") externalWriteMode = "pre";
       externalBasis.push("low_autonomy");
+    }
+    if (hasAssessmentRegressionRisk) {
+      if (externalWriteMode === "auto") externalWriteMode = "post";
+      if (externalWriteMode === "post") externalWriteMode = "pre";
+      externalBasis.push("assessment_regression");
     }
     externalBasis = dedupeBasisCodes(externalBasis);
   } else {
@@ -839,6 +866,45 @@ export async function registerTrustRoutes(app: FastifyInstance, pool: DbPool): P
       latestSnapshot.rowCount === 1 && Number.isFinite(Number(latestSnapshot.rows[0].repeated_mistakes_7d))
         ? Math.max(0, Math.floor(Number(latestSnapshot.rows[0].repeated_mistakes_7d)))
         : 0;
+
+    const assessmentMetrics = await pool.query<{
+      assessment_failed_7d: number | null;
+      assessment_completed_30d: number | null;
+      assessment_passed_30d: number | null;
+    }>(
+      `SELECT
+         COUNT(*) FILTER (
+           WHERE status = 'failed'
+             AND started_at >= (now() - interval '7 days')
+         ) AS assessment_failed_7d,
+         COUNT(*) FILTER (
+           WHERE status IN ('passed', 'failed')
+             AND started_at >= (now() - interval '30 days')
+         ) AS assessment_completed_30d,
+         COUNT(*) FILTER (
+           WHERE status = 'passed'
+             AND started_at >= (now() - interval '30 days')
+         ) AS assessment_passed_30d
+       FROM sec_skill_assessments
+       WHERE workspace_id = $1
+         AND agent_id = $2`,
+      [workspace_id, agent_id],
+    );
+    const assessment_failed_7d =
+      assessmentMetrics.rowCount === 1 && Number.isFinite(Number(assessmentMetrics.rows[0].assessment_failed_7d))
+        ? Math.max(0, Math.floor(Number(assessmentMetrics.rows[0].assessment_failed_7d)))
+        : 0;
+    const assessment_completed_30d =
+      assessmentMetrics.rowCount === 1 &&
+      Number.isFinite(Number(assessmentMetrics.rows[0].assessment_completed_30d))
+        ? Math.max(0, Math.floor(Number(assessmentMetrics.rows[0].assessment_completed_30d)))
+        : 0;
+    const assessment_passed_30d =
+      assessmentMetrics.rowCount === 1 && Number.isFinite(Number(assessmentMetrics.rows[0].assessment_passed_30d))
+        ? Math.max(0, Math.floor(Number(assessmentMetrics.rows[0].assessment_passed_30d)))
+        : 0;
+    const assessment_pass_rate_30d =
+      assessment_completed_30d > 0 ? assessment_passed_30d / assessment_completed_30d : null;
     const is_quarantined = agent.quarantined_at != null;
 
     const targets = computeApprovalModeRecommendations({
@@ -848,6 +914,9 @@ export async function registerTrustRoutes(app: FastifyInstance, pool: DbPool): P
       isQuarantined: is_quarantined,
       repeatedMistakes7d: repeated_mistakes_7d,
       autonomyRate7d: autonomy_rate_7d,
+      assessmentFailures7d: assessment_failed_7d,
+      assessmentPassRate30d: assessment_pass_rate_30d,
+      assessmentCompleted30d: assessment_completed_30d,
     });
 
     return reply.code(200).send({
@@ -859,6 +928,10 @@ export async function registerTrustRoutes(app: FastifyInstance, pool: DbPool): P
           trust_score: trust.trust_score,
           repeated_mistakes_7d,
           autonomy_rate_7d,
+          assessment_failed_7d,
+          assessment_completed_30d,
+          assessment_passed_30d,
+          assessment_pass_rate_30d,
           is_quarantined,
           scope_union: scopeUnion,
           action_policy_flags: actionPolicyFlags,

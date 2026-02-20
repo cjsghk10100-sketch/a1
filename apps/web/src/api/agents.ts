@@ -141,6 +141,7 @@ export type ApprovalRecommendationBasisCode =
   | "high_trust"
   | "repeated_mistakes"
   | "low_autonomy"
+  | "assessment_regression"
   | "high_cost"
   | "medium_cost"
   | "hard_recovery";
@@ -155,6 +156,10 @@ export interface AgentApprovalRecommendationContext {
   trust_score: number;
   repeated_mistakes_7d: number;
   autonomy_rate_7d: number | null;
+  assessment_failed_7d: number;
+  assessment_completed_30d: number;
+  assessment_passed_30d: number;
+  assessment_pass_rate_30d: number | null;
   is_quarantined: boolean;
   scope_union: {
     rooms: string[];
