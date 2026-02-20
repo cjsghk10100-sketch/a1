@@ -100,6 +100,7 @@ async function getJson<T>(
 async function main(): Promise<void> {
   delete process.env.POLICY_KILL_SWITCH_EXTERNAL_WRITE;
   delete process.env.POLICY_ENFORCEMENT_MODE;
+  process.env.EGRESS_MAX_REQUESTS_PER_HOUR = "2";
 
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
@@ -120,7 +121,7 @@ async function main(): Promise<void> {
   await db.connect();
 
   try {
-    const workspaceHeader = { "x-workspace-id": "ws_contract" };
+    const workspaceHeader = { "x-workspace-id": `ws_contract_egress_${Date.now()}` };
     const { room_id } = await postJson<{ room_id: string }>(
       baseUrl,
       "/v1/rooms",
@@ -218,6 +219,45 @@ async function main(): Promise<void> {
     );
     assert.equal(blockedEvent.rowCount, 1);
 
+    const quotaExceeded = await postJson<{
+      egress_request_id: string;
+      decision: string;
+      reason_code: string;
+      approval_id?: string;
+    }>(
+      baseUrl,
+      "/v1/egress/requests",
+      {
+        action: "internal.read",
+        target_url: "https://example.com/third",
+        method: "GET",
+        room_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(quotaExceeded.decision, "deny");
+    assert.equal(quotaExceeded.reason_code, "quota_exceeded");
+    assert.equal(quotaExceeded.approval_id, undefined);
+
+    const quotaRow = await db.query<{ policy_decision: string; policy_reason_code: string | null }>(
+      `SELECT policy_decision, policy_reason_code
+       FROM sec_egress_requests
+       WHERE egress_request_id = $1`,
+      [quotaExceeded.egress_request_id],
+    );
+    assert.equal(quotaRow.rowCount, 1);
+    assert.equal(quotaRow.rows[0].policy_decision, "deny");
+    assert.equal(quotaRow.rows[0].policy_reason_code, "quota_exceeded");
+
+    const quotaEvent = await db.query<{ event_type: string }>(
+      `SELECT event_type
+       FROM evt_events
+       WHERE event_type = 'quota.exceeded'
+         AND data->>'egress_request_id' = $1`,
+      [quotaExceeded.egress_request_id],
+    );
+    assert.equal(quotaEvent.rowCount, 1);
+
     process.env.POLICY_KILL_SWITCH_EXTERNAL_WRITE = "1";
     const denied = await postJson<{
       egress_request_id: string;
@@ -266,4 +306,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-

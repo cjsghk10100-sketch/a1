@@ -57,6 +57,51 @@ async function isQuarantinedAgentPrincipal(
   return res.rows[0];
 }
 
+function egressQuotaPerHour(): number {
+  const raw = Number(process.env.EGRESS_MAX_REQUESTS_PER_HOUR ?? "0");
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.max(0, Math.floor(raw));
+}
+
+async function checkEgressQuota(
+  pool: DbPool,
+  workspace_id: string,
+  actor: { actor_type: "service" | "user"; actor_id: string },
+  principal_id: string | undefined,
+): Promise<PolicyCheckResultV1 | null> {
+  const quotaLimit = egressQuotaPerHour();
+  if (quotaLimit <= 0) return null;
+
+  const principal = principal_id?.trim();
+  const usage = principal
+    ? await pool.query<{ cnt: string }>(
+        `SELECT count(*)::text AS cnt
+         FROM sec_egress_requests
+         WHERE workspace_id = $1
+           AND requested_by_principal_id = $2
+           AND created_at >= (now() - interval '1 hour')`,
+        [workspace_id, principal],
+      )
+    : await pool.query<{ cnt: string }>(
+        `SELECT count(*)::text AS cnt
+         FROM sec_egress_requests
+         WHERE workspace_id = $1
+           AND requested_by_type = $2
+           AND requested_by_id = $3
+           AND requested_by_principal_id IS NULL
+           AND created_at >= (now() - interval '1 hour')`,
+        [workspace_id, actor.actor_type, actor.actor_id],
+      );
+  const used = Number.parseInt(usage.rows[0]?.cnt ?? "0", 10);
+  if (used < quotaLimit) return null;
+
+  return {
+    decision: PolicyDecision.Deny,
+    reason_code: "quota_exceeded",
+    reason: `Egress hourly quota exceeded (${used}/${quotaLimit}).`,
+  };
+}
+
 function getPolicyEnforcementMode(raw: string | undefined): PolicyEnforcementMode {
   const v = (raw ?? "").trim().toLowerCase();
   if (v === PolicyEnforcementMode.Enforce) return PolicyEnforcementMode.Enforce;
@@ -134,8 +179,12 @@ async function authorizeCore(
 ): Promise<AuthorizeResultV2> {
   const quarantined =
     category === "egress" ? await isQuarantinedAgentPrincipal(pool, input.principal_id) : null;
+  const quotaDecision =
+    category === "egress"
+      ? await checkEgressQuota(pool, input.workspace_id, input.actor, input.principal_id)
+      : null;
 
-  const base = quarantined
+  const policyBase = quarantined
     ? {
         decision: PolicyDecision.Deny,
         reason_code: "agent_quarantined",
@@ -153,6 +202,13 @@ async function authorizeCore(
         step_id: input.step_id,
         context: input.context,
       });
+
+  const base =
+    !quarantined &&
+    quotaDecision &&
+    policyBase.decision !== PolicyDecision.Deny
+      ? quotaDecision
+      : policyBase;
 
   const enforcement_mode = getPolicyEnforcementMode(process.env.POLICY_ENFORCEMENT_MODE);
   const blocked =

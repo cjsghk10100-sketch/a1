@@ -292,6 +292,35 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
       display: {},
     });
 
+    if (policy.reason_code === "quota_exceeded") {
+      await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "quota.exceeded",
+        event_version: 1,
+        occurred_at: new Date().toISOString(),
+        workspace_id,
+        room_id,
+        run_id,
+        step_id,
+        actor: { actor_type, actor_id },
+        actor_principal_id: principal_id,
+        zone,
+        stream,
+        correlation_id,
+        data: {
+          egress_request_id,
+          action,
+          target_url: target.target_url,
+          target_domain: target.target_domain,
+          reason_code: policy.reason_code,
+          reason: policy.reason,
+        },
+        policy_context: req.body.context ?? {},
+        model_context: {},
+        display: {},
+      });
+    }
+
     if (policy.reason) {
       return reply.code(201).send({
         egress_request_id,
@@ -359,4 +388,3 @@ export async function registerEgressRoutes(app: FastifyInstance, pool: DbPool): 
     return reply.code(200).send({ requests: res.rows });
   });
 }
-

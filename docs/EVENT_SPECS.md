@@ -100,6 +100,7 @@ These are expected as the OS hardening + growth substrate lands. Names are stabl
   - `egress.requested` (v1)
   - `egress.allowed` (v1)
   - `egress.blocked` (v1)
+  - `quota.exceeded` (v1)
 - Supply chain:
   - `skill.package.installed` (v1)
   - `skill.package.verified` (v1)
