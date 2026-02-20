@@ -158,6 +158,18 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+async function principalExists(pool: DbPool, principal_id: string): Promise<boolean> {
+  const res = await pool.query(
+    `SELECT principal_id
+     FROM sec_principals
+     WHERE principal_id = $1
+       AND revoked_at IS NULL
+     LIMIT 1`,
+    [principal_id],
+  );
+  return res.rowCount === 1;
+}
+
 export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.get<{
     Querystring: { principal_id?: string };
@@ -205,6 +217,13 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
     if (!issued_to_principal_id) return reply.code(400).send({ error: "issued_to_principal_id_required" });
     if (!granted_by_principal_id) return reply.code(400).send({ error: "granted_by_principal_id_required" });
 
+    if (!(await principalExists(pool, issued_to_principal_id))) {
+      return reply.code(400).send({ error: "issued_to_principal_not_found" });
+    }
+    if (!(await principalExists(pool, granted_by_principal_id))) {
+      return reply.code(400).send({ error: "granted_by_principal_not_found" });
+    }
+
     const valid_until = parseTimestamp(req.body.valid_until);
     if (req.body.valid_until && !valid_until) {
       return reply.code(400).send({ error: "invalid_valid_until" });
@@ -216,11 +235,12 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
     if (parent_token_id) {
       const parent = await pool.query<{
         token_id: string;
+        issued_to_principal_id: string;
         scopes: CapabilityScopesV1;
         revoked_at: string | null;
         valid_until: string | null;
       }>(
-        `SELECT token_id, scopes, revoked_at, valid_until
+        `SELECT token_id, issued_to_principal_id, scopes, revoked_at, valid_until
          FROM sec_capability_tokens
          WHERE workspace_id = $1
            AND token_id = $2`,
@@ -255,6 +275,30 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
       }
       if (parent.rows[0].valid_until && new Date(parent.rows[0].valid_until).getTime() <= Date.now()) {
         return reply.code(400).send({ error: "parent_token_expired" });
+      }
+      if (parent.rows[0].issued_to_principal_id !== granted_by_principal_id) {
+        await appendToStream(pool, {
+          event_id: randomUUID(),
+          event_type: "agent.delegation.attempted",
+          event_version: 1,
+          occurred_at: nowIso(),
+          workspace_id,
+          actor: { actor_type: "service", actor_id: "api" },
+          stream: { stream_type: "workspace", stream_id: workspace_id },
+          correlation_id: randomUUID(),
+          data: {
+            issued_to_principal_id,
+            granted_by_principal_id,
+            parent_token_id,
+            parent_token_owner_principal_id: parent.rows[0].issued_to_principal_id,
+            scopes: requested_scopes,
+            denied_reason: "parent_token_grantor_mismatch",
+          },
+          policy_context: {},
+          model_context: {},
+          display: {},
+        });
+        return reply.code(403).send({ error: "parent_token_grantor_mismatch" });
       }
 
       const parentDepth = await tokenDepth(pool, workspace_id, parent_token_id, 10);

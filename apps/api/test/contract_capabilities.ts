@@ -80,6 +80,25 @@ async function postJson<T>(
   return JSON.parse(text) as T;
 }
 
+async function postJsonAny(
+  baseUrl: string,
+  urlPath: string,
+  body: unknown,
+  headers?: Record<string, string>,
+): Promise<{ status: number; json: unknown; text: string }> {
+  const res = await fetch(`${baseUrl}${urlPath}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(headers ?? {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const json = text.length > 0 ? (JSON.parse(text) as unknown) : {};
+  return { status: res.status, json, text };
+}
+
 async function getJson<T>(
   baseUrl: string,
   urlPath: string,
@@ -123,11 +142,18 @@ async function main(): Promise<void> {
 
     const issued_to_principal_id = randomUUID();
     const granted_by_principal_id = randomUUID();
+    const rogue_grantor_principal_id = randomUUID();
+    const delegated_issued_to_principal_id = randomUUID();
 
     await db.query(
       `INSERT INTO sec_principals (principal_id, principal_type)
-       VALUES ($1, 'agent'), ($2, 'user')`,
-      [issued_to_principal_id, granted_by_principal_id],
+       VALUES ($1, 'agent'), ($2, 'user'), ($3, 'user'), ($4, 'agent')`,
+      [
+        issued_to_principal_id,
+        granted_by_principal_id,
+        rogue_grantor_principal_id,
+        delegated_issued_to_principal_id,
+      ],
     );
 
     const grant = await postJson<{ token_id: string }>(
@@ -178,6 +204,47 @@ async function main(): Promise<void> {
     );
     assert.equal(principalMismatch.decision, "deny");
     assert.equal(principalMismatch.reason_code, "capability_token_principal_mismatch");
+
+    const missingIssuedPrincipal = await postJsonAny(
+      baseUrl,
+      "/v1/capabilities/grant",
+      {
+        issued_to_principal_id: randomUUID(),
+        granted_by_principal_id,
+        scopes: { tools: ["web_search"] },
+      },
+      workspaceHeader,
+    );
+    assert.equal(missingIssuedPrincipal.status, 400);
+    const missingIssuedPrincipalJson = missingIssuedPrincipal.json as { error: string };
+    assert.equal(missingIssuedPrincipalJson.error, "issued_to_principal_not_found");
+
+    const parentGrantorMismatch = await postJsonAny(
+      baseUrl,
+      "/v1/capabilities/grant",
+      {
+        issued_to_principal_id: delegated_issued_to_principal_id,
+        granted_by_principal_id: rogue_grantor_principal_id,
+        parent_token_id: grant.token_id,
+        scopes: { tools: ["web_search"] },
+      },
+      workspaceHeader,
+    );
+    assert.equal(parentGrantorMismatch.status, 403);
+    const parentGrantorMismatchJson = parentGrantorMismatch.json as { error: string };
+    assert.equal(parentGrantorMismatchJson.error, "parent_token_grantor_mismatch");
+
+    const mismatchEvent = await db.query<{ event_type: string }>(
+      `SELECT event_type
+       FROM evt_events
+       WHERE event_type = 'agent.delegation.attempted'
+         AND data->>'parent_token_id' = $1
+         AND data->>'denied_reason' = 'parent_token_grantor_mismatch'
+       ORDER BY recorded_at DESC
+       LIMIT 1`,
+      [grant.token_id],
+    );
+    assert.equal(mismatchEvent.rowCount, 1);
 
     const revoke = await postJson<{ ok: boolean }>(
       baseUrl,
