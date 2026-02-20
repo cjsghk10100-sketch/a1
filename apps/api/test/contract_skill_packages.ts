@@ -231,6 +231,60 @@ async function main(): Promise<void> {
     );
     assert.equal(autoQuarantinedEvent.rowCount, 1);
 
+    const unsignedInstall = await postJson<{
+      skill_package_id: string;
+      verification_status: string;
+    }>(
+      baseUrl,
+      "/v1/skills/packages/install",
+      {
+        skill_id: "web_search_unsigned",
+        version: "1.2.2",
+        hash_sha256: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        manifest: {
+          required_tools: ["http_client"],
+          data_access: { read: ["web"] },
+          egress_domains: ["example.com"],
+          sandbox_required: true,
+        },
+      },
+      workspaceHeader,
+    );
+    assert.equal(unsignedInstall.verification_status, "pending");
+
+    const unsignedVerify = await postJsonAny(
+      baseUrl,
+      `/v1/skills/packages/${encodeURIComponent(unsignedInstall.skill_package_id)}/verify`,
+      {
+        expected_hash_sha256:
+          "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      },
+      workspaceHeader,
+    );
+    assert.equal(unsignedVerify.status, 400);
+    const unsignedVerifyJson = unsignedVerify.json as { error: string };
+    assert.equal(unsignedVerifyJson.error, "signature_required");
+
+    const unsignedRow = await db.query<{
+      verification_status: string;
+      quarantine_reason: string | null;
+    }>(
+      "SELECT verification_status, quarantine_reason FROM sec_skill_packages WHERE skill_package_id = $1",
+      [unsignedInstall.skill_package_id],
+    );
+    assert.equal(unsignedRow.rowCount, 1);
+    assert.equal(unsignedRow.rows[0].verification_status, "quarantined");
+    assert.equal(unsignedRow.rows[0].quarantine_reason, "verify_signature_required");
+
+    const unsignedQuarantineEvent = await db.query<{ event_type: string }>(
+      `SELECT event_type
+       FROM evt_events
+       WHERE event_type = 'skill.package.quarantined'
+         AND data->>'skill_package_id' = $1`,
+      [unsignedInstall.skill_package_id],
+    );
+    assert.equal(unsignedQuarantineEvent.rowCount, 1);
+
     const verified = await postJson<{
       ok: boolean;
       verification_status: string;

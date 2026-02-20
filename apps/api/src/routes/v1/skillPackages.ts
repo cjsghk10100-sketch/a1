@@ -327,6 +327,9 @@ export async function registerSkillPackageRoutes(app: FastifyInstance, pool: DbP
     if (!normalizeManifest(row.manifest)) {
       return await failAndQuarantine("stored_manifest_invalid");
     }
+    if (!row.signature) {
+      return await failAndQuarantine("signature_required");
+    }
 
     const signature = normalizeOptionalString(req.body.signature);
     if (signature && row.signature && signature !== row.signature) {
