@@ -917,6 +917,48 @@ export function AgentProfilePage(): JSX.Element {
     };
   }, [principalId]);
 
+  async function reloadTokens(): Promise<void> {
+    const nextPrincipalId = principalId?.trim();
+    if (!nextPrincipalId) {
+      setTokens([]);
+      setTokensError(null);
+      setTokensLoading(false);
+      return;
+    }
+
+    setTokensLoading(true);
+    setTokensError(null);
+    try {
+      const tok = await listCapabilityTokens(nextPrincipalId);
+      setTokens(tok);
+    } catch (e) {
+      setTokensError(toErrorCode(e));
+    } finally {
+      setTokensLoading(false);
+    }
+  }
+
+  async function reloadApprovalRecommendation(nextAgentId?: string): Promise<void> {
+    const agent_id = (nextAgentId ?? agentId).trim();
+    if (!agent_id) {
+      setApprovalRecommendationData(null);
+      setApprovalRecommendationError(null);
+      setApprovalRecommendationLoading(false);
+      return;
+    }
+
+    setApprovalRecommendationLoading(true);
+    setApprovalRecommendationError(null);
+    try {
+      const res = await getAgentApprovalRecommendation(agent_id);
+      setApprovalRecommendationData(res);
+    } catch (e) {
+      setApprovalRecommendationError(toErrorCode(e));
+    } finally {
+      setApprovalRecommendationLoading(false);
+    }
+  }
+
   async function ensureOperatorPrincipalId(): Promise<string> {
     const actor_id = operatorActorId.trim() || "anon";
     const principal = await ensureLegacyPrincipal({ actor_type: "user", actor_id });
@@ -1250,6 +1292,16 @@ export function AgentProfilePage(): JSX.Element {
                 </div>
 
                 <div className="detailSectionTitle">{t("agent_profile.approval_recommendation")}</div>
+                <div className="timelineControls" style={{ marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    className="ghostButton"
+                    disabled={approvalRecommendationLoading || !agentId.trim()}
+                    onClick={() => void reloadApprovalRecommendation()}
+                  >
+                    {t("common.refresh")}
+                  </button>
+                </div>
                 {approvalRecommendationLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
                 {approvalRecommendationError ? (
                   <div className="muted">{t("error.load_failed", { code: approvalRecommendationError })}</div>
@@ -1393,6 +1445,7 @@ export function AgentProfilePage(): JSX.Element {
                       setAutonomyRecommendation(res.recommendation);
                       setAutonomyRecommendationId(res.recommendation.recommendation_id);
                       setTrust(res.trust);
+                      await reloadApprovalRecommendation(nextAgentId);
                     } catch (e) {
                       setAutonomyRecommendError(toErrorCode(e));
                     } finally {
@@ -1482,11 +1535,8 @@ export function AgentProfilePage(): JSX.Element {
                         granted_by_principal_id,
                       });
                       setAutonomyApproveResult(res);
-
-                      if (principalId?.trim()) {
-                        const tok = await listCapabilityTokens(principalId);
-                        setTokens(tok);
-                      }
+                      await reloadTokens();
+                      await reloadApprovalRecommendation(nextAgentId);
                     } catch (e) {
                       setAutonomyApproveError(toErrorCode(e));
                     } finally {
@@ -1901,6 +1951,7 @@ export function AgentProfilePage(): JSX.Element {
                         });
                         const meta = await getAgent(agentId);
                         setAgentMeta(meta);
+                        await reloadApprovalRecommendation(agentId);
                       } catch (e) {
                         setQuarantineActionError(toErrorCode(e));
                       } finally {
@@ -1927,6 +1978,7 @@ export function AgentProfilePage(): JSX.Element {
                         await unquarantineAgent(agentId);
                         const meta = await getAgent(agentId);
                         setAgentMeta(meta);
+                        await reloadApprovalRecommendation(agentId);
                       } catch (e) {
                         setQuarantineActionError(toErrorCode(e));
                       } finally {
