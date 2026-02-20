@@ -91,6 +91,8 @@ These are expected as the OS hardening + growth substrate lands. Names are stabl
 
 - Principals/capabilities:
   - `agent.registered` (v1)
+  - `agent.quarantined` (v1)
+  - `agent.unquarantined` (v1)
   - `agent.capability.granted` (v1)
   - `agent.capability.revoked` (v1)
   - `agent.delegation.attempted` (v1)

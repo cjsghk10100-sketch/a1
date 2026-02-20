@@ -44,6 +44,7 @@ const MAX_DEPTH = 3;
 const MAX_KEYS = 24;
 const MAX_ARRAY = 12;
 const MAX_TEXT = 240;
+const AUTO_QUARANTINE_REPEAT_THRESHOLD = 3;
 
 function newConstraintId(): string {
   return `cst_${randomUUID().replace(/-/g, "")}`;
@@ -113,6 +114,26 @@ function buildGuidance(input: {
     return `Action "${input.action}" was blocked by policy. Try a lower-risk ${input.category} alternative first.`;
   }
   return `Action "${input.action}" requires policy handling. Add explicit approval/scope before retrying.`;
+}
+
+function autoQuarantineReason(reason_code: string): string {
+  const normalized = reason_code.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+  const compact = normalized.replace(/^_+|_+$/g, "") || "unknown_reason";
+  return `auto_repeated_${compact}`.slice(0, 120);
+}
+
+function shouldAutoQuarantine(input: {
+  decision: PolicyDecision;
+  blocked: boolean;
+  reason_code: string;
+  subject: LearningSubject;
+  repeat_count: number;
+}): boolean {
+  if (!input.subject.agent_id || !input.subject.principal_id) return false;
+  if (input.decision === PolicyDecision.Allow) return false;
+  if (!input.blocked) return false;
+  if (input.reason_code === "agent_quarantined") return false;
+  return input.repeat_count >= AUTO_QUARANTINE_REPEAT_THRESHOLD;
 }
 
 async function resolveLearningSubject(
@@ -391,5 +412,60 @@ export async function recordLearningFromFailure(
       model_context: {},
       display: {},
     });
+  }
+
+  if (
+    shouldAutoQuarantine({
+      decision: input.decision,
+      blocked: input.blocked,
+      reason_code: input.reason_code,
+      subject,
+      repeat_count,
+    })
+  ) {
+    const quarantine_reason = autoQuarantineReason(input.reason_code);
+    const quarantineWrite = await pool.query<{ quarantined_at: string | null }>(
+      `UPDATE sec_agents
+       SET quarantined_at = $1,
+           quarantine_reason = $2
+       WHERE agent_id = $3
+         AND quarantined_at IS NULL
+       RETURNING quarantined_at::text AS quarantined_at`,
+      [occurred_at, quarantine_reason, subject.agent_id],
+    );
+
+    if (quarantineWrite.rowCount === 1) {
+      const quarantined_at = quarantineWrite.rows[0].quarantined_at ?? occurred_at;
+      await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "agent.quarantined",
+        event_version: 1,
+        occurred_at,
+        workspace_id: input.workspace_id,
+        room_id: input.room_id,
+        thread_id: input.thread_id,
+        run_id: input.run_id,
+        step_id: input.step_id,
+        actor: { actor_type: "service", actor_id: "policy_guard" },
+        zone: input.zone,
+        stream,
+        correlation_id: input.correlation_id,
+        causation_id: constraintEvent.event_id,
+        data: {
+          agent_id: subject.agent_id,
+          principal_id: subject.principal_id,
+          quarantined_at,
+          quarantine_reason,
+          mode: "auto",
+          trigger_reason_code: input.reason_code,
+          trigger_action: input.action,
+          repeat_count,
+          source_event_id: input.policy_event_id,
+        },
+        policy_context: {},
+        model_context: {},
+        display: {},
+      });
+    }
   }
 }

@@ -81,7 +81,7 @@ async function postJson<T>(
 
 async function main(): Promise<void> {
   delete process.env.POLICY_KILL_SWITCH_EXTERNAL_WRITE;
-  delete process.env.POLICY_ENFORCEMENT_MODE;
+  process.env.POLICY_ENFORCEMENT_MODE = "enforce";
 
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
@@ -217,6 +217,72 @@ async function main(): Promise<void> {
     assert.equal(counters.rowCount, 1);
     assert.equal(counters.rows[0].seen_count, 2);
     assert.equal(counters.rows[0].reason_code, "external_write_requires_approval");
+
+    const agent = await postJson<{ agent_id: string; principal_id: string }>(
+      baseUrl,
+      "/v1/agents",
+      { display_name: "Learning Agent" },
+      workspaceHeader,
+    );
+
+    const egressPayload = {
+      action: "external.write",
+      actor_type: "service",
+      actor_id: "agent-runner",
+      principal_id: agent.principal_id,
+      room_id: room.room_id,
+      target_url: "https://example.com/write",
+      context: {
+        request_id: "eg-1",
+        note: "auto quarantine trigger",
+      },
+    };
+
+    for (let i = 0; i < 3; i += 1) {
+      const egressDecision = await postJson<{ decision: string; reason_code: string }>(
+        baseUrl,
+        "/v1/egress/requests",
+        egressPayload,
+        workspaceHeader,
+      );
+      assert.equal(egressDecision.decision, "require_approval");
+      assert.equal(egressDecision.reason_code, "external_write_requires_approval");
+    }
+
+    const quarantined = await db.query<{
+      quarantined_at: string | null;
+      quarantine_reason: string | null;
+    }>(
+      `SELECT quarantined_at::text AS quarantined_at, quarantine_reason
+       FROM sec_agents
+       WHERE agent_id = $1`,
+      [agent.agent_id],
+    );
+    assert.equal(quarantined.rowCount, 1);
+    assert.ok(quarantined.rows[0].quarantined_at);
+    assert.equal(quarantined.rows[0].quarantine_reason, "auto_repeated_external_write_requires_approval");
+
+    const quarantineEvent = await db.query<{
+      mode: string | null;
+      repeat_count: string | null;
+      trigger_reason_code: string | null;
+    }>(
+      `SELECT
+         data->>'mode' AS mode,
+         data->>'repeat_count' AS repeat_count,
+         data->>'trigger_reason_code' AS trigger_reason_code
+       FROM evt_events
+       WHERE event_type = 'agent.quarantined'
+         AND workspace_id = $1
+         AND data->>'agent_id' = $2
+       ORDER BY recorded_at DESC
+       LIMIT 1`,
+      ["ws_contract_learning", agent.agent_id],
+    );
+    assert.equal(quarantineEvent.rowCount, 1);
+    assert.equal(quarantineEvent.rows[0].mode, "auto");
+    assert.equal(quarantineEvent.rows[0].repeat_count, "3");
+    assert.equal(quarantineEvent.rows[0].trigger_reason_code, "external_write_requires_approval");
   } finally {
     await db.end();
     await app.close();
