@@ -260,6 +260,43 @@ export async function listAgentSkills(params: { agent_id: string; limit?: number
   return res.skills;
 }
 
+export interface AgentSkillAssessmentRow {
+  assessment_id: string;
+  workspace_id: string;
+  agent_id: string;
+  skill_id: string;
+  status: "started" | "passed" | "failed";
+  trigger_reason: string | null;
+  suite: Record<string, unknown>;
+  results: Record<string, unknown>;
+  score: number | null;
+  run_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  created_by_type: "user" | "agent" | "service";
+  created_by_id: string;
+  created_by_principal_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listAgentSkillAssessments(params: {
+  agent_id: string;
+  limit?: number;
+  skill_id?: string;
+  status?: "started" | "passed" | "failed";
+}): Promise<AgentSkillAssessmentRow[]> {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.skill_id?.trim()) qs.set("skill_id", params.skill_id.trim());
+  if (params.status) qs.set("status", params.status);
+  const url = `/v1/agents/${encodeURIComponent(params.agent_id)}/skills/assessments${
+    qs.size ? `?${qs.toString()}` : ""
+  }`;
+  const res = await apiGet<{ assessments: AgentSkillAssessmentRow[] }>(url);
+  return res.assessments;
+}
+
 export interface DailyAgentSnapshotRow {
   workspace_id: string;
   agent_id: string;

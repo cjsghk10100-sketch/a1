@@ -196,6 +196,87 @@ async function main(): Promise<void> {
     assert.equal(assessment.score, 0.9);
     assert.ok(assessment.reliability_score > 0);
 
+    const assessedFailed = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/skills/research.skill/assess`,
+      {
+        status: "failed",
+        score: 0.2,
+        suite: { cases: [{ id: "case-2" }] },
+        results: { pass: false },
+      },
+      workspaceHeader,
+    );
+    assert.equal(assessedFailed.status, 201);
+    const failedAssessment = assessedFailed.json as {
+      assessment_id: string;
+      status: string;
+      score: number;
+    };
+    assert.ok(failedAssessment.assessment_id.startsWith("asmt_"));
+    assert.equal(failedAssessment.status, "failed");
+    assert.equal(failedAssessment.score, 0.2);
+
+    const listedAssessments = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/skills/assessments?limit=20`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(listedAssessments.status, 200);
+    const allAssessments = listedAssessments.json as {
+      assessments: Array<{
+        assessment_id: string;
+        skill_id: string;
+        status: "started" | "passed" | "failed";
+      }>;
+    };
+    assert.ok(allAssessments.assessments.some((row) => row.assessment_id === assessment.assessment_id));
+    assert.ok(allAssessments.assessments.some((row) => row.assessment_id === failedAssessment.assessment_id));
+
+    const listedPassed = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/skills/assessments?limit=20&status=passed`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(listedPassed.status, 200);
+    const passedAssessments = listedPassed.json as {
+      assessments: Array<{ assessment_id: string; status: "started" | "passed" | "failed" }>;
+    };
+    assert.ok(passedAssessments.assessments.length >= 1);
+    assert.ok(passedAssessments.assessments.every((row) => row.status === "passed"));
+    assert.ok(passedAssessments.assessments.some((row) => row.assessment_id === assessment.assessment_id));
+
+    const listedBySkill = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/skills/assessments?limit=20&skill_id=analysis.skill`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(listedBySkill.status, 200);
+    const skillAssessments = listedBySkill.json as {
+      assessments: Array<{ assessment_id: string; skill_id: string }>;
+    };
+    assert.ok(skillAssessments.assessments.length >= 1);
+    assert.ok(skillAssessments.assessments.every((row) => row.skill_id === "analysis.skill"));
+    assert.ok(skillAssessments.assessments.some((row) => row.assessment_id === assessment.assessment_id));
+
+    const invalidStatus = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/skills/assessments?status=bogus`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(invalidStatus.status, 400);
+    const invalidStatusJson = invalidStatus.json as { error?: string };
+    assert.equal(invalidStatusJson.error, "invalid_status");
+
     const assessmentEvents = await db.query<{ event_type: string }>(
       `SELECT event_type
        FROM evt_events

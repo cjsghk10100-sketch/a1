@@ -12,6 +12,7 @@ import type {
 
 import type {
   AgentApprovalRecommendationRow,
+  AgentSkillAssessmentRow,
   AgentApprovalRecommendationTargetRow,
   AgentSkillRow,
   AgentTrustRow,
@@ -30,6 +31,7 @@ import {
   getAgentTrust,
   importAgentSkills,
   listAgentSkills,
+  listAgentSkillAssessments,
   listAgentSnapshots,
   listCapabilityTokens,
   listConstraintLearnedEvents,
@@ -115,6 +117,12 @@ function isTokenActive(token: CapabilityTokenRow): boolean {
 function skillPackageStatusPill(status: SkillVerificationStatus): string {
   if (status === "verified") return "statusPill statusApproved";
   if (status === "quarantined") return "statusPill statusDenied";
+  return "statusPill statusHeld";
+}
+
+function assessmentStatusPill(status: "started" | "passed" | "failed"): string {
+  if (status === "passed") return "statusPill statusApproved";
+  if (status === "failed") return "statusPill statusDenied";
   return "statusPill statusHeld";
 }
 
@@ -446,6 +454,10 @@ export function AgentProfilePage(): JSX.Element {
   const [skillsError, setSkillsError] = useState<string | null>(null);
   const [skillsLoading, setSkillsLoading] = useState<boolean>(false);
 
+  const [assessments, setAssessments] = useState<AgentSkillAssessmentRow[]>([]);
+  const [assessmentsError, setAssessmentsError] = useState<string | null>(null);
+  const [assessmentsLoading, setAssessmentsLoading] = useState<boolean>(false);
+
   const [snapshots, setSnapshots] = useState<DailyAgentSnapshotRow[]>([]);
   const [snapshotsError, setSnapshotsError] = useState<string | null>(null);
   const [snapshotsLoading, setSnapshotsLoading] = useState<boolean>(false);
@@ -495,6 +507,24 @@ export function AgentProfilePage(): JSX.Element {
 
   const primarySkill = useMemo(() => skills.find((s) => s.is_primary) ?? null, [skills]);
   const topSkills = useMemo(() => skills.slice(0, 6), [skills]);
+  const recentAssessments = useMemo(() => assessments.slice(0, 8), [assessments]);
+  const assessmentPassedCount = useMemo(
+    () => assessments.filter((row) => row.status === "passed").length,
+    [assessments],
+  );
+  const assessmentFailedCount = useMemo(
+    () => assessments.filter((row) => row.status === "failed").length,
+    [assessments],
+  );
+  const assessmentRecentRegressions = useMemo(() => {
+    const threshold = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return assessments.filter((row) => {
+      if (row.status !== "failed") return false;
+      const startedAtMs = new Date(row.started_at).getTime();
+      if (!Number.isFinite(startedAtMs)) return false;
+      return startedAtMs >= threshold;
+    }).length;
+  }, [assessments]);
   const latestSnapshot = useMemo(() => (snapshots.length ? snapshots[0] : null), [snapshots]);
   const baselineSnapshot = useMemo(() => {
     if (!snapshots.length) return null;
@@ -931,6 +961,7 @@ export function AgentProfilePage(): JSX.Element {
     setTrust(null);
     setTokens([]);
     setSkills([]);
+    setAssessments([]);
     setSnapshots([]);
     setConstraints([]);
     setMistakes([]);
@@ -938,6 +969,7 @@ export function AgentProfilePage(): JSX.Element {
     setTrustError(null);
     setTokensError(null);
     setSkillsError(null);
+    setAssessmentsError(null);
     setSnapshotsError(null);
     setConstraintsError(null);
     setMistakesError(null);
@@ -960,6 +992,7 @@ export function AgentProfilePage(): JSX.Element {
       setAgentMetaLoading(false);
       setTrustLoading(false);
       setSkillsLoading(false);
+      setAssessmentsLoading(false);
       setSnapshotsLoading(false);
       setConstraintsLoading(false);
       setMistakesLoading(false);
@@ -987,6 +1020,7 @@ export function AgentProfilePage(): JSX.Element {
 
     setTrustLoading(true);
     setSkillsLoading(true);
+    setAssessmentsLoading(true);
     setSnapshotsLoading(true);
     setConstraintsLoading(true);
     setMistakesLoading(true);
@@ -998,6 +1032,7 @@ export function AgentProfilePage(): JSX.Element {
           Promise.all([
             getAgentTrust(agentId),
             listAgentSkills({ agent_id: agentId, limit: 50 }),
+            listAgentSkillAssessments({ agent_id: agentId, limit: 100 }),
             listAgentSnapshots({ agent_id: agentId, days: 30 }),
             listConstraintLearnedEvents({ agent_id: agentId, limit: 200 }),
             listMistakeRepeatedEvents({ agent_id: agentId, limit: 200 }),
@@ -1008,9 +1043,11 @@ export function AgentProfilePage(): JSX.Element {
         if (cancelled) return;
 
         if (coreResult.status === "fulfilled") {
-          const [trustRes, skillsRes, snapshotsRes, constraintsRes, mistakesRes] = coreResult.value;
+          const [trustRes, skillsRes, assessmentsRes, snapshotsRes, constraintsRes, mistakesRes] =
+            coreResult.value;
           setTrust(trustRes);
           setSkills(skillsRes);
+          setAssessments(assessmentsRes);
           setSnapshots(snapshotsRes);
           setConstraints(constraintsRes);
           setMistakes(mistakesRes);
@@ -1018,6 +1055,7 @@ export function AgentProfilePage(): JSX.Element {
           const code = toErrorCode(coreResult.reason);
           setTrustError(code);
           setSkillsError(code);
+          setAssessmentsError(code);
           setSnapshotsError(code);
           setConstraintsError(code);
           setMistakesError(code);
@@ -1033,6 +1071,7 @@ export function AgentProfilePage(): JSX.Element {
         if (cancelled) return;
         setTrustLoading(false);
         setSkillsLoading(false);
+        setAssessmentsLoading(false);
         setSnapshotsLoading(false);
         setConstraintsLoading(false);
         setMistakesLoading(false);
@@ -2646,6 +2685,61 @@ export function AgentProfilePage(): JSX.Element {
             <details className="advancedDetails">
               <summary className="advancedSummary">{t("common.advanced")}</summary>
               <JsonView value={{ skills }} />
+            </details>
+          </div>
+
+          <div className="detailCard">
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.section.assessments")}</div>
+              <div className="muted">
+                {t("agent_profile.assessments.summary", {
+                  passed: assessmentPassedCount,
+                  failed: assessmentFailedCount,
+                  regressions: assessmentRecentRegressions,
+                })}
+              </div>
+            </div>
+
+            {assessmentsError ? <div className="errorBox">{t("error.load_failed", { code: assessmentsError })}</div> : null}
+            {assessmentsLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {!assessmentsLoading && !assessmentsError && assessments.length === 0 ? (
+              <div className="placeholder">{t("agent_profile.assessments_empty")}</div>
+            ) : null}
+
+            {recentAssessments.length ? (
+              <>
+                <div className="detailSectionTitle">{t("agent_profile.assessments_recent")}</div>
+                <ul className="constraintList">
+                  {recentAssessments.map((assessment) => (
+                    <li key={assessment.assessment_id} className="constraintRow">
+                      <div className="constraintTop">
+                        <span className="mono">{assessment.skill_id}</span>
+                        <span className={assessmentStatusPill(assessment.status)}>
+                          {t(`agent_profile.assessment.status.${assessment.status}`)}
+                        </span>
+                        <span className="muted">{formatTimestamp(assessment.started_at)}</span>
+                      </div>
+                      <div className="muted">
+                        <span className="mono">
+                          {t("agent_profile.assessment.score")}:{" "}
+                          {typeof assessment.score === "number" ? assessment.score.toFixed(2) : "-"}
+                        </span>
+                        <span className="muted"> · </span>
+                        <span className="mono">{t("agent_profile.assessment.run_id")}: {assessment.run_id ?? "-"}</span>
+                        <span className="muted"> · </span>
+                        <span className="mono">
+                          {t("agent_profile.assessment.trigger_reason")}: {assessment.trigger_reason ?? "-"}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+
+            <details className="advancedDetails">
+              <summary className="advancedSummary">{t("common.advanced")}</summary>
+              <JsonView value={{ assessments }} />
             </details>
           </div>
 

@@ -40,6 +40,28 @@ type AgentSkillRow = {
   updated_at: string;
 };
 
+type SkillAssessmentStatus = "started" | "passed" | "failed";
+
+type SkillAssessmentRow = {
+  assessment_id: string;
+  workspace_id: string;
+  agent_id: string;
+  skill_id: string;
+  status: SkillAssessmentStatus;
+  trigger_reason: string | null;
+  suite: Record<string, unknown>;
+  results: Record<string, unknown>;
+  score: number | null;
+  run_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  created_by_type: ActorType;
+  created_by_id: string;
+  created_by_principal_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type AgentRow = {
   agent_id: string;
   principal_id: string;
@@ -653,6 +675,55 @@ export async function registerSkillsLedgerRoutes(app: FastifyInstance, pool: Api
       [workspace_id, agent.agent_id, limit],
     );
     return reply.code(200).send({ skills: rows.rows });
+  });
+
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { limit?: string; skill_id?: string; status?: string };
+  }>("/v1/agents/:agentId/skills/assessments", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+    const agent = await getAgent(pool, agent_id);
+    if (!agent) return reply.code(404).send({ error: "agent_not_found" });
+
+    const skill_id = normalizeOptionalString(req.query.skill_id) ?? null;
+    const statusRaw = normalizeOptionalString(req.query.status);
+    if (statusRaw && statusRaw !== "started" && statusRaw !== "passed" && statusRaw !== "failed") {
+      return reply.code(400).send({ error: "invalid_status" });
+    }
+    const status = (statusRaw ?? null) as SkillAssessmentStatus | null;
+    const limit = parseLimit(req.query.limit);
+
+    const rows = await pool.query<SkillAssessmentRow>(
+      `SELECT
+         assessment_id,
+         workspace_id,
+         agent_id,
+         skill_id,
+         status,
+         trigger_reason,
+         suite,
+         results,
+         score,
+         run_id,
+         started_at,
+         ended_at,
+         created_by_type,
+         created_by_id,
+         created_by_principal_id,
+         created_at,
+         updated_at
+       FROM sec_skill_assessments
+       WHERE workspace_id = $1
+         AND agent_id = $2
+         AND ($3::text IS NULL OR skill_id = $3)
+         AND ($4::text IS NULL OR status = $4)
+       ORDER BY started_at DESC, assessment_id DESC
+       LIMIT $5`,
+      [workspace_id, agent.agent_id, skill_id, status, limit],
+    );
+    return reply.code(200).send({ assessments: rows.rows });
   });
 
   app.post<{
