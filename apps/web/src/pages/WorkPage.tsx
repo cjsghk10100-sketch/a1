@@ -643,8 +643,21 @@ export function WorkPage(): JSX.Element {
   }, [pins]);
 
   useEffect(() => {
-    saveStepsRunId(roomId, stepsRunId);
-  }, [roomId, stepsRunId]);
+    const room = roomId.trim();
+    if (!room) return;
+
+    const run = stepsRunId.trim();
+    if (!run) {
+      saveStepsRunId(room, "");
+      return;
+    }
+
+    // Prevent stale room-switch writes: only persist when selected run belongs to current room.
+    const belongsToRoom = runs.some((r) => r.run_id === run && r.room_id === room);
+    if (!belongsToRoom) return;
+
+    saveStepsRunId(room, run);
+  }, [roomId, stepsRunId, runs]);
 
   useEffect(() => {
     saveToolCallsStepId(stepsRunId, toolCallsStepId);
