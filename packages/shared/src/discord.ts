@@ -59,6 +59,37 @@ export interface DiscordMessageIngestResultV1 {
   deduped: boolean;
 }
 
+export const DiscordParsedEventStatus = {
+  Valid: "valid",
+  Invalid: "invalid",
+} as const;
+
+export type DiscordParsedEventStatus =
+  (typeof DiscordParsedEventStatus)[keyof typeof DiscordParsedEventStatus];
+
+export interface DiscordParsedEventRowV1 {
+  parsed_event_id: string;
+  workspace_id: string;
+  ingest_id: string;
+  discord_message_id: string;
+  line_index: number;
+  line_raw: string;
+  action?: string;
+  payload: Record<string, unknown>;
+  status: DiscordParsedEventStatus;
+  parse_error?: string;
+  created_at: string;
+}
+
+export interface DiscordParseEventLinesResultV1 {
+  ingest_id: string;
+  total_lines: number;
+  inserted_count: number;
+  deduped_count: number;
+  valid_count: number;
+  invalid_count: number;
+}
+
 export interface DiscordChannelMappedDataV1 {
   mapping_id: string;
   room_id: string;

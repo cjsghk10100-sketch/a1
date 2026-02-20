@@ -5,6 +5,9 @@ import type { FastifyInstance } from "fastify";
 import type {
   DiscordChannelMappingRowV1,
   DiscordChannelMappingUpsertV1,
+  DiscordParseEventLinesResultV1,
+  DiscordParsedEventRowV1,
+  DiscordParsedEventStatus,
   DiscordMessageIngestResultV1,
   DiscordMessageIngestV1,
   DiscordIngestedMessageRowV1,
@@ -41,6 +44,29 @@ type MessageDbRow = {
   source: unknown;
   message_created_at: string | null;
   ingested_at: string;
+};
+
+type ParsedEventDbRow = {
+  parsed_event_id: string;
+  workspace_id: string;
+  ingest_id: string;
+  discord_message_id: string;
+  line_index: number;
+  line_raw: string;
+  action: string | null;
+  payload: unknown;
+  status: DiscordParsedEventStatus;
+  parse_error: string | null;
+  created_at: string;
+};
+
+type ParsedEventLineCandidate = {
+  line_index: number;
+  line_raw: string;
+  action?: string;
+  payload: Record<string, unknown>;
+  status: DiscordParsedEventStatus;
+  parse_error?: string;
 };
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
@@ -131,12 +157,210 @@ function toMessageRow(row: MessageDbRow): DiscordIngestedMessageRowV1 {
   };
 }
 
+function toParsedEventRow(row: ParsedEventDbRow): DiscordParsedEventRowV1 {
+  return {
+    parsed_event_id: row.parsed_event_id,
+    workspace_id: row.workspace_id,
+    ingest_id: row.ingest_id,
+    discord_message_id: row.discord_message_id,
+    line_index: row.line_index,
+    line_raw: row.line_raw,
+    action: row.action ?? undefined,
+    payload:
+      row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+        ? (row.payload as Record<string, unknown>)
+        : {},
+    status: row.status,
+    parse_error: row.parse_error ?? undefined,
+    created_at: row.created_at,
+  };
+}
+
+function splitTokens(input: string): string[] {
+  const matches = input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
+  return matches ?? [];
+}
+
+function unquote(input: string): string {
+  if (
+    (input.startsWith('"') && input.endsWith('"')) ||
+    (input.startsWith("'") && input.endsWith("'"))
+  ) {
+    return input.slice(1, -1);
+  }
+  return input;
+}
+
+function normalizeEventAction(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const v = raw.trim().toLowerCase();
+  if (!v) return undefined;
+  if (v === "request_approval") return "approval.requested";
+  if (v === "decide_approval") return "approval.decided";
+  return v;
+}
+
+function normalizeDecision(raw: string | undefined): "approve" | "deny" | "hold" | undefined {
+  if (!raw) return undefined;
+  const v = raw.trim().toLowerCase();
+  if (!v) return undefined;
+  if (v === "approve" || v === "approved" || v === "yes" || v === "y") return "approve";
+  if (v === "deny" || v === "denied" || v === "no" || v === "n" || v === "reject" || v === "rejected") {
+    return "deny";
+  }
+  if (v === "hold" || v === "pending") return "hold";
+  return undefined;
+}
+
+function parseEventLine(line_raw: string, line_index: number): ParsedEventLineCandidate {
+  const trimmed = line_raw.trim();
+  const tokens = splitTokens(trimmed);
+  if (tokens.length === 0 || tokens[0] !== "@event") {
+    return {
+      line_index,
+      line_raw,
+      payload: {},
+      status: "invalid",
+      parse_error: "invalid_event_prefix",
+    };
+  }
+
+  const payload: Record<string, unknown> = {};
+  for (const token of tokens.slice(1)) {
+    const eq = token.indexOf("=");
+    if (eq <= 0 || eq === token.length - 1) {
+      return {
+        line_index,
+        line_raw,
+        payload: {},
+        status: "invalid",
+        parse_error: "invalid_token_format",
+      };
+    }
+    const key = token.slice(0, eq).trim().toLowerCase();
+    const value = unquote(token.slice(eq + 1).trim());
+    if (!key) {
+      return {
+        line_index,
+        line_raw,
+        payload: {},
+        status: "invalid",
+        parse_error: "invalid_token_key",
+      };
+    }
+    payload[key] = value;
+  }
+
+  const action = normalizeEventAction(
+    (payload.action as string | undefined) ?? (payload.type as string | undefined),
+  );
+  if (!action) {
+    return {
+      line_index,
+      line_raw,
+      payload,
+      status: "invalid",
+      parse_error: "missing_action",
+    };
+  }
+
+  if (action === "approval.requested") {
+    const approval_id =
+      normalizeOptionalString(payload.approval_id) ?? normalizeOptionalString(payload.id);
+    if (!approval_id) {
+      return {
+        line_index,
+        line_raw,
+        action,
+        payload,
+        status: "invalid",
+        parse_error: "missing_approval_id",
+      };
+    }
+    return {
+      line_index,
+      line_raw,
+      action,
+      payload: {
+        ...payload,
+        action,
+        approval_id,
+      },
+      status: "valid",
+    };
+  }
+
+  if (action === "approval.decided") {
+    const approval_id =
+      normalizeOptionalString(payload.approval_id) ?? normalizeOptionalString(payload.id);
+    const decision = normalizeDecision(
+      normalizeOptionalString(payload.decision) ?? normalizeOptionalString(payload.state),
+    );
+    if (!approval_id) {
+      return {
+        line_index,
+        line_raw,
+        action,
+        payload,
+        status: "invalid",
+        parse_error: "missing_approval_id",
+      };
+    }
+    if (!decision) {
+      return {
+        line_index,
+        line_raw,
+        action,
+        payload,
+        status: "invalid",
+        parse_error: "invalid_decision",
+      };
+    }
+    return {
+      line_index,
+      line_raw,
+      action,
+      payload: {
+        ...payload,
+        action,
+        approval_id,
+        decision,
+      },
+      status: "valid",
+    };
+  }
+
+  return {
+    line_index,
+    line_raw,
+    action,
+    payload,
+    status: "invalid",
+    parse_error: "unsupported_action",
+  };
+}
+
+function extractParsedEventLines(content_raw: string): ParsedEventLineCandidate[] {
+  const out: ParsedEventLineCandidate[] = [];
+  const lines = content_raw.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.trim().startsWith("@event")) continue;
+    out.push(parseEventLine(line, i));
+  }
+  return out;
+}
+
 function newMappingId(): string {
   return `dmap_${randomUUID().replaceAll("-", "")}`;
 }
 
 function newIngestId(): string {
   return `dmsg_${randomUUID().replaceAll("-", "")}`;
+}
+
+function newParsedEventId(): string {
+  return `devt_${randomUUID().replaceAll("-", "")}`;
 }
 
 async function loadMappingByChannel(
@@ -165,6 +389,94 @@ async function loadMappingByChannel(
   );
   if (res.rowCount !== 1) return null;
   return res.rows[0];
+}
+
+async function loadMessageByIngestId(
+  pool: DbPool,
+  workspace_id: string,
+  ingest_id: string,
+): Promise<MessageDbRow | null> {
+  const res = await pool.query<MessageDbRow>(
+    `SELECT
+       ingest_id,
+       workspace_id,
+       room_id,
+       discord_guild_id,
+       discord_channel_id,
+       discord_thread_id,
+       discord_message_id,
+       author_discord_id,
+       author_name,
+       content_raw,
+       attachments,
+       embeds,
+       source,
+       message_created_at::text AS message_created_at,
+       ingested_at::text AS ingested_at
+     FROM integ_discord_messages
+     WHERE workspace_id = $1
+       AND ingest_id = $2`,
+    [workspace_id, ingest_id],
+  );
+  if (res.rowCount !== 1) return null;
+  return res.rows[0];
+}
+
+async function parseAndPersistEventLines(
+  pool: DbPool,
+  input: { workspace_id: string; message: MessageDbRow },
+): Promise<DiscordParseEventLinesResultV1> {
+  const parsed = extractParsedEventLines(input.message.content_raw);
+  let inserted_count = 0;
+
+  for (const line of parsed) {
+    const res = await pool.query(
+      `INSERT INTO integ_discord_event_lines (
+         parsed_event_id,
+         workspace_id,
+         ingest_id,
+         discord_message_id,
+         line_index,
+         line_raw,
+         action,
+         payload,
+         status,
+         parse_error,
+         created_at
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11
+       )
+       ON CONFLICT (workspace_id, ingest_id, line_index)
+       DO NOTHING`,
+      [
+        newParsedEventId(),
+        input.workspace_id,
+        input.message.ingest_id,
+        input.message.discord_message_id,
+        line.line_index,
+        line.line_raw,
+        line.action ?? null,
+        JSON.stringify(line.payload),
+        line.status,
+        line.parse_error ?? null,
+        input.message.ingested_at,
+      ],
+    );
+
+    if (res.rowCount === 1) inserted_count += 1;
+  }
+
+  const valid_count = parsed.filter((line) => line.status === "valid").length;
+  const invalid_count = parsed.length - valid_count;
+
+  return {
+    ingest_id: input.message.ingest_id,
+    total_lines: parsed.length,
+    inserted_count,
+    deduped_count: parsed.length - inserted_count,
+    valid_count,
+    invalid_count,
+  };
 }
 
 export async function registerDiscordIngestRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -400,6 +712,11 @@ export async function registerDiscordIngestRoutes(app: FastifyInstance, pool: Db
         display: {},
       });
 
+      await parseAndPersistEventLines(pool, {
+        workspace_id,
+        message: row,
+      });
+
       return reply.code(201).send({
         ingest_id: row.ingest_id,
         room_id: row.room_id ?? undefined,
@@ -442,6 +759,77 @@ export async function registerDiscordIngestRoutes(app: FastifyInstance, pool: Db
       discord_message_id: row.discord_message_id,
       deduped: true,
     });
+  });
+
+  app.post<{
+    Params: { ingestId: string };
+  }>(
+    "/v1/integrations/discord/messages/:ingestId/parse-events",
+    async (req, reply): Promise<DiscordParseEventLinesResultV1> => {
+      const workspace_id = workspaceIdFromReq(req);
+      const ingest_id = normalizeRequiredString(req.params.ingestId);
+      if (!ingest_id) return reply.code(400).send({ error: "invalid_ingest_id" });
+
+      const message = await loadMessageByIngestId(pool, workspace_id, ingest_id);
+      if (!message) return reply.code(404).send({ error: "discord_message_not_found" });
+
+      const result = await parseAndPersistEventLines(pool, { workspace_id, message });
+      return reply.code(200).send(result);
+    },
+  );
+
+  app.get<{
+    Querystring: { ingest_id?: string; status?: string; action?: string; limit?: string };
+  }>("/v1/integrations/discord/event-lines", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const ingest_id = normalizeOptionalString(req.query.ingest_id);
+    const status =
+      req.query.status === "valid" || req.query.status === "invalid"
+        ? req.query.status
+        : undefined;
+    if (req.query.status && !status) {
+      return reply.code(400).send({ error: "invalid_status" });
+    }
+    const action = normalizeOptionalString(req.query.action);
+    const limit = parseLimit(req.query.limit, 100);
+
+    const args: unknown[] = [workspace_id];
+    let where = "workspace_id = $1";
+    if (ingest_id) {
+      args.push(ingest_id);
+      where += ` AND ingest_id = $${args.length}`;
+    }
+    if (status) {
+      args.push(status);
+      where += ` AND status = $${args.length}`;
+    }
+    if (action) {
+      args.push(action);
+      where += ` AND action = $${args.length}`;
+    }
+    args.push(limit);
+
+    const rows = await pool.query<ParsedEventDbRow>(
+      `SELECT
+         parsed_event_id,
+         workspace_id,
+         ingest_id,
+         discord_message_id,
+         line_index,
+         line_raw,
+         action,
+         payload,
+         status,
+         parse_error,
+         created_at::text AS created_at
+       FROM integ_discord_event_lines
+       WHERE ${where}
+       ORDER BY created_at DESC
+       LIMIT $${args.length}`,
+      args,
+    );
+
+    return reply.code(200).send({ events: rows.rows.map(toParsedEventRow) });
   });
 
   app.get<{
