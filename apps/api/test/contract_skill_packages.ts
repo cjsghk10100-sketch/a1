@@ -79,6 +79,25 @@ async function postJson<T>(
   return JSON.parse(text) as T;
 }
 
+async function postJsonAny(
+  baseUrl: string,
+  urlPath: string,
+  body: unknown,
+  headers?: Record<string, string>,
+): Promise<{ status: number; json: unknown; text: string }> {
+  const res = await fetch(`${baseUrl}${urlPath}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(headers ?? {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const json = text.length > 0 ? (JSON.parse(text) as unknown) : {};
+  return { status: res.status, json, text };
+}
+
 async function getJson<T>(
   baseUrl: string,
   urlPath: string,
@@ -156,6 +175,61 @@ async function main(): Promise<void> {
       [installed.skill_package_id],
     );
     assert.equal(installedEvent.rowCount, 1);
+
+    const failingInstall = await postJson<{
+      skill_package_id: string;
+      verification_status: string;
+    }>(
+      baseUrl,
+      "/v1/skills/packages/install",
+      {
+        skill_id: "web_search_bad",
+        version: "1.2.1",
+        hash_sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        signature: "sig_bad",
+        manifest: {
+          required_tools: ["http_client"],
+          data_access: { read: ["web"] },
+          egress_domains: ["example.com"],
+          sandbox_required: true,
+        },
+      },
+      workspaceHeader,
+    );
+    assert.equal(failingInstall.verification_status, "pending");
+
+    const failedVerify = await postJsonAny(
+      baseUrl,
+      `/v1/skills/packages/${encodeURIComponent(failingInstall.skill_package_id)}/verify`,
+      {
+        expected_hash_sha256:
+          "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      },
+      workspaceHeader,
+    );
+    assert.equal(failedVerify.status, 400);
+    const failedVerifyJson = failedVerify.json as { error: string };
+    assert.equal(failedVerifyJson.error, "hash_mismatch");
+
+    const failedRow = await db.query<{
+      verification_status: string;
+      quarantine_reason: string | null;
+    }>(
+      "SELECT verification_status, quarantine_reason FROM sec_skill_packages WHERE skill_package_id = $1",
+      [failingInstall.skill_package_id],
+    );
+    assert.equal(failedRow.rowCount, 1);
+    assert.equal(failedRow.rows[0].verification_status, "quarantined");
+    assert.equal(failedRow.rows[0].quarantine_reason, "verify_hash_mismatch");
+
+    const autoQuarantinedEvent = await db.query<{ event_type: string }>(
+      `SELECT event_type
+       FROM evt_events
+       WHERE event_type = 'skill.package.quarantined'
+         AND data->>'skill_package_id' = $1`,
+      [failingInstall.skill_package_id],
+    );
+    assert.equal(autoQuarantinedEvent.rowCount, 1);
 
     const verified = await postJson<{
       ok: boolean;
@@ -241,4 +315,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-

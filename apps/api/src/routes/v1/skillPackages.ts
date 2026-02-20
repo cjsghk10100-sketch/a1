@@ -92,6 +92,63 @@ function newSkillPackageId(): string {
   return `spkg_${randomUUID().replaceAll("-", "")}`;
 }
 
+interface QuarantinePackageInput {
+  workspace_id: string;
+  skill_package_id: string;
+  skill_id: string;
+  version: string;
+  current_status: SkillVerificationStatusValue;
+  reason: string;
+  actor_type: ActorType;
+  actor_id: string;
+  principal_id?: string;
+  correlation_id: string;
+}
+
+async function quarantinePackage(pool: DbPool, input: QuarantinePackageInput): Promise<boolean> {
+  if (input.current_status === SkillVerificationStatus.Quarantined) return false;
+
+  const occurred_at = new Date().toISOString();
+  await pool.query(
+    `UPDATE sec_skill_packages
+     SET verification_status = $3,
+         quarantine_reason = $4,
+         updated_at = $5
+     WHERE workspace_id = $1
+       AND skill_package_id = $2`,
+    [
+      input.workspace_id,
+      input.skill_package_id,
+      SkillVerificationStatus.Quarantined,
+      input.reason,
+      occurred_at,
+    ],
+  );
+
+  await appendToStream(pool, {
+    event_id: randomUUID(),
+    event_type: "skill.package.quarantined",
+    event_version: 1,
+    occurred_at,
+    workspace_id: input.workspace_id,
+    actor: { actor_type: input.actor_type, actor_id: input.actor_id },
+    actor_principal_id: input.principal_id,
+    stream: { stream_type: "workspace", stream_id: input.workspace_id },
+    correlation_id: input.correlation_id,
+    data: {
+      skill_package_id: input.skill_package_id,
+      skill_id: input.skill_id,
+      version: input.version,
+      quarantine_reason: input.reason,
+    },
+    policy_context: {},
+    model_context: {},
+    display: {},
+  });
+
+  return true;
+}
+
 export async function registerSkillPackageRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.post<{
     Body: {
@@ -233,34 +290,53 @@ export async function registerSkillPackageRoutes(app: FastifyInstance, pool: DbP
       return reply.code(409).send({ error: "skill_package_quarantined" });
     }
 
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+    const principal_id = normalizeOptionalString(req.body.principal_id);
+    const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
+
+    const failAndQuarantine = async (error: string): Promise<ReturnType<typeof reply.code>> => {
+      if (row.verification_status === SkillVerificationStatus.Pending) {
+        await quarantinePackage(pool, {
+          workspace_id,
+          skill_package_id,
+          skill_id: row.skill_id,
+          version: row.version,
+          current_status: row.verification_status,
+          reason: `verify_${error}`,
+          actor_type,
+          actor_id,
+          principal_id,
+          correlation_id,
+        });
+      }
+      return reply.code(400).send({ error });
+    };
+
     const expected_hash_sha256 = normalizeOptionalString(req.body.expected_hash_sha256);
     if (expected_hash_sha256) {
       const expected = normalizeHash(expected_hash_sha256);
       if (!expected) return reply.code(400).send({ error: "invalid_expected_hash_sha256" });
-      if (expected !== row.hash_sha256) return reply.code(400).send({ error: "hash_mismatch" });
+      if (expected !== row.hash_sha256) return await failAndQuarantine("hash_mismatch");
     }
 
     if (!normalizeHash(row.hash_sha256)) {
-      return reply.code(400).send({ error: "stored_hash_invalid" });
+      return await failAndQuarantine("stored_hash_invalid");
     }
     if (!normalizeManifest(row.manifest)) {
-      return reply.code(400).send({ error: "stored_manifest_invalid" });
+      return await failAndQuarantine("stored_manifest_invalid");
     }
 
     const signature = normalizeOptionalString(req.body.signature);
     if (signature && row.signature && signature !== row.signature) {
-      return reply.code(400).send({ error: "signature_mismatch" });
+      return await failAndQuarantine("signature_mismatch");
     }
 
     if (row.verification_status === SkillVerificationStatus.Verified) {
       return reply.code(200).send({ ok: true, already_verified: true });
     }
 
-    const actor_type = normalizeActorType(req.body.actor_type);
-    const actor_id =
-      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
-    const principal_id = normalizeOptionalString(req.body.principal_id);
-    const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
     const verified_at = new Date().toISOString();
 
     await pool.query(
@@ -338,37 +414,17 @@ export async function registerSkillPackageRoutes(app: FastifyInstance, pool: DbP
       normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
     const principal_id = normalizeOptionalString(req.body.principal_id);
     const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
-    const occurred_at = new Date().toISOString();
-
-    await pool.query(
-      `UPDATE sec_skill_packages
-       SET verification_status = $3,
-           quarantine_reason = $4,
-           updated_at = $5
-       WHERE workspace_id = $1
-         AND skill_package_id = $2`,
-      [workspace_id, skill_package_id, SkillVerificationStatus.Quarantined, reason, occurred_at],
-    );
-
-    await appendToStream(pool, {
-      event_id: randomUUID(),
-      event_type: "skill.package.quarantined",
-      event_version: 1,
-      occurred_at,
+    await quarantinePackage(pool, {
       workspace_id,
-      actor: { actor_type, actor_id },
-      actor_principal_id: principal_id,
-      stream: { stream_type: "workspace", stream_id: workspace_id },
+      skill_package_id,
+      skill_id: row.skill_id,
+      version: row.version,
+      current_status: row.verification_status,
+      reason,
+      actor_type,
+      actor_id,
+      principal_id,
       correlation_id,
-      data: {
-        skill_package_id,
-        skill_id: row.skill_id,
-        version: row.version,
-        quarantine_reason: reason,
-      },
-      policy_context: {},
-      model_context: {},
-      display: {},
     });
 
     return reply.code(200).send({
@@ -427,4 +483,3 @@ export async function registerSkillPackageRoutes(app: FastifyInstance, pool: DbP
     return reply.code(200).send({ packages: res.rows });
   });
 }
-
