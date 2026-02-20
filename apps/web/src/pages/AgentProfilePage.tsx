@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import type {
   AgentRecordV1,
@@ -396,6 +397,19 @@ function summarizeAgentChangeEvent(event: EventRow): string {
 
 export function AgentProfilePage(): JSX.Element {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+
+  function openInspectorByRun(nextRunId: string): void {
+    const runId = nextRunId.trim();
+    if (!runId) return;
+    navigate(`/inspector?run_id=${encodeURIComponent(runId)}`);
+  }
+
+  function openInspectorByEvent(nextEventId: string): void {
+    const eventId = nextEventId.trim();
+    if (!eventId) return;
+    navigate(`/inspector?event_id=${encodeURIComponent(eventId)}`);
+  }
 
   const tabs: Array<{ key: TabKey; label: string }> = useMemo(
     () => [
@@ -2818,11 +2832,24 @@ export function AgentProfilePage(): JSX.Element {
                   {recentAssessments.map((assessment) => (
                     <li key={assessment.assessment_id} className="constraintRow">
                       <div className="constraintTop">
-                        <span className="mono">{assessment.skill_id}</span>
-                        <span className={assessmentStatusPill(assessment.status)}>
-                          {t(`agent_profile.assessment.status.${assessment.status}`)}
-                        </span>
-                        <span className="muted">{formatTimestamp(assessment.started_at)}</span>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                          <span className="mono">{assessment.skill_id}</span>
+                          <span className={assessmentStatusPill(assessment.status)}>
+                            {t(`agent_profile.assessment.status.${assessment.status}`)}
+                          </span>
+                          <span className="muted">{formatTimestamp(assessment.started_at)}</span>
+                        </div>
+                        {assessment.run_id ? (
+                          <button
+                            type="button"
+                            className="ghostButton"
+                            onClick={() => {
+                              openInspectorByRun(assessment.run_id ?? "");
+                            }}
+                          >
+                            {t("agent_profile.open_inspector.run")}
+                          </button>
+                        ) : null}
                       </div>
                       <div className="muted">
                         <span className="mono">
@@ -2877,8 +2904,21 @@ export function AgentProfilePage(): JSX.Element {
                   {constraints.slice(0, 6).map((c) => (
                     <li key={c.event_id} className="constraintRow">
                       <div className="constraintTop">
-                        <span className="mono">{c.reason_code}</span>
-                        <span className="muted">{formatTimestamp(c.occurred_at)}</span>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                          <span className="mono">{c.reason_code}</span>
+                          <span className="muted">{formatTimestamp(c.occurred_at)}</span>
+                        </div>
+                        {c.run_id ? (
+                          <button
+                            type="button"
+                            className="ghostButton"
+                            onClick={() => {
+                              openInspectorByRun(c.run_id ?? "");
+                            }}
+                          >
+                            {t("agent_profile.open_inspector.run")}
+                          </button>
+                        ) : null}
                       </div>
                       <div className="muted">
                         <span className="mono">{c.category}</span>
@@ -2900,8 +2940,21 @@ export function AgentProfilePage(): JSX.Element {
                   {mistakes.slice(0, 6).map((m) => (
                     <li key={m.event_id} className="constraintRow">
                       <div className="constraintTop">
-                        <span className="mono">{m.reason_code}</span>
-                        <span className="muted">{formatTimestamp(m.occurred_at)}</span>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                          <span className="mono">{m.reason_code}</span>
+                          <span className="muted">{formatTimestamp(m.occurred_at)}</span>
+                        </div>
+                        {m.run_id ? (
+                          <button
+                            type="button"
+                            className="ghostButton"
+                            onClick={() => {
+                              openInspectorByRun(m.run_id ?? "");
+                            }}
+                          >
+                            {t("agent_profile.open_inspector.run")}
+                          </button>
+                        ) : null}
                       </div>
                       <div className="muted">
                         <span className="mono">{m.action}</span>
@@ -2946,12 +2999,23 @@ export function AgentProfilePage(): JSX.Element {
                 {changeTimelineRows.map((event) => (
                   <li key={event.event_id} className="constraintRow">
                     <div className="constraintTop">
-                      <span className="mono">
-                        {t(`agent_profile.change_timeline.type.${event.event_type}`, {
-                          defaultValue: event.event_type,
-                        })}
-                      </span>
-                      <span className="muted">{formatTimestamp(event.occurred_at)}</span>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <span className="mono">
+                          {t(`agent_profile.change_timeline.type.${event.event_type}`, {
+                            defaultValue: event.event_type,
+                          })}
+                        </span>
+                        <span className="muted">{formatTimestamp(event.occurred_at)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="ghostButton"
+                        onClick={() => {
+                          openInspectorByEvent(event.event_id);
+                        }}
+                      >
+                        {t("agent_profile.open_inspector.event")}
+                      </button>
                     </div>
                     <div className="muted">
                       <span className="mono">

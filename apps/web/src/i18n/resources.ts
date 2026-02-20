@@ -549,6 +549,8 @@ export const resources = {
       "agent_profile.assessment.score": "score",
       "agent_profile.assessment.run_id": "run",
       "agent_profile.assessment.trigger_reason": "trigger",
+      "agent_profile.open_inspector.run": "Open run in Inspector",
+      "agent_profile.open_inspector.event": "Open event in Inspector",
 
       "agent_profile.constraints_summary": "{{learned}} learned / {{mistakes}} repeated",
       "agent_profile.constraints_empty": "No constraints or repeated mistakes yet.",
@@ -1118,6 +1120,8 @@ export const resources = {
       "agent_profile.assessment.score": "점수",
       "agent_profile.assessment.run_id": "런",
       "agent_profile.assessment.trigger_reason": "트리거",
+      "agent_profile.open_inspector.run": "인스펙터에서 런 열기",
+      "agent_profile.open_inspector.event": "인스펙터에서 이벤트 열기",
 
       "agent_profile.constraints_summary": "학습 {{learned}} / 반복 {{mistakes}}",
       "agent_profile.constraints_empty": "아직 제약/반복 실수가 없습니다.",
