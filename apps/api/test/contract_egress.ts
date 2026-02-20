@@ -252,6 +252,7 @@ async function main(): Promise<void> {
       workspaceHeader,
     );
     assert.equal(required.decision, "require_approval");
+    assert.equal(required.reason_code, "external_write_requires_approval");
     assert.ok(typeof required.approval_id === "string");
 
     const requiredRow = await db.query<{

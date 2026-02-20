@@ -48,6 +48,13 @@ interface CapabilityTokenRow {
   revoked_at: string | null;
 }
 
+interface ActionRegistryRow {
+  action_type: string;
+  reversible: boolean;
+  zone_required: Zone;
+  requires_pre_approval: boolean;
+}
+
 function normalizeAction(action: string): string {
   const a = action.trim();
   if (a === "external_write") return "external.write";
@@ -72,6 +79,10 @@ function normalizeString(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const value = raw.trim();
   return value.length ? value : null;
+}
+
+function effectiveZone(inputZone: Zone | undefined): Zone {
+  return inputZone ?? "supervised";
 }
 
 function normalizeRecord(raw: unknown): Record<string, unknown> | null {
@@ -136,6 +147,70 @@ function buildTokenDenied(reason_code: string, reason: string): PolicyCheckResul
     reason_code,
     reason,
   };
+}
+
+function buildActionPolicyDecision(
+  decision: PolicyDecision,
+  reason_code: string,
+  reason: string,
+): PolicyCheckResultV1 {
+  return { decision, reason_code, reason };
+}
+
+async function evaluateActionRegistryPolicy(
+  pool: DbPool,
+  category: AuthorizeCategory,
+  input: AuthorizeInputV2,
+): Promise<PolicyCheckResultV1 | null> {
+  if (category !== "action" && category !== "egress") return null;
+
+  const action = normalizeAction(input.action);
+  const rowRes = await pool.query<ActionRegistryRow>(
+    `SELECT action_type, reversible, zone_required, requires_pre_approval
+     FROM sec_action_registry
+     WHERE action_type = $1
+     LIMIT 1`,
+    [action],
+  );
+  if (rowRes.rowCount !== 1) return null;
+  if (action === "external.write") return null;
+
+  const row = rowRes.rows[0];
+  const zone = effectiveZone(input.zone);
+
+  if (zone !== row.zone_required) {
+    if (row.zone_required === "high_stakes") {
+      return buildActionPolicyDecision(
+        PolicyDecision.RequireApproval,
+        "action_zone_requires_high_stakes",
+        `Action '${action}' requires high_stakes zone.`,
+      );
+    }
+
+    return buildActionPolicyDecision(
+      PolicyDecision.Deny,
+      "action_zone_mismatch",
+      `Action '${action}' requires '${row.zone_required}' zone (current: '${zone}').`,
+    );
+  }
+
+  if (!row.reversible && zone !== "high_stakes") {
+    return buildActionPolicyDecision(
+      PolicyDecision.RequireApproval,
+      "action_irreversible_requires_high_stakes",
+      `Irreversible action '${action}' requires high_stakes zone.`,
+    );
+  }
+
+  if (row.requires_pre_approval && action !== "external.write") {
+    return buildActionPolicyDecision(
+      PolicyDecision.RequireApproval,
+      "action_pre_approval_required",
+      `Action '${action}' requires pre-approval.`,
+    );
+  }
+
+  return null;
 }
 
 async function evaluateCapabilityToken(
@@ -427,8 +502,10 @@ async function authorizeCore(
   input: AuthorizeInputV2,
 ): Promise<AuthorizeResultV2> {
   const capabilityDecision = await evaluateCapabilityToken(pool, category, input);
+  const actionRegistryDecision =
+    capabilityDecision == null ? await evaluateActionRegistryPolicy(pool, category, input) : null;
   const quarantined =
-    category === "egress" && !capabilityDecision
+    category === "egress" && !capabilityDecision && !actionRegistryDecision
       ? await isQuarantinedAgentPrincipal(pool, input.principal_id)
       : null;
   const quotaDecision =
@@ -438,6 +515,7 @@ async function authorizeCore(
 
   const policyBase =
     capabilityDecision ??
+    actionRegistryDecision ??
     (quarantined
       ? {
           decision: PolicyDecision.Deny,
@@ -459,6 +537,7 @@ async function authorizeCore(
 
   const base =
     !capabilityDecision &&
+    !actionRegistryDecision &&
     !quarantined &&
     quotaDecision &&
     policyBase.decision !== PolicyDecision.Deny

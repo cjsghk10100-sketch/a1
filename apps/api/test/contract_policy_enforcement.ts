@@ -172,6 +172,51 @@ async function main(): Promise<void> {
     );
     assert.equal(Number.parseInt(allowAuditCount.rows[0].count, 10), 1);
 
+    const zoneMismatch = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "artifact.create",
+        actor_type: "user",
+        actor_id: "ceo",
+        room_id,
+        zone: "sandbox",
+      },
+      workspaceHeader,
+    );
+    assert.equal(zoneMismatch.decision, "deny");
+    assert.equal(zoneMismatch.reason_code, "action_zone_mismatch");
+
+    const highStakesZoneRequired = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "payment.execute",
+        actor_type: "user",
+        actor_id: "ceo",
+        room_id,
+        zone: "supervised",
+      },
+      workspaceHeader,
+    );
+    assert.equal(highStakesZoneRequired.decision, "require_approval");
+    assert.equal(highStakesZoneRequired.reason_code, "action_zone_requires_high_stakes");
+
+    const preApprovalRequired = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "payment.execute",
+        actor_type: "user",
+        actor_id: "ceo",
+        room_id,
+        zone: "high_stakes",
+      },
+      workspaceHeader,
+    );
+    assert.equal(preApprovalRequired.decision, "require_approval");
+    assert.equal(preApprovalRequired.reason_code, "action_pre_approval_required");
+
     process.env.POLICY_KILL_SWITCH_EXTERNAL_WRITE = "1";
     const killed = await postJson<{ decision: string; reason_code: string }>(
       baseUrl,
