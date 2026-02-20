@@ -146,6 +146,35 @@ async function main(): Promise<void> {
     assert.equal(servicePrincipal.principal.legacy_actor_type, "service");
     assert.equal(servicePrincipal.principal.legacy_actor_id, "api");
 
+    const agent = await requestJson(
+      baseUrl,
+      "POST",
+      "/v1/principals/legacy/ensure",
+      { actor_type: "agent", actor_id: "agt_contract" },
+      workspaceHeader,
+    );
+    assert.equal(agent.status, 200);
+    const agentPrincipal = agent.json as {
+      principal: { principal_id: string; principal_type: string; legacy_actor_type: string; legacy_actor_id: string };
+    };
+    assert.ok(agentPrincipal.principal.principal_id.length > 0);
+    assert.equal(agentPrincipal.principal.principal_type, "agent");
+    assert.equal(agentPrincipal.principal.legacy_actor_type, "agent");
+    assert.equal(agentPrincipal.principal.legacy_actor_id, "agt_contract");
+
+    const agent2 = await requestJson(
+      baseUrl,
+      "POST",
+      "/v1/principals/legacy/ensure",
+      { actor_type: "agent", actor_id: "agt_contract" },
+      workspaceHeader,
+    );
+    assert.equal(agent2.status, 200);
+    const agentPrincipal2 = agent2.json as {
+      principal: { principal_id: string };
+    };
+    assert.equal(agentPrincipal2.principal.principal_id, agentPrincipal.principal.principal_id);
+
     const rows = await db.query<{ principal_type: string }>(
       `SELECT principal_type
        FROM sec_principals
@@ -165,4 +194,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-

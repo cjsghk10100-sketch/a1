@@ -249,6 +249,27 @@ async function main(): Promise<void> {
       assert.equal(row.rows[0].status, "held");
       assert.equal(row.rows[0].decision, "hold");
       assert.equal(row.rows[0].correlation_id, reqEv.correlation_id);
+
+      const { approval_id: agentApprovalId } = await postJson<{ approval_id: string }>(
+        baseUrl,
+        "/v1/approvals",
+        {
+          action: "external.write",
+          title: "Agent request",
+          room_id,
+          actor_type: "agent",
+          actor_id: "agt_contract",
+        },
+        workspaceHeader,
+      );
+
+      const agentRow = await client.query<{ requested_by_type: string; requested_by_id: string }>(
+        "SELECT requested_by_type, requested_by_id FROM proj_approvals WHERE approval_id = $1",
+        [agentApprovalId],
+      );
+      assert.equal(agentRow.rowCount, 1);
+      assert.equal(agentRow.rows[0].requested_by_type, "agent");
+      assert.equal(agentRow.rows[0].requested_by_id, "agt_contract");
     } finally {
       await client.end();
     }
@@ -262,4 +283,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-
