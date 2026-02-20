@@ -523,7 +523,11 @@ export const resources = {
       "agent_profile.skill.primary": "Primary",
       "agent_profile.skill.level": "lvl",
       "agent_profile.skill.usage_7d": "use7d",
+      "agent_profile.skill.usage_30d": "use30d",
       "agent_profile.skill.reliability": "rel",
+      "agent_profile.skill.impact": "impact",
+      "agent_profile.skill.learned_at": "learned",
+      "agent_profile.skill.last_used_at": "last_used",
 
       "agent_profile.constraints_summary": "{{learned}} learned / {{mistakes}} repeated",
       "agent_profile.constraints_empty": "No constraints or repeated mistakes yet.",
@@ -1053,6 +1057,10 @@ export const resources = {
       "agent_profile.skill.level": "레벨",
       "agent_profile.skill.usage_7d": "7일 사용",
       "agent_profile.skill.reliability": "신뢰도",
+      "agent_profile.skill.usage_30d": "30일 사용",
+      "agent_profile.skill.impact": "영향도",
+      "agent_profile.skill.learned_at": "학습 시각",
+      "agent_profile.skill.last_used_at": "최근 사용",
 
       "agent_profile.constraints_summary": "학습 {{learned}} / 반복 {{mistakes}}",
       "agent_profile.constraints_empty": "아직 제약/반복 실수가 없습니다.",

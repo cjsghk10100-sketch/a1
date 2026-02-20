@@ -2377,6 +2377,16 @@ export function AgentProfilePage(): JSX.Element {
               <div className="skillPrimary">
                 <div className="muted">{t("agent_profile.primary_skill")}</div>
                 <div className="mono">{primarySkill.skill_id}</div>
+                <div className="muted skillMeta">
+                  <span className="mono">
+                    {t("agent_profile.skill.learned_at")}:{" "}
+                    {primarySkill.learned_at ? formatTimestamp(primarySkill.learned_at) : "-"}
+                  </span>
+                  <span className="mono">
+                    {t("agent_profile.skill.last_used_at")}:{" "}
+                    {primarySkill.last_used_at ? formatTimestamp(primarySkill.last_used_at) : "-"}
+                  </span>
+                </div>
               </div>
             ) : null}
 
@@ -2391,7 +2401,17 @@ export function AgentProfilePage(): JSX.Element {
                     <div className="muted skillMeta">
                       <span className="mono">{t("agent_profile.skill.level")}: {s.level}</span>
                       <span className="mono">{t("agent_profile.skill.usage_7d")}: {s.usage_7d}</span>
+                      <span className="mono">{t("agent_profile.skill.usage_30d")}: {s.usage_30d}</span>
                       <span className="mono">{t("agent_profile.skill.reliability")}: {s.reliability_score.toFixed(2)}</span>
+                      <span className="mono">{t("agent_profile.skill.impact")}: {s.impact_score.toFixed(2)}</span>
+                    </div>
+                    <div className="muted skillMeta">
+                      <span className="mono">
+                        {t("agent_profile.skill.learned_at")}: {s.learned_at ? formatTimestamp(s.learned_at) : "-"}
+                      </span>
+                      <span className="mono">
+                        {t("agent_profile.skill.last_used_at")}: {s.last_used_at ? formatTimestamp(s.last_used_at) : "-"}
+                      </span>
                     </div>
                   </li>
                 ))}
