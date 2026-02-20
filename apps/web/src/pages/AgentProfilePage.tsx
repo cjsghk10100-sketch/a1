@@ -36,6 +36,7 @@ import {
   listMistakeRepeatedEvents,
   listRegisteredAgents,
   quarantineAgent,
+  reviewPendingAgentSkills,
   recommendAutonomyUpgrade,
   registerAgent,
   unquarantineAgent,
@@ -996,39 +997,71 @@ export function AgentProfilePage(): JSX.Element {
     setSkillImportVerifyErrors([]);
     setSkillImportVerifyProgress({ done: 0, total: pendingIds.length });
 
-    const verified = new Set<string>();
-    const errors: Array<{ skill_package_id: string; error_code: string }> = [];
-
-    for (let idx = 0; idx < pendingIds.length; idx += 1) {
-      const skill_package_id = pendingIds[idx];
+    try {
+      // Prefer server-side bulk review (TASK-197 API). Fall back to per-package verify for compatibility.
       try {
-        await verifySkillPackage(skill_package_id);
-        verified.add(skill_package_id);
-      } catch (e) {
-        errors.push({ skill_package_id, error_code: toErrorCode(e) });
-      } finally {
-        setSkillImportVerifyProgress({ done: idx + 1, total: pendingIds.length });
+        const principal = await ensureOperatorPrincipalId();
+        const actor_id = operatorActorId.trim() || "anon";
+        const reviewed = await reviewPendingAgentSkills(agent_id, {
+          actor_type: "user",
+          actor_id,
+          principal_id: principal,
+        });
+        const statusById = new Map(reviewed.items.map((it) => [it.skill_package_id, it.status] as const));
+
+        setSkillImportResult((prev) => {
+          const current = prev ?? baseResult ?? null;
+          if (!current) return prev;
+          const items = current.items.map((it) => {
+            const nextStatus = statusById.get(it.skill_package_id);
+            return nextStatus ? { ...it, status: nextStatus } : it;
+          });
+          const summary = {
+            total: items.length,
+            verified: items.filter((it) => it.status === "verified").length,
+            pending: items.filter((it) => it.status === "pending").length,
+            quarantined: items.filter((it) => it.status === "quarantined").length,
+          };
+          return { summary, items };
+        });
+        setSkillImportVerifyProgress({ done: pendingIds.length, total: pendingIds.length });
+      } catch {
+        const verified = new Set<string>();
+        const errors: Array<{ skill_package_id: string; error_code: string }> = [];
+
+        for (let idx = 0; idx < pendingIds.length; idx += 1) {
+          const skill_package_id = pendingIds[idx];
+          try {
+            await verifySkillPackage(skill_package_id);
+            verified.add(skill_package_id);
+          } catch (e) {
+            errors.push({ skill_package_id, error_code: toErrorCode(e) });
+          } finally {
+            setSkillImportVerifyProgress({ done: idx + 1, total: pendingIds.length });
+          }
+        }
+
+        setSkillImportVerifyErrors(errors);
+        setSkillImportResult((prev) => {
+          const current = prev ?? baseResult ?? null;
+          if (!current) return prev;
+          const items = current.items.map((it) =>
+            verified.has(it.skill_package_id) ? { ...it, status: "verified" as const } : it,
+          );
+          const summary = {
+            total: items.length,
+            verified: items.filter((it) => it.status === "verified").length,
+            pending: items.filter((it) => it.status === "pending").length,
+            quarantined: items.filter((it) => it.status === "quarantined").length,
+          };
+          return { summary, items };
+        });
       }
+
+      await reloadSkillPackages();
+    } finally {
+      setSkillImportVerifyLoading(false);
     }
-
-    setSkillImportVerifyErrors(errors);
-    setSkillImportResult((prev) => {
-      const current = prev ?? baseResult ?? null;
-      if (!current) return prev;
-      const items = current.items.map((it) =>
-        verified.has(it.skill_package_id) ? { ...it, status: "verified" as const } : it,
-      );
-      const summary = {
-        total: items.length,
-        verified: items.filter((it) => it.status === "verified").length,
-        pending: items.filter((it) => it.status === "pending").length,
-        quarantined: items.filter((it) => it.status === "quarantined").length,
-      };
-      return { summary, items };
-    });
-
-    await reloadSkillPackages();
-    setSkillImportVerifyLoading(false);
   }
 
   async function verifyPendingPackagesFromImport(): Promise<void> {

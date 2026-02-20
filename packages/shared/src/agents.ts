@@ -1,4 +1,5 @@
 import type { SkillPackageManifestV1, SkillVerificationStatus } from "./skills_supply_chain.js";
+import type { ActorType } from "./events.js";
 
 export interface AgentRecordV1 {
   agent_id: string;
@@ -66,5 +67,27 @@ export interface AgentSkillImportResponseV1 {
     version: string;
     status: SkillVerificationStatus;
     skill_package_id: string;
+  }>;
+}
+
+export interface AgentSkillReviewPendingRequestV1 {
+  actor_type?: ActorType;
+  actor_id?: string;
+  principal_id?: string;
+  correlation_id?: string;
+}
+
+export interface AgentSkillReviewPendingResponseV1 {
+  summary: {
+    total: number;
+    verified: number;
+    quarantined: number;
+  };
+  items: Array<{
+    skill_package_id: string;
+    skill_id: string;
+    version: string;
+    status: SkillVerificationStatus;
+    reason?: string;
   }>;
 }
