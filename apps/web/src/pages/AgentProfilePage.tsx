@@ -405,10 +405,14 @@ export function AgentProfilePage(): JSX.Element {
     navigate(`/inspector?run_id=${encodeURIComponent(runId)}`);
   }
 
-  function openInspectorByEvent(nextEventId: string): void {
+  function openInspectorByEvent(nextEventId: string, nextRunId: string | null): void {
     const eventId = nextEventId.trim();
     if (!eventId) return;
-    navigate(`/inspector?event_id=${encodeURIComponent(eventId)}`);
+    const params = new URLSearchParams();
+    params.set("event_id", eventId);
+    const runId = nextRunId?.trim() ?? "";
+    if (runId) params.set("run_id", runId);
+    navigate(`/inspector?${params.toString()}`);
   }
 
   const tabs: Array<{ key: TabKey; label: string }> = useMemo(
@@ -3011,7 +3015,7 @@ export function AgentProfilePage(): JSX.Element {
                         type="button"
                         className="ghostButton"
                         onClick={() => {
-                          openInspectorByEvent(event.event_id);
+                          openInspectorByEvent(event.event_id, event.run_id);
                         }}
                       >
                         {t("agent_profile.open_inspector.event")}

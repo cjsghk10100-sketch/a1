@@ -126,14 +126,14 @@ export function InspectorPage(): JSX.Element {
     if (initialRunId) {
       setMode("run");
       setRunId(initialRunId);
-      void loadByRun(initialRunId, initialLimit, false);
+      void loadByRun(initialRunId, initialLimit, false, initialEventId || null);
       return;
     }
 
     if (initialCorrelationId) {
       setMode("correlation");
       setCorrelationId(initialCorrelationId);
-      void loadByCorrelation(initialCorrelationId, initialLimit, false);
+      void loadByCorrelation(initialCorrelationId, initialLimit, false, initialEventId || null);
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,7 +228,12 @@ export function InspectorPage(): JSX.Element {
     }
   }
 
-  async function loadByRun(nextRunId: string, nextLimit: number, updateUrl: boolean): Promise<void> {
+  async function loadByRun(
+    nextRunId: string,
+    nextLimit: number,
+    updateUrl: boolean,
+    preserveEventId: string | null = null,
+  ): Promise<void> {
     const id = nextRunId.trim();
     if (!id) return;
 
@@ -251,7 +256,7 @@ export function InspectorPage(): JSX.Element {
     setHashVerifyResult(null);
     setHashVerifyState("idle");
     setHashVerifyError(null);
-    setSelectedEventId(null);
+    setSelectedEventId(preserveEventId);
 
     try {
       const [r, s, tc, a, ev] = await Promise.all([
@@ -272,11 +277,14 @@ export function InspectorPage(): JSX.Element {
       setArtifacts(a);
       setEvents(ev);
 
-      const latest = ev.length ? ev[ev.length - 1] : null;
-      if (latest) setSelectedEventId(latest.event_id);
+      if (!preserveEventId) {
+        const latest = ev.length ? ev[ev.length - 1] : null;
+        if (latest) setSelectedEventId(latest.event_id);
+      }
 
       if (updateUrl) {
         const params: Record<string, string> = { run_id: id, limit: String(nextLimit) };
+        if (preserveEventId) params.event_id = preserveEventId;
         setSearchParams(params);
       }
 
@@ -292,6 +300,7 @@ export function InspectorPage(): JSX.Element {
     nextCorrelationId: string,
     nextLimit: number,
     updateUrl: boolean,
+    preserveEventId: string | null = null,
   ): Promise<void> {
     const id = nextCorrelationId.trim();
     if (!id) return;
@@ -314,18 +323,21 @@ export function InspectorPage(): JSX.Element {
     setHashVerifyResult(null);
     setHashVerifyState("idle");
     setHashVerifyError(null);
-    setSelectedEventId(null);
+    setSelectedEventId(preserveEventId);
 
     try {
       const ev = await listEvents({ correlation_id: id, limit: nextLimit });
       if (token !== loadTokenRef.current) return;
 
       setEvents(ev);
-      const latest = ev.length ? ev[ev.length - 1] : null;
-      if (latest) setSelectedEventId(latest.event_id);
+      if (!preserveEventId) {
+        const latest = ev.length ? ev[ev.length - 1] : null;
+        if (latest) setSelectedEventId(latest.event_id);
+      }
 
       if (updateUrl) {
         const params: Record<string, string> = { correlation_id: id, limit: String(nextLimit) };
+        if (preserveEventId) params.event_id = preserveEventId;
         setSearchParams(params);
       }
 
