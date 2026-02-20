@@ -274,8 +274,8 @@ async function main(): Promise<void> {
     assert.equal(messageRes.status, 201);
     const message_id = (messageRes.json as { message_id: string }).message_id;
 
-    const messageEvent = await db.query<{ event_id: string; contains_secrets: boolean }>(
-      `SELECT event_id, contains_secrets
+    const messageEvent = await db.query<{ event_id: string; contains_secrets: boolean; data_text: string }>(
+      `SELECT event_id, contains_secrets, data::text AS data_text
        FROM evt_events
        WHERE event_type = 'message.created'
          AND data->>'message_id' = $1`,
@@ -283,6 +283,22 @@ async function main(): Promise<void> {
     );
     assert.equal(messageEvent.rowCount, 1);
     assert.equal(messageEvent.rows[0].contains_secrets, true);
+    assert.ok(!messageEvent.rows[0].data_text.includes("ghp_abcdefghijklmnopqrstuvwxyz123456"));
+
+    const eventRedactedEvent = await db.query<{ data_text: string }>(
+      `SELECT data::text AS data_text
+       FROM evt_events
+       WHERE event_type = 'event.redacted'
+         AND data->>'target_event_id' = $1`,
+      [messageEvent.rows[0].event_id],
+    );
+    assert.equal(eventRedactedEvent.rowCount, 1);
+    const redactedData = JSON.parse(eventRedactedEvent.rows[0].data_text) as {
+      target_event_id?: string;
+      intended_redaction_level?: string;
+    };
+    assert.equal(redactedData.target_event_id, messageEvent.rows[0].event_id);
+    assert.equal(redactedData.intended_redaction_level, "partial");
 
     const leakDetectedEvent = await db.query<{ data_text: string }>(
       `SELECT data::text AS data_text

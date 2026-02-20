@@ -9,6 +9,12 @@ export interface SecretDlpScanResult {
   scanned_bytes: number;
 }
 
+export interface SecretDlpRedactionResult {
+  redacted: unknown;
+  changed: boolean;
+  redacted_values: number;
+}
+
 interface DlpRule {
   rule_id: string;
   regex: RegExp;
@@ -23,6 +29,8 @@ const DLP_RULES: readonly DlpRule[] = [
 
 const MAX_SCAN_BYTES = 256_000;
 const MAX_MATCHES = 20;
+const MAX_REDACTION_DEPTH = 20;
+const REDACTED_VALUE = "[redacted]";
 
 function maskSecret(value: string): string {
   if (value.length <= 8) return "*".repeat(value.length);
@@ -74,5 +82,81 @@ export function scanForSecrets(input: unknown): SecretDlpScanResult {
     contains_secrets: matches.length > 0,
     matches,
     scanned_bytes: text.length,
+  };
+}
+
+function redactStringWithRules(input: string): { value: string; changed: boolean } {
+  let value = input;
+  let changed = false;
+
+  for (const rule of DLP_RULES) {
+    const re = new RegExp(rule.regex.source, rule.regex.flags);
+    const next = value.replace(re, REDACTED_VALUE);
+    if (next !== value) {
+      changed = true;
+      value = next;
+    }
+  }
+
+  return { value, changed };
+}
+
+function redactUnknownInner(
+  input: unknown,
+  depth: number,
+): { value: unknown; changed: boolean; redacted_values: number } {
+  if (depth > MAX_REDACTION_DEPTH) {
+    return { value: REDACTED_VALUE, changed: true, redacted_values: 1 };
+  }
+  if (input == null) return { value: input, changed: false, redacted_values: 0 };
+
+  if (typeof input === "string") {
+    const redacted = redactStringWithRules(input);
+    return {
+      value: redacted.value,
+      changed: redacted.changed,
+      redacted_values: redacted.changed ? 1 : 0,
+    };
+  }
+
+  if (typeof input === "number" || typeof input === "boolean") {
+    return { value: input, changed: false, redacted_values: 0 };
+  }
+
+  if (Array.isArray(input)) {
+    const out: unknown[] = [];
+    let changed = false;
+    let redacted_values = 0;
+    for (const item of input) {
+      const next = redactUnknownInner(item, depth + 1);
+      out.push(next.value);
+      if (next.changed) changed = true;
+      redacted_values += next.redacted_values;
+    }
+    return { value: out, changed, redacted_values };
+  }
+
+  if (typeof input === "object") {
+    const out: Record<string, unknown> = {};
+    let changed = false;
+    let redacted_values = 0;
+    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      const next = redactUnknownInner(v, depth + 1);
+      out[k] = next.value;
+      if (next.changed) changed = true;
+      redacted_values += next.redacted_values;
+    }
+    return { value: out, changed, redacted_values };
+  }
+
+  return { value: String(input), changed: true, redacted_values: 1 };
+}
+
+export function redactSecrets(input: unknown): SecretDlpRedactionResult {
+  const redacted = redactUnknownInner(input, 0);
+  return {
+    redacted: redacted.value,
+    changed: redacted.changed,
+    redacted_values: redacted.redacted_values,
   };
 }

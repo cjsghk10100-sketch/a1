@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { EventEnvelopeV1, StreamRefV1 } from "@agentapp/shared";
 
 import type { DbClient, DbPool } from "../db/pool.js";
-import { scanForSecrets, type SecretDlpMatch } from "../security/dlp.js";
+import { redactSecrets, scanForSecrets, type SecretDlpMatch } from "../security/dlp.js";
 import { computeEventHashV1 } from "../security/hashChain.js";
 import { ensurePrincipalForLegacyActor } from "../security/principals.js";
 import { allocateStreamSeq } from "./allocateSeq.js";
@@ -157,6 +157,46 @@ async function appendDlpDetectedEvent(
   });
 }
 
+async function appendEventRedactedEvent(
+  tx: DbClient,
+  source: EnvelopeWithSeq,
+): Promise<EnvelopeWithSeq | null> {
+  if (source.event_type === "event.redacted" || source.event_type === "secret.leaked.detected") return null;
+
+  const dlp_actor_principal_id = await ensurePrincipalForLegacyActor(tx, "service", "dlp");
+  const occurred_at = new Date().toISOString();
+
+  return await appendSingleEvent(tx, {
+    event_id: randomUUID(),
+    event_type: "event.redacted",
+    event_version: 1,
+    occurred_at,
+    workspace_id: source.workspace_id,
+    mission_id: source.mission_id,
+    room_id: source.room_id,
+    thread_id: source.thread_id,
+    run_id: source.run_id,
+    step_id: source.step_id,
+    actor: { actor_type: "service", actor_id: "dlp" },
+    actor_principal_id: dlp_actor_principal_id,
+    zone: source.zone,
+    stream: {
+      stream_type: source.stream.stream_type,
+      stream_id: source.stream.stream_id,
+    },
+    correlation_id: source.correlation_id,
+    causation_id: source.event_id,
+    data: {
+      target_event_id: source.event_id,
+      reason: "dlp_secret_detected",
+      intended_redaction_level: source.redaction_level ?? "partial",
+    },
+    policy_context: {},
+    model_context: {},
+    display: {},
+  });
+}
+
 export async function appendToStream(
   pool: DbPool,
   envelope: EventEnvelopeV1,
@@ -167,17 +207,25 @@ export async function appendToStream(
     await client.query("BEGIN");
 
     const dlpResult = options.skipDlp ? null : scanForSecrets(envelope.data);
+    const redactionResult =
+      !options.skipDlp && dlpResult?.contains_secrets ? redactSecrets(envelope.data) : null;
     const shouldMarkContainsSecrets = Boolean(dlpResult?.contains_secrets);
 
     const baseEnvelope: EventEnvelopeV1 = {
       ...envelope,
+      data: redactionResult?.changed ? redactionResult.redacted : envelope.data,
       contains_secrets: envelope.contains_secrets ?? shouldMarkContainsSecrets,
+      redaction_level: envelope.redaction_level ?? (redactionResult?.changed ? "partial" : undefined),
     };
 
     const appended = await appendSingleEvent(client, baseEnvelope);
 
     if (!options.skipDlp && dlpResult?.contains_secrets) {
       await recordDlpFindings(client, appended, dlpResult.matches, dlpResult.scanned_bytes);
+
+      if (redactionResult?.changed) {
+        await appendEventRedactedEvent(client, appended);
+      }
 
       if (appended.event_type !== "secret.leaked.detected") {
         const dlpEvent = await appendDlpDetectedEvent(client, appended, dlpResult.matches);
