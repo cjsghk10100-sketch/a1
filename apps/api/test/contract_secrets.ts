@@ -321,6 +321,21 @@ async function main(): Promise<void> {
     assert.ok(redactionFindings.rows.some((row) => row.rule_id === "github_pat"));
     assert.ok(redactionFindings.rows.every((row) => row.action === "shadow_flagged"));
     assert.ok(redactionFindings.rows.every((row) => !row.match_preview.includes("abcdefghijklmnopqrstuvwxyz")));
+
+    const redactionApiRes = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/audit/redactions?event_id=${encodeURIComponent(messageEvent.rows[0].event_id)}&limit=20`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(redactionApiRes.status, 200);
+    const redactionApiPayload = redactionApiRes.json as {
+      redactions: Array<{ event_id: string | null; rule_id: string; action: string }>;
+    };
+    assert.ok(redactionApiPayload.redactions.length >= 1);
+    assert.ok(redactionApiPayload.redactions.every((row) => row.event_id === messageEvent.rows[0].event_id));
+    assert.ok(redactionApiPayload.redactions.some((row) => row.rule_id === "github_pat"));
   } finally {
     if (previousMasterKey) {
       process.env.SECRETS_MASTER_KEY = previousMasterKey;

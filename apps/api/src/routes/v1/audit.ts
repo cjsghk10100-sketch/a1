@@ -26,6 +26,13 @@ function normalizeStreamType(raw: unknown): StreamType | undefined {
   return undefined;
 }
 
+type RedactionAction = "shadow_flagged" | "event_emitted";
+
+function normalizeRedactionAction(raw: unknown): RedactionAction | undefined {
+  if (raw === "shadow_flagged" || raw === "event_emitted") return raw;
+  return undefined;
+}
+
 function normalizeLimit(raw: unknown): number {
   const parsed = Number(raw ?? "2000");
   if (!Number.isFinite(parsed)) return 2000;
@@ -61,6 +68,21 @@ interface ChainRow {
   idempotency_key: string | null;
   prev_event_hash: string | null;
   event_hash: string | null;
+}
+
+interface RedactionLogRow {
+  redaction_log_id: string;
+  workspace_id: string;
+  event_id: string | null;
+  event_type: string;
+  stream_type: StreamType;
+  stream_id: string;
+  rule_id: string;
+  match_preview: string;
+  detector_version: string;
+  action: RedactionAction;
+  details: Record<string, unknown>;
+  created_at: string;
 }
 
 export async function registerAuditRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -219,5 +241,68 @@ export async function registerAuditRoutes(app: FastifyInstance, pool: DbPool): P
       first_mismatch,
       last_event_hash: checkedCount ? rows.rows[checkedCount - 1].event_hash : null,
     });
+  });
+
+  app.get<{
+    Querystring: {
+      event_id?: string;
+      rule_id?: string;
+      action?: RedactionAction;
+      stream_type?: StreamType;
+      stream_id?: string;
+      limit?: string;
+    };
+  }>("/v1/audit/redactions", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const event_id = normalizeOptionalString(req.query.event_id);
+    const rule_id = normalizeOptionalString(req.query.rule_id);
+
+    const actionRaw = normalizeOptionalString(req.query.action);
+    const action = actionRaw ? normalizeRedactionAction(actionRaw) : undefined;
+    if (actionRaw && !action) return reply.code(400).send({ error: "invalid_action" });
+
+    const streamTypeRaw = normalizeOptionalString(req.query.stream_type);
+    const stream_type = streamTypeRaw ? normalizeStreamType(streamTypeRaw) : undefined;
+    if (streamTypeRaw && !stream_type) {
+      return reply.code(400).send({ error: "invalid_stream_type" });
+    }
+    const stream_id = normalizeOptionalString(req.query.stream_id);
+    const limit = normalizeLimit(req.query.limit);
+
+    const rows = await pool.query<RedactionLogRow>(
+      `SELECT
+         redaction_log_id,
+         workspace_id,
+         event_id,
+         event_type,
+         stream_type,
+         stream_id,
+         rule_id,
+         match_preview,
+         detector_version,
+         action,
+         details,
+         created_at::text AS created_at
+       FROM sec_redaction_log
+       WHERE workspace_id = $1
+         AND ($2::text IS NULL OR event_id = $2)
+         AND ($3::text IS NULL OR rule_id = $3)
+         AND ($4::text IS NULL OR action = $4)
+         AND ($5::text IS NULL OR stream_type = $5)
+         AND ($6::text IS NULL OR stream_id = $6)
+       ORDER BY created_at DESC
+       LIMIT $7`,
+      [
+        workspace_id,
+        event_id ?? null,
+        rule_id ?? null,
+        action ?? null,
+        stream_type ?? null,
+        stream_id ?? null,
+        limit,
+      ],
+    );
+
+    return reply.code(200).send({ redactions: rows.rows });
   });
 }
