@@ -363,11 +363,45 @@ export function AgentProfilePage(): JSX.Element {
   }, [skillImportResult]);
   const delegationSummary = useMemo(() => delegationDepthSummary(tokens), [tokens]);
   const delegationRows = useMemo(() => delegationGraphRows(tokens).slice(0, 40), [tokens]);
+  const scopedActionRegistryRows = useMemo(() => {
+    if (!scopeUnion.actions.length || !actionRegistryRows.length) return [];
+    const registryByType = new Map<string, ActionRegistryRow>();
+    for (const row of actionRegistryRows) {
+      registryByType.set(row.action_type, row);
+    }
+    return scopeUnion.actions
+      .map((actionType) => registryByType.get(actionType) ?? null)
+      .filter((row): row is ActionRegistryRow => row != null);
+  }, [scopeUnion.actions, actionRegistryRows]);
+
+  const actionPolicyFlags = useMemo(() => {
+    const rows = scopedActionRegistryRows;
+    const highStakes = rows.filter((r) => r.zone_required === "high_stakes").length;
+    const supervised = rows.filter((r) => r.zone_required === "supervised").length;
+    const sandbox = rows.filter((r) => r.zone_required === "sandbox").length;
+    const preRequired = rows.some((r) => r.requires_pre_approval);
+    const postRequired = rows.some((r) => r.post_review_required);
+    const irreversible = rows.some((r) => !r.reversible);
+    const reversible = rows.filter((r) => r.reversible).length;
+
+    return {
+      highStakes,
+      supervised,
+      sandbox,
+      preRequired,
+      postRequired,
+      irreversible,
+      reversible,
+    };
+  }, [scopedActionRegistryRows]);
 
   const permissionMatrix = useMemo(() => {
     const readScopeCount = scopeUnion.rooms.length + scopeUnion.dataRead.length;
     const writeActionCount = scopeUnion.actions.filter((a) => isWriteAction(a)).length;
-    const highStakesCount = scopeUnion.actions.filter((a) => isHighStakesAction(a)).length;
+    const highStakesCount = Math.max(
+      actionPolicyFlags.highStakes,
+      scopeUnion.actions.filter((a) => isHighStakesAction(a)).length,
+    );
     const writeScopeCount = scopeUnion.dataWrite.length + writeActionCount;
     const externalScopeCount = scopeUnion.egress.length;
 
@@ -395,12 +429,16 @@ export function AgentProfilePage(): JSX.Element {
         state: highStakesState,
       },
     ] as Array<{ key: string; label: string; scopeCount: number; state: PermissionState }>;
-  }, [scopeUnion, isQuarantined, t]);
+  }, [scopeUnion, actionPolicyFlags.highStakes, isQuarantined, t]);
 
   const zoneRing = useMemo(() => {
     const writeActionCount = scopeUnion.actions.filter((a) => isWriteAction(a)).length;
-    const highStakesCount = scopeUnion.actions.filter((a) => isHighStakesAction(a)).length;
-    const hasSupervisedScope = scopeUnion.dataWrite.length + writeActionCount + scopeUnion.egress.length > 0;
+    const highStakesCount = Math.max(
+      actionPolicyFlags.highStakes,
+      scopeUnion.actions.filter((a) => isHighStakesAction(a)).length,
+    );
+    const hasSupervisedScope =
+      scopeUnion.dataWrite.length + writeActionCount + scopeUnion.egress.length + actionPolicyFlags.supervised > 0;
     const hasHighStakesScope = highStakesCount > 0;
 
     const sandboxState: ZoneState = "active";
@@ -420,27 +458,45 @@ export function AgentProfilePage(): JSX.Element {
       { key: "supervised", label: t("agent_profile.zone.supervised"), state: supervisedState },
       { key: "high_stakes", label: t("agent_profile.zone.high_stakes"), state: highStakesState },
     ] as Array<{ key: string; label: string; state: ZoneState }>;
-  }, [scopeUnion, isQuarantined, t]);
+  }, [scopeUnion, actionPolicyFlags.highStakes, actionPolicyFlags.supervised, isQuarantined, t]);
 
   const approvalRecommendations = useMemo(() => {
     const trustScore = trust?.trust_score ?? 0;
     const hasWriteScope = scopeUnion.dataWrite.length > 0 || scopeUnion.actions.some((a) => isWriteAction(a));
     const hasExternalScope = scopeUnion.egress.length > 0;
-    const hasHighStakesScope = scopeUnion.actions.some((a) => isHighStakesAction(a));
+    const hasHighStakesScope =
+      actionPolicyFlags.highStakes > 0 || scopeUnion.actions.some((a) => isHighStakesAction(a));
 
     let internalWriteMode: ApprovalMode = "blocked";
     if (hasWriteScope) {
-      if (isQuarantined) internalWriteMode = "pre";
-      else if (trustScore >= 0.75) internalWriteMode = "auto";
-      else if (trustScore >= 0.45) internalWriteMode = "post";
-      else internalWriteMode = "pre";
+      if (isQuarantined) {
+        internalWriteMode = "pre";
+      } else if (actionPolicyFlags.preRequired || actionPolicyFlags.highStakes > 0 || actionPolicyFlags.irreversible) {
+        internalWriteMode = "pre";
+      } else if (actionPolicyFlags.postRequired) {
+        internalWriteMode = "post";
+      } else if (trustScore >= 0.75) {
+        internalWriteMode = "auto";
+      } else if (trustScore >= 0.45) {
+        internalWriteMode = "post";
+      } else {
+        internalWriteMode = "pre";
+      }
     }
 
     let externalWriteMode: ApprovalMode = "blocked";
     if (hasExternalScope) {
-      if (isQuarantined) externalWriteMode = "blocked";
-      else if (trustScore >= 0.8) externalWriteMode = "post";
-      else externalWriteMode = "pre";
+      if (isQuarantined) {
+        externalWriteMode = "blocked";
+      } else if (actionPolicyFlags.preRequired || actionPolicyFlags.highStakes > 0) {
+        externalWriteMode = "pre";
+      } else if (actionPolicyFlags.postRequired) {
+        externalWriteMode = "post";
+      } else if (trustScore >= 0.85 && !actionPolicyFlags.irreversible) {
+        externalWriteMode = "auto";
+      } else {
+        externalWriteMode = "post";
+      }
     }
 
     let highStakesMode: ApprovalMode = "blocked";
@@ -453,7 +509,7 @@ export function AgentProfilePage(): JSX.Element {
       { key: "external_write", label: t("agent_profile.approval.target.external_write"), mode: externalWriteMode },
       { key: "high_stakes", label: t("agent_profile.approval.target.high_stakes"), mode: highStakesMode },
     ] as Array<{ key: string; label: string; mode: ApprovalMode }>;
-  }, [scopeUnion, trust, isQuarantined, t]);
+  }, [scopeUnion, actionPolicyFlags, trust, isQuarantined, t]);
 
   const trustDelta7d = useMemo(() => {
     if (!latestSnapshot || !baselineSnapshot) return null;
