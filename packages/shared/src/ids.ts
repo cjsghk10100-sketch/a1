@@ -2,6 +2,7 @@ import { ulid } from "ulid";
 
 export type ApprovalId = `appr_${string}`;
 export type ArtifactId = `art_${string}`;
+export type IncidentId = `inc_${string}`;
 export type MessageId = `msg_${string}`;
 export type RoomId = `room_${string}`;
 export type RunId = `run_${string}`;
@@ -20,6 +21,10 @@ export function newApprovalId(): ApprovalId {
 
 export function newArtifactId(): ArtifactId {
   return withPrefix("art_") as ArtifactId;
+}
+
+export function newIncidentId(): IncidentId {
+  return withPrefix("inc_") as IncidentId;
 }
 
 export function newMessageId(): MessageId {

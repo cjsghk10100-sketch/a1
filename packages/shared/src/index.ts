@@ -6,6 +6,7 @@ export * from "./capabilities.js";
 export * from "./data_access.js";
 export * from "./egress.js";
 export * from "./ids.js";
+export * from "./incidents.js";
 export * from "./learning.js";
 export * from "./policy.js";
 export * from "./runs.js";

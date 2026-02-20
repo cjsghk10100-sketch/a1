@@ -39,6 +39,6 @@
 - [x] TASK-052 Run inspector timeline (run/steps/toolcalls/artifacts)
 
 ## MVP-6: Learn or Die + Sustain or Sunset
-- [ ] TASK-060 Incidents + RCA + close blockers
+- [x] TASK-060 Incidents + RCA + close blockers
 - [ ] TASK-061 Survival ledgers + daily rollup
 - [ ] TASK-062 Lifecycle automation (ACTIVE→PROBATION→…)

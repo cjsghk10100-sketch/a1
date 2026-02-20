@@ -84,6 +84,10 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `tool.succeeded` (v1)
 - `tool.failed` (v1)
 - `artifact.created` (v1)
+- `incident.opened` (v1)
+- `incident.rca.updated` (v1)
+- `incident.learning.logged` (v1)
+- `incident.closed` (v1)
 
 ## Planned Event Families (vNext)
 
