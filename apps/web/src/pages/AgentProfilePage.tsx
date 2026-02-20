@@ -282,6 +282,7 @@ export function AgentProfilePage(): JSX.Element {
   const [skillImportVerifyErrors, setSkillImportVerifyErrors] = useState<
     Array<{ skill_package_id: string; error_code: string }>
   >([]);
+  const [autoVerifyPendingOnImport, setAutoVerifyPendingOnImport] = useState<boolean>(true);
 
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
 
@@ -793,12 +794,12 @@ export function AgentProfilePage(): JSX.Element {
     }
   }
 
-  async function verifyPendingPackagesFromImport(): Promise<void> {
+  async function verifyPendingSkillPackageIds(
+    pendingIds: string[],
+    baseResult?: AgentSkillImportResponseV1,
+  ): Promise<void> {
     const agent_id = agentId.trim();
     if (!agent_id) return;
-    if (!skillImportResult) return;
-
-    const pendingIds = pendingImportPackageIds;
     if (!pendingIds.length) return;
 
     setSkillImportVerifyLoading(true);
@@ -822,8 +823,9 @@ export function AgentProfilePage(): JSX.Element {
 
     setSkillImportVerifyErrors(errors);
     setSkillImportResult((prev) => {
-      if (!prev) return prev;
-      const items = prev.items.map((it) =>
+      const current = prev ?? baseResult ?? null;
+      if (!current) return prev;
+      const items = current.items.map((it) =>
         verified.has(it.skill_package_id) ? { ...it, status: "verified" as const } : it,
       );
       const summary = {
@@ -837,6 +839,12 @@ export function AgentProfilePage(): JSX.Element {
 
     await reloadSkillPackages();
     setSkillImportVerifyLoading(false);
+  }
+
+  async function verifyPendingPackagesFromImport(): Promise<void> {
+    if (!skillImportResult) return;
+    const pendingIds = pendingImportPackageIds;
+    await verifyPendingSkillPackageIds(pendingIds);
   }
 
   useEffect(() => {
@@ -1555,6 +1563,13 @@ export function AgentProfilePage(): JSX.Element {
                         const res = await importAgentSkills(nextAgentId, { packages: packages as any[] });
                         setSkillImportResult(res);
                         await reloadSkillPackages();
+
+                        if (autoVerifyPendingOnImport) {
+                          const pendingIds = res.items
+                            .filter((it) => it.status === "pending")
+                            .map((it) => it.skill_package_id);
+                          await verifyPendingSkillPackageIds(pendingIds, res);
+                        }
                       } catch (e) {
                         setSkillImportError(toErrorCode(e));
                       } finally {
@@ -1563,7 +1578,7 @@ export function AgentProfilePage(): JSX.Element {
                     })();
                   }}
                 >
-                  {t("agent_profile.onboarding.button_import")}
+                {t("agent_profile.onboarding.button_import")}
                 </button>
                 <button
                   type="button"
@@ -1581,6 +1596,16 @@ export function AgentProfilePage(): JSX.Element {
                   {t("common.reset")}
                 </button>
               </div>
+
+              <label className="checkRow" style={{ marginTop: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={autoVerifyPendingOnImport}
+                  onChange={(e) => setAutoVerifyPendingOnImport(e.target.checked)}
+                  disabled={skillImportLoading || skillImportVerifyLoading}
+                />
+                <span>{t("agent_profile.onboarding.auto_verify_pending")}</span>
+              </label>
 
               {skillImportError ? (
                 <div className="errorBox" style={{ marginTop: 10 }}>
