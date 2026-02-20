@@ -144,15 +144,17 @@ async function main(): Promise<void> {
     const granted_by_principal_id = randomUUID();
     const rogue_grantor_principal_id = randomUUID();
     const delegated_issued_to_principal_id = randomUUID();
+    const delegated_mismatch_child_principal_id = randomUUID();
 
     await db.query(
       `INSERT INTO sec_principals (principal_id, principal_type)
-       VALUES ($1, 'agent'), ($2, 'user'), ($3, 'user'), ($4, 'agent')`,
+       VALUES ($1, 'agent'), ($2, 'user'), ($3, 'user'), ($4, 'agent'), ($5, 'agent')`,
       [
         issued_to_principal_id,
         granted_by_principal_id,
         rogue_grantor_principal_id,
         delegated_issued_to_principal_id,
+        delegated_mismatch_child_principal_id,
       ],
     );
 
@@ -205,6 +207,38 @@ async function main(): Promise<void> {
     assert.equal(principalMismatch.decision, "deny");
     assert.equal(principalMismatch.reason_code, "capability_token_principal_mismatch");
 
+    const delegatedGrant = await postJson<{ token_id: string }>(
+      baseUrl,
+      "/v1/capabilities/grant",
+      {
+        issued_to_principal_id: delegated_issued_to_principal_id,
+        granted_by_principal_id: issued_to_principal_id,
+        parent_token_id: grant.token_id,
+        scopes: { tools: ["web_search"] },
+      },
+      workspaceHeader,
+    );
+    assert.ok(delegatedGrant.token_id);
+
+    const delegationEdge = await db.query<{ parent_token_id: string; child_token_id: string; depth: number }>(
+      `SELECT parent_token_id, child_token_id, depth
+       FROM sec_capability_delegation_edges
+       WHERE workspace_id = $1
+         AND child_token_id = $2`,
+      [workspaceHeader["x-workspace-id"], delegatedGrant.token_id],
+    );
+    assert.equal(delegationEdge.rowCount, 1);
+    assert.equal(delegationEdge.rows[0].parent_token_id, grant.token_id);
+    assert.equal(delegationEdge.rows[0].child_token_id, delegatedGrant.token_id);
+    assert.equal(delegationEdge.rows[0].depth, 1);
+
+    const delegationGraph = await getJson<{ edges: Array<{ child_token_id: string }> }>(
+      baseUrl,
+      `/v1/capabilities/delegations?principal_id=${encodeURIComponent(issued_to_principal_id)}`,
+      workspaceHeader,
+    );
+    assert.ok(delegationGraph.edges.some((edge) => edge.child_token_id === delegatedGrant.token_id));
+
     const missingIssuedPrincipal = await postJsonAny(
       baseUrl,
       "/v1/capabilities/grant",
@@ -223,7 +257,7 @@ async function main(): Promise<void> {
       baseUrl,
       "/v1/capabilities/grant",
       {
-        issued_to_principal_id: delegated_issued_to_principal_id,
+        issued_to_principal_id: delegated_mismatch_child_principal_id,
         granted_by_principal_id: rogue_grantor_principal_id,
         parent_token_id: grant.token_id,
         scopes: { tools: ["web_search"] },

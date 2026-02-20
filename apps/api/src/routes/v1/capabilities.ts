@@ -158,6 +158,10 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function newDelegationEdgeId(): string {
+  return `cedg_${randomUUID().replaceAll("-", "")}`;
+}
+
 async function principalExists(pool: DbPool, principal_id: string): Promise<boolean> {
   const res = await pool.query(
     `SELECT principal_id
@@ -231,6 +235,7 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
 
     const requested_scopes = normalizeScopes(req.body.scopes ?? {});
     let effective_scopes = requested_scopes;
+    let delegation_depth: number | null = null;
 
     if (parent_token_id) {
       const parent = await pool.query<{
@@ -330,6 +335,7 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
         return reply.code(400).send({ error: "delegation_depth_exceeded" });
       }
 
+      delegation_depth = newDepth;
       effective_scopes = intersectScopes(parent.rows[0].scopes ?? {}, requested_scopes);
     }
 
@@ -359,6 +365,31 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
       ],
     );
 
+    if (parent_token_id && delegation_depth !== null) {
+      await pool.query(
+        `INSERT INTO sec_capability_delegation_edges (
+          edge_id,
+          workspace_id,
+          parent_token_id,
+          child_token_id,
+          granted_by_principal_id,
+          issued_to_principal_id,
+          depth,
+          created_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          newDelegationEdgeId(),
+          workspace_id,
+          parent_token_id,
+          token_id,
+          granted_by_principal_id,
+          issued_to_principal_id,
+          delegation_depth,
+          created_at,
+        ],
+      );
+    }
+
     const correlation_id = randomUUID();
     await appendToStream(pool, {
       event_id: randomUUID(),
@@ -383,6 +414,51 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
     });
 
     return reply.code(201).send({ token_id });
+  });
+
+  app.get<{
+    Querystring: { principal_id?: string };
+  }>("/v1/capabilities/delegations", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const principal_id = normalizeId(req.query.principal_id);
+    if (!principal_id) return reply.code(400).send({ error: "principal_id_required" });
+
+    const res = await pool.query(
+      `WITH principal_tokens AS (
+         SELECT token_id
+         FROM sec_capability_tokens
+         WHERE workspace_id = $1
+           AND issued_to_principal_id = $2
+       )
+       SELECT
+         e.edge_id,
+         e.workspace_id,
+         e.parent_token_id,
+         e.child_token_id,
+         e.granted_by_principal_id,
+         e.issued_to_principal_id,
+         e.depth,
+         e.created_at,
+         p.issued_to_principal_id AS parent_token_owner_principal_id,
+         c.issued_to_principal_id AS child_token_owner_principal_id
+       FROM sec_capability_delegation_edges e
+       LEFT JOIN sec_capability_tokens p
+         ON p.token_id = e.parent_token_id
+        AND p.workspace_id = e.workspace_id
+       LEFT JOIN sec_capability_tokens c
+         ON c.token_id = e.child_token_id
+        AND c.workspace_id = e.workspace_id
+       WHERE e.workspace_id = $1
+         AND (
+           e.parent_token_id IN (SELECT token_id FROM principal_tokens)
+           OR e.child_token_id IN (SELECT token_id FROM principal_tokens)
+         )
+       ORDER BY e.created_at DESC
+       LIMIT 500`,
+      [workspace_id, principal_id],
+    );
+
+    return reply.code(200).send({ edges: res.rows });
   });
 
   app.post<{
