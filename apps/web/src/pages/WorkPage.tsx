@@ -795,6 +795,8 @@ export function WorkPage(): JSX.Element {
   }, [threadId, roomId, threads]);
 
   useEffect(() => {
+    if (runsState === "loading") return;
+
     if (!runs.length) {
       if (stepsRunId) setStepsRunId("");
       return;
@@ -807,7 +809,7 @@ export function WorkPage(): JSX.Element {
     const preferred = (createdRunId ?? "").trim();
     const next = preferred && runs.some((r) => r.run_id === preferred) ? preferred : runs[0]?.run_id ?? "";
     if (next && next !== stepsRunId) setStepsRunId(next);
-  }, [runs, createdRunId, stepsRunId]);
+  }, [runs, runsState, createdRunId, stepsRunId]);
 
   useEffect(() => {
     setSteps([]);
