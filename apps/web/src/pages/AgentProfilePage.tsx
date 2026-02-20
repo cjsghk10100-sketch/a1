@@ -466,50 +466,116 @@ export function AgentProfilePage(): JSX.Element {
     const hasExternalScope = scopeUnion.egress.length > 0;
     const hasHighStakesScope =
       actionPolicyFlags.highStakes > 0 || scopeUnion.actions.some((a) => isHighStakesAction(a));
+    const repeatedMistakes7d = latestSnapshot?.repeated_mistakes_7d ?? 0;
+    const autonomyRate7d = latestSnapshot?.autonomy_rate_7d ?? null;
+    const hasRepeatedMistakeRisk = repeatedMistakes7d >= 2;
+    const hasLowAutonomyRisk = autonomyRate7d != null && autonomyRate7d < 0.5;
+
+    const dedupe = (items: string[]): string[] => [...new Set(items)];
 
     let internalWriteMode: ApprovalMode = "blocked";
+    let internalBasis: string[] = [];
     if (hasWriteScope) {
       if (isQuarantined) {
         internalWriteMode = "pre";
+        internalBasis = [t("agent_profile.approval.basis.quarantine")];
       } else if (actionPolicyFlags.preRequired || actionPolicyFlags.highStakes > 0 || actionPolicyFlags.irreversible) {
         internalWriteMode = "pre";
+        internalBasis = [t("agent_profile.approval.basis.pre_required")];
+        if (actionPolicyFlags.irreversible) internalBasis.push(t("agent_profile.approval.basis.irreversible"));
+        if (actionPolicyFlags.highStakes > 0) internalBasis.push(t("agent_profile.approval.basis.high_stakes"));
       } else if (actionPolicyFlags.postRequired) {
         internalWriteMode = "post";
+        internalBasis = [t("agent_profile.approval.basis.post_required")];
       } else if (trustScore >= 0.75) {
         internalWriteMode = "auto";
+        internalBasis = [t("agent_profile.approval.basis.high_trust")];
       } else if (trustScore >= 0.45) {
         internalWriteMode = "post";
+        internalBasis = [t("agent_profile.approval.basis.default")];
       } else {
         internalWriteMode = "pre";
+        internalBasis = [t("agent_profile.approval.basis.default")];
       }
+      if (hasRepeatedMistakeRisk) {
+        if (internalWriteMode === "auto") internalWriteMode = "post";
+        internalBasis.push(t("agent_profile.approval.basis.repeated_mistakes"));
+      }
+      if (hasLowAutonomyRisk) {
+        if (internalWriteMode === "auto") internalWriteMode = "post";
+        if (internalWriteMode === "post") internalWriteMode = "pre";
+        internalBasis.push(t("agent_profile.approval.basis.low_autonomy"));
+      }
+      internalBasis = dedupe(internalBasis);
+    } else {
+      internalBasis = [t("agent_profile.approval.basis.no_scope")];
     }
 
     let externalWriteMode: ApprovalMode = "blocked";
+    let externalBasis: string[] = [];
     if (hasExternalScope) {
       if (isQuarantined) {
         externalWriteMode = "blocked";
+        externalBasis = [t("agent_profile.approval.basis.quarantine")];
       } else if (actionPolicyFlags.preRequired || actionPolicyFlags.highStakes > 0) {
         externalWriteMode = "pre";
+        externalBasis = [t("agent_profile.approval.basis.pre_required")];
+        if (actionPolicyFlags.highStakes > 0) externalBasis.push(t("agent_profile.approval.basis.high_stakes"));
       } else if (actionPolicyFlags.postRequired) {
         externalWriteMode = "post";
+        externalBasis = [t("agent_profile.approval.basis.post_required")];
       } else if (trustScore >= 0.85 && !actionPolicyFlags.irreversible) {
         externalWriteMode = "auto";
+        externalBasis = [t("agent_profile.approval.basis.high_trust")];
       } else {
         externalWriteMode = "post";
+        externalBasis = [t("agent_profile.approval.basis.default")];
       }
+      if (hasRepeatedMistakeRisk) {
+        if (externalWriteMode === "auto") externalWriteMode = "post";
+        if (externalWriteMode === "post") externalWriteMode = "pre";
+        externalBasis.push(t("agent_profile.approval.basis.repeated_mistakes"));
+      }
+      if (hasLowAutonomyRisk) {
+        if (externalWriteMode === "auto") externalWriteMode = "post";
+        if (externalWriteMode === "post") externalWriteMode = "pre";
+        externalBasis.push(t("agent_profile.approval.basis.low_autonomy"));
+      }
+      externalBasis = dedupe(externalBasis);
+    } else {
+      externalBasis = [t("agent_profile.approval.basis.no_scope")];
     }
 
     let highStakesMode: ApprovalMode = "blocked";
+    let highStakesBasis: string[] = [t("agent_profile.approval.basis.high_stakes")];
     if (hasHighStakesScope) {
       highStakesMode = isQuarantined ? "blocked" : "pre";
+      if (isQuarantined) highStakesBasis.push(t("agent_profile.approval.basis.quarantine"));
+    } else {
+      highStakesBasis = [t("agent_profile.approval.basis.no_scope")];
     }
 
     return [
-      { key: "internal_write", label: t("agent_profile.approval.target.internal_write"), mode: internalWriteMode },
-      { key: "external_write", label: t("agent_profile.approval.target.external_write"), mode: externalWriteMode },
-      { key: "high_stakes", label: t("agent_profile.approval.target.high_stakes"), mode: highStakesMode },
-    ] as Array<{ key: string; label: string; mode: ApprovalMode }>;
-  }, [scopeUnion, actionPolicyFlags, trust, isQuarantined, t]);
+      {
+        key: "internal_write",
+        label: t("agent_profile.approval.target.internal_write"),
+        mode: internalWriteMode,
+        basis: dedupe(internalBasis).join(" · "),
+      },
+      {
+        key: "external_write",
+        label: t("agent_profile.approval.target.external_write"),
+        mode: externalWriteMode,
+        basis: dedupe(externalBasis).join(" · "),
+      },
+      {
+        key: "high_stakes",
+        label: t("agent_profile.approval.target.high_stakes"),
+        mode: highStakesMode,
+        basis: dedupe(highStakesBasis).join(" · "),
+      },
+    ] as Array<{ key: string; label: string; mode: ApprovalMode; basis: string }>;
+  }, [scopeUnion, actionPolicyFlags, trust, isQuarantined, latestSnapshot, t]);
 
   const trustDelta7d = useMemo(() => {
     if (!latestSnapshot || !baselineSnapshot) return null;
@@ -1032,7 +1098,7 @@ export function AgentProfilePage(): JSX.Element {
                   {approvalRecommendations.map((row) => (
                     <div key={row.key} className="permissionRow">
                       <div className="permissionLabel">{row.label}</div>
-                      <div className="permissionMeta">{t("agent_profile.approval.basis")}</div>
+                      <div className="permissionMeta">{row.basis}</div>
                       <span className={statePillClass(row.mode)}>{t(`agent_profile.approval.mode.${row.mode}`)}</span>
                     </div>
                   ))}
