@@ -652,4 +652,163 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
       items,
     });
   });
+
+  app.post<{
+    Params: { agentId: string };
+    Body: { actor_type?: ActorType; actor_id?: string; principal_id?: string; correlation_id?: string };
+  }>("/v1/agents/:agentId/skills/review-pending", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const agent = await pool.query<{ principal_id: string }>(
+      "SELECT principal_id FROM sec_agents WHERE agent_id = $1",
+      [agent_id],
+    );
+    if (agent.rowCount !== 1) return reply.code(404).send({ error: "agent_not_found" });
+
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+    const actor_principal_id = normalizeOptionalString(req.body.principal_id);
+    const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
+
+    const pendingRes = await pool.query<{
+      skill_package_id: string;
+      skill_id: string;
+      version: string;
+      hash_sha256: string;
+      signature: string | null;
+      manifest: unknown;
+    }>(
+      `SELECT
+         sp.skill_package_id,
+         sp.skill_id,
+         sp.version,
+         sp.hash_sha256,
+         sp.signature,
+         sp.manifest
+       FROM sec_agent_skill_packages asp
+       JOIN sec_skill_packages sp
+         ON sp.skill_package_id = asp.skill_package_id
+       WHERE asp.agent_id = $1
+         AND asp.verification_status = 'pending'
+         AND sp.workspace_id = $2
+       ORDER BY asp.updated_at ASC`,
+      [agent_id, workspace_id],
+    );
+
+    const now = new Date().toISOString();
+    const items: Array<{
+      skill_package_id: string;
+      skill_id: string;
+      version: string;
+      status: SkillVerificationStatusValue;
+      reason?: string;
+    }> = [];
+    let verified = 0;
+    let quarantined = 0;
+
+    for (const row of pendingRes.rows) {
+      const normalizedHash = normalizeHash(row.hash_sha256);
+      const normalizedManifest = normalizeManifest(row.manifest);
+      const signature = normalizeOptionalString(row.signature ?? undefined);
+
+      let nextStatus: SkillVerificationStatusValue = SkillVerificationStatus.Verified;
+      let quarantine_reason: string | undefined;
+
+      if (!normalizedHash) {
+        nextStatus = SkillVerificationStatus.Quarantined;
+        quarantine_reason = "verify_stored_hash_invalid";
+      } else if (!normalizedManifest) {
+        nextStatus = SkillVerificationStatus.Quarantined;
+        quarantine_reason = "verify_stored_manifest_invalid";
+      } else if (!signature) {
+        nextStatus = SkillVerificationStatus.Quarantined;
+        quarantine_reason = "verify_signature_required";
+      }
+
+      await pool.query(
+        `UPDATE sec_skill_packages
+         SET verification_status = $3,
+             verified_at = CASE WHEN $3 = 'verified' THEN COALESCE(verified_at, $5::timestamptz) ELSE NULL END,
+             quarantine_reason = CASE WHEN $3 = 'quarantined' THEN $4 ELSE NULL END,
+             updated_at = $5
+         WHERE workspace_id = $1
+           AND skill_package_id = $2`,
+        [workspace_id, row.skill_package_id, nextStatus, quarantine_reason ?? null, now],
+      );
+
+      await pool.query(
+        `UPDATE sec_agent_skill_packages
+         SET verification_status = $3,
+             updated_at = $4
+         WHERE agent_id = $1
+           AND skill_package_id = $2`,
+        [agent_id, row.skill_package_id, nextStatus, now],
+      );
+
+      if (nextStatus === SkillVerificationStatus.Verified) {
+        verified += 1;
+        await appendToStream(pool, {
+          event_id: randomUUID(),
+          event_type: "skill.package.verified",
+          event_version: 1,
+          occurred_at: now,
+          workspace_id,
+          actor: { actor_type, actor_id },
+          actor_principal_id,
+          stream: { stream_type: "workspace", stream_id: workspace_id },
+          correlation_id,
+          data: {
+            skill_package_id: row.skill_package_id,
+            skill_id: row.skill_id,
+            version: row.version,
+          },
+          policy_context: {},
+          model_context: {},
+          display: {},
+        });
+      } else {
+        quarantined += 1;
+        await appendToStream(pool, {
+          event_id: randomUUID(),
+          event_type: "skill.package.quarantined",
+          event_version: 1,
+          occurred_at: now,
+          workspace_id,
+          actor: { actor_type, actor_id },
+          actor_principal_id,
+          stream: { stream_type: "workspace", stream_id: workspace_id },
+          correlation_id,
+          data: {
+            skill_package_id: row.skill_package_id,
+            skill_id: row.skill_id,
+            version: row.version,
+            quarantine_reason: quarantine_reason ?? "manual_quarantine",
+          },
+          policy_context: {},
+          model_context: {},
+          display: {},
+        });
+      }
+
+      items.push({
+        skill_package_id: row.skill_package_id,
+        skill_id: row.skill_id,
+        version: row.version,
+        status: nextStatus,
+        reason: quarantine_reason,
+      });
+    }
+
+    return reply.code(200).send({
+      summary: {
+        total: pendingRes.rowCount,
+        verified,
+        quarantined,
+      },
+      items,
+    });
+  });
 }

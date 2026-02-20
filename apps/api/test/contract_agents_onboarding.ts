@@ -170,6 +170,31 @@ async function main(): Promise<void> {
     assert.equal(importedAgain.summary.pending, 1);
     assert.equal(importedAgain.summary.quarantined, 1);
 
+    const pendingImported = imported.items.find((item) => item.status === "pending");
+    assert.ok(pendingImported);
+
+    const reviewed = await postJson<{
+      summary: { total: number; verified: number; quarantined: number };
+      items: Array<{
+        skill_package_id: string;
+        skill_id: string;
+        status: string;
+        reason?: string;
+      }>;
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered.agent_id)}/skills/review-pending`,
+      {},
+      workspaceHeader,
+    );
+    assert.equal(reviewed.summary.total, 1);
+    assert.equal(reviewed.summary.verified, 0);
+    assert.equal(reviewed.summary.quarantined, 1);
+    assert.equal(reviewed.items.length, 1);
+    assert.equal(reviewed.items[0].skill_package_id, pendingImported?.skill_package_id);
+    assert.equal(reviewed.items[0].status, "quarantined");
+    assert.equal(reviewed.items[0].reason, "verify_signature_required");
+
     const agentRow = await db.query<{ principal_id: string }>(
       "SELECT principal_id FROM sec_agents WHERE agent_id = $1",
       [registered.agent_id],
@@ -192,8 +217,11 @@ async function main(): Promise<void> {
     );
     assert.equal(linkRows.rowCount, 3);
     assert.ok(linkRows.rows.some((r) => r.verification_status === "verified"));
-    assert.ok(linkRows.rows.some((r) => r.verification_status === "pending"));
-    assert.ok(linkRows.rows.some((r) => r.verification_status === "quarantined"));
+    assert.ok(!linkRows.rows.some((r) => r.verification_status === "pending"));
+    assert.equal(
+      linkRows.rows.filter((r) => r.verification_status === "quarantined").length,
+      2,
+    );
 
     const registeredEvent = await db.query<{ event_type: string }>(
       `SELECT event_type
@@ -223,4 +251,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-
