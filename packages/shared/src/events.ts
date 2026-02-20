@@ -1,6 +1,7 @@
 export const ActorType = {
   Service: "service",
   User: "user",
+  Agent: "agent",
 } as const;
 
 export type ActorType = (typeof ActorType)[keyof typeof ActorType];

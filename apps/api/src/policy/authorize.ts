@@ -315,7 +315,7 @@ function egressQuotaPerHour(): number {
 async function checkEgressQuota(
   pool: DbPool,
   workspace_id: string,
-  actor: { actor_type: "service" | "user"; actor_id: string },
+  actor: { actor_type: "service" | "user" | "agent"; actor_id: string },
   principal_id: string | undefined,
 ): Promise<PolicyCheckResultV1 | null> {
   const quotaLimit = egressQuotaPerHour();

@@ -13,10 +13,10 @@ function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
   return raw?.trim() || "ws_dev";
 }
 
-type LegacyActorType = "user" | "service";
+type LegacyActorType = "user" | "service" | "agent";
 
 function normalizeLegacyActorType(raw: unknown): LegacyActorType | null {
-  return raw === "service" ? "service" : raw === "user" ? "user" : null;
+  return raw === "service" || raw === "user" || raw === "agent" ? raw : null;
 }
 
 function normalizeId(raw: unknown): string | null {

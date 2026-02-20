@@ -27,7 +27,8 @@ function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
 }
 
 function normalizeActorType(raw: unknown): ActorType {
-  return raw === "service" ? "service" : "user";
+  if (raw === "service" || raw === "agent") return raw;
+  return "user";
 }
 
 function normalizeDecision(raw: unknown): ApprovalDecision {

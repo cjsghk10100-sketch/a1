@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { DbClient } from "../db/pool.js";
 
-type LegacyActorType = "service" | "user";
+type LegacyActorType = "service" | "user" | "agent";
 type PrincipalType = "user" | "agent" | "service";
 
 // Best-effort in-process cache to avoid an extra SELECT on hot paths.
@@ -33,7 +33,8 @@ export async function ensurePrincipalForLegacyActor(
     return principal_id;
   }
 
-  const principal_type: PrincipalType = actor_type === "service" ? "service" : "user";
+  const principal_type: PrincipalType =
+    actor_type === "service" ? "service" : actor_type === "agent" ? "agent" : "user";
 
   const inserted = await tx.query<{ principal_id: string }>(
     `INSERT INTO sec_principals (
@@ -56,4 +57,3 @@ export async function ensurePrincipalForLegacyActor(
   cache.set(key, principal_id);
   return principal_id;
 }
-
