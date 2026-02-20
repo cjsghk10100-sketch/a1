@@ -24,7 +24,7 @@
 - [x] TASK-022 Kill-switch flag + enforcement
 
 ## MVP-3: Discord ingest normalization (optional if OpenClaw does gateway)
-- [ ] TASK-030 integ_discord_messages + channel mapping table
+- [x] TASK-030 integ_discord_messages + channel mapping table
 - [ ] TASK-031 Parse @event line + schema validation + dedupe
 - [ ] TASK-032 CEO emoji reply mapping to approval.decided
 
