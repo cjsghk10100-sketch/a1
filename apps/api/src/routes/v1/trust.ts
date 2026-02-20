@@ -14,6 +14,57 @@ import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
 
 const TRUST_EPSILON = 0.0001;
+type ApprovalModeCode = "auto" | "post" | "pre" | "blocked";
+type ApprovalTargetCode = "internal_write" | "external_write" | "high_stakes";
+type ApprovalBasisCode =
+  | "default"
+  | "no_scope"
+  | "quarantine"
+  | "pre_required"
+  | "post_required"
+  | "irreversible"
+  | "high_stakes"
+  | "high_trust"
+  | "repeated_mistakes"
+  | "low_autonomy"
+  | "high_cost"
+  | "medium_cost"
+  | "hard_recovery";
+type ActionZone = "sandbox" | "supervised" | "high_stakes";
+type CostImpact = "low" | "medium" | "high";
+type RecoveryDifficulty = "easy" | "moderate" | "hard";
+
+type ScopeUnion = {
+  rooms: string[];
+  tools: string[];
+  data_read: string[];
+  data_write: string[];
+  egress: string[];
+  actions: string[];
+};
+
+type ActionPolicyRow = {
+  action_type: string;
+  reversible: boolean;
+  zone_required: ActionZone;
+  requires_pre_approval: boolean;
+  post_review_required: boolean;
+  metadata: Record<string, unknown>;
+};
+
+type ActionPolicyFlags = {
+  highStakes: number;
+  supervised: number;
+  sandbox: number;
+  preRequired: boolean;
+  postRequired: boolean;
+  irreversible: boolean;
+  reversible: number;
+  highCost: number;
+  mediumCost: number;
+  hardRecovery: number;
+  moderateRecovery: number;
+};
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -116,6 +167,322 @@ function normalizeScopes(raw: unknown): CapabilityScopesV1 {
   return scopes;
 }
 
+function parseCostImpact(value: unknown): CostImpact {
+  if (value === "medium" || value === "high") return value;
+  return "low";
+}
+
+function parseRecoveryDifficulty(value: unknown): RecoveryDifficulty {
+  if (value === "moderate" || value === "hard") return value;
+  return "easy";
+}
+
+function readActionMetadata(metadata: unknown): Record<string, unknown> {
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+    return metadata as Record<string, unknown>;
+  }
+  return {};
+}
+
+function actionCostImpact(row: ActionPolicyRow): CostImpact {
+  return parseCostImpact(row.metadata.cost_impact);
+}
+
+function actionRecoveryDifficulty(row: ActionPolicyRow): RecoveryDifficulty {
+  return parseRecoveryDifficulty(row.metadata.recovery_difficulty);
+}
+
+function isWriteAction(action: string): boolean {
+  const v = action.toLowerCase();
+  return (
+    v.includes("write") ||
+    v.includes("create") ||
+    v.includes("update") ||
+    v.includes("delete") ||
+    v.includes("mutating")
+  );
+}
+
+function isHighStakesAction(action: string): boolean {
+  const v = action.toLowerCase();
+  return (
+    v.includes("high_stakes") ||
+    v.includes("payment") ||
+    v.includes("wallet") ||
+    v.includes("transfer") ||
+    v.includes("email.send") ||
+    v.includes("delete") ||
+    v.includes("mutating")
+  );
+}
+
+function dedupeBasisCodes(items: ApprovalBasisCode[]): ApprovalBasisCode[] {
+  return [...new Set(items)];
+}
+
+function emptyScopeUnion(): ScopeUnion {
+  return {
+    rooms: [],
+    tools: [],
+    data_read: [],
+    data_write: [],
+    egress: [],
+    actions: [],
+  };
+}
+
+function scopeUnionFromScopes(scopesList: CapabilityScopesV1[]): ScopeUnion {
+  const rooms = new Set<string>();
+  const tools = new Set<string>();
+  const dataRead = new Set<string>();
+  const dataWrite = new Set<string>();
+  const egress = new Set<string>();
+  const actions = new Set<string>();
+
+  for (const scope of scopesList) {
+    for (const v of scope.rooms ?? []) rooms.add(v);
+    for (const v of scope.tools ?? []) tools.add(v);
+    for (const v of scope.data_access?.read ?? []) dataRead.add(v);
+    for (const v of scope.data_access?.write ?? []) dataWrite.add(v);
+    for (const v of scope.egress_domains ?? []) egress.add(v);
+    for (const v of scope.action_types ?? []) actions.add(v);
+  }
+
+  return {
+    rooms: [...rooms].sort((a, b) => a.localeCompare(b)),
+    tools: [...tools].sort((a, b) => a.localeCompare(b)),
+    data_read: [...dataRead].sort((a, b) => a.localeCompare(b)),
+    data_write: [...dataWrite].sort((a, b) => a.localeCompare(b)),
+    egress: [...egress].sort((a, b) => a.localeCompare(b)),
+    actions: [...actions].sort((a, b) => a.localeCompare(b)),
+  };
+}
+
+async function loadActiveScopeUnion(pool: DbPool, workspace_id: string, principal_id: string): Promise<ScopeUnion> {
+  const tokenRows = await pool.query<{ scopes: unknown }>(
+    `SELECT scopes
+     FROM sec_capability_tokens
+     WHERE workspace_id = $1
+       AND issued_to_principal_id = $2
+       AND revoked_at IS NULL
+       AND (valid_until IS NULL OR valid_until > now())`,
+    [workspace_id, principal_id],
+  );
+
+  if (tokenRows.rowCount === 0) return emptyScopeUnion();
+  const scopesList = tokenRows.rows.map((row) => normalizeScopes(row.scopes));
+  return scopeUnionFromScopes(scopesList);
+}
+
+async function loadActionPolicyRows(
+  pool: DbPool,
+  actionTypes: string[],
+): Promise<ActionPolicyRow[]> {
+  if (!actionTypes.length) return [];
+
+  const rows = await pool.query<{
+    action_type: string;
+    reversible: boolean;
+    zone_required: string;
+    requires_pre_approval: boolean;
+    post_review_required: boolean;
+    metadata: unknown;
+  }>(
+    `SELECT
+       action_type,
+       reversible,
+       zone_required,
+       requires_pre_approval,
+       post_review_required,
+       metadata
+     FROM sec_action_registry
+     WHERE action_type = ANY($1::text[])
+     ORDER BY action_type ASC`,
+    [actionTypes],
+  );
+
+  return rows.rows
+    .filter((row) => row.zone_required === "sandbox" || row.zone_required === "supervised" || row.zone_required === "high_stakes")
+    .map((row) => ({
+      action_type: row.action_type,
+      reversible: row.reversible,
+      zone_required: row.zone_required as ActionZone,
+      requires_pre_approval: row.requires_pre_approval,
+      post_review_required: row.post_review_required,
+      metadata: readActionMetadata(row.metadata),
+    }));
+}
+
+function buildActionPolicyFlags(rows: ActionPolicyRow[]): ActionPolicyFlags {
+  const highStakes = rows.filter((r) => r.zone_required === "high_stakes").length;
+  const supervised = rows.filter((r) => r.zone_required === "supervised").length;
+  const sandbox = rows.filter((r) => r.zone_required === "sandbox").length;
+  const preRequired = rows.some((r) => r.requires_pre_approval);
+  const postRequired = rows.some((r) => r.post_review_required);
+  const irreversible = rows.some((r) => !r.reversible);
+  const reversible = rows.filter((r) => r.reversible).length;
+  const highCost = rows.filter((r) => actionCostImpact(r) === "high").length;
+  const mediumCost = rows.filter((r) => actionCostImpact(r) === "medium").length;
+  const hardRecovery = rows.filter((r) => actionRecoveryDifficulty(r) === "hard").length;
+  const moderateRecovery = rows.filter((r) => actionRecoveryDifficulty(r) === "moderate").length;
+
+  return {
+    highStakes,
+    supervised,
+    sandbox,
+    preRequired,
+    postRequired,
+    irreversible,
+    reversible,
+    highCost,
+    mediumCost,
+    hardRecovery,
+    moderateRecovery,
+  };
+}
+
+function computeApprovalModeRecommendations(input: {
+  trustScore: number;
+  scopeUnion: ScopeUnion;
+  actionPolicyFlags: ActionPolicyFlags;
+  isQuarantined: boolean;
+  repeatedMistakes7d: number;
+  autonomyRate7d: number | null;
+}): Array<{ target: ApprovalTargetCode; mode: ApprovalModeCode; basis_codes: ApprovalBasisCode[] }> {
+  const { trustScore, scopeUnion, actionPolicyFlags, isQuarantined, repeatedMistakes7d, autonomyRate7d } = input;
+
+  const hasWriteScope = scopeUnion.data_write.length > 0 || scopeUnion.actions.some((a) => isWriteAction(a));
+  const hasExternalScope = scopeUnion.egress.length > 0;
+  const hasHighStakesScope =
+    actionPolicyFlags.highStakes > 0 || scopeUnion.actions.some((a) => isHighStakesAction(a));
+  const hasRepeatedMistakeRisk = repeatedMistakes7d >= 2;
+  const hasLowAutonomyRisk = autonomyRate7d != null && autonomyRate7d < 0.5;
+  const hasHighCostRisk = actionPolicyFlags.highCost > 0;
+  const hasMediumCostRisk = actionPolicyFlags.mediumCost > 0;
+  const hasHardRecoveryRisk = actionPolicyFlags.hardRecovery > 0;
+
+  let internalWriteMode: ApprovalModeCode = "blocked";
+  let internalBasis: ApprovalBasisCode[] = [];
+  if (hasWriteScope) {
+    if (isQuarantined) {
+      internalWriteMode = "pre";
+      internalBasis = ["quarantine"];
+    } else if (actionPolicyFlags.preRequired || actionPolicyFlags.highStakes > 0 || actionPolicyFlags.irreversible) {
+      internalWriteMode = "pre";
+      internalBasis = ["pre_required"];
+      if (actionPolicyFlags.irreversible) internalBasis.push("irreversible");
+      if (actionPolicyFlags.highStakes > 0) internalBasis.push("high_stakes");
+    } else if (actionPolicyFlags.postRequired) {
+      internalWriteMode = "post";
+      internalBasis = ["post_required"];
+    } else if (trustScore >= 0.75) {
+      internalWriteMode = "auto";
+      internalBasis = ["high_trust"];
+    } else if (trustScore >= 0.45) {
+      internalWriteMode = "post";
+      internalBasis = ["default"];
+    } else {
+      internalWriteMode = "pre";
+      internalBasis = ["default"];
+    }
+
+    if (hasHighCostRisk) {
+      if (internalWriteMode === "auto") internalWriteMode = "post";
+      if (internalWriteMode === "post") internalWriteMode = "pre";
+      internalBasis.push("high_cost");
+    }
+    if (hasHardRecoveryRisk) {
+      if (internalWriteMode === "auto") internalWriteMode = "post";
+      if (internalWriteMode === "post") internalWriteMode = "pre";
+      internalBasis.push("hard_recovery");
+    }
+    if (hasMediumCostRisk) {
+      if (internalWriteMode === "auto") internalWriteMode = "post";
+      internalBasis.push("medium_cost");
+    }
+    if (hasRepeatedMistakeRisk) {
+      if (internalWriteMode === "auto") internalWriteMode = "post";
+      internalBasis.push("repeated_mistakes");
+    }
+    if (hasLowAutonomyRisk) {
+      if (internalWriteMode === "auto") internalWriteMode = "post";
+      if (internalWriteMode === "post") internalWriteMode = "pre";
+      internalBasis.push("low_autonomy");
+    }
+    internalBasis = dedupeBasisCodes(internalBasis);
+  } else {
+    internalBasis = ["no_scope"];
+  }
+
+  let externalWriteMode: ApprovalModeCode = "blocked";
+  let externalBasis: ApprovalBasisCode[] = [];
+  if (hasExternalScope) {
+    if (isQuarantined) {
+      externalWriteMode = "blocked";
+      externalBasis = ["quarantine"];
+    } else if (actionPolicyFlags.preRequired || actionPolicyFlags.highStakes > 0) {
+      externalWriteMode = "pre";
+      externalBasis = ["pre_required"];
+      if (actionPolicyFlags.highStakes > 0) externalBasis.push("high_stakes");
+    } else if (actionPolicyFlags.postRequired) {
+      externalWriteMode = "post";
+      externalBasis = ["post_required"];
+    } else if (trustScore >= 0.85 && !actionPolicyFlags.irreversible) {
+      externalWriteMode = "auto";
+      externalBasis = ["high_trust"];
+    } else {
+      externalWriteMode = "post";
+      externalBasis = ["default"];
+    }
+
+    if (hasHighCostRisk) {
+      if (externalWriteMode === "auto") externalWriteMode = "post";
+      if (externalWriteMode === "post") externalWriteMode = "pre";
+      externalBasis.push("high_cost");
+    }
+    if (hasHardRecoveryRisk) {
+      if (externalWriteMode === "auto") externalWriteMode = "post";
+      if (externalWriteMode === "post") externalWriteMode = "pre";
+      externalBasis.push("hard_recovery");
+    }
+    if (hasMediumCostRisk) {
+      if (externalWriteMode === "auto") externalWriteMode = "post";
+      externalBasis.push("medium_cost");
+    }
+    if (hasRepeatedMistakeRisk) {
+      if (externalWriteMode === "auto") externalWriteMode = "post";
+      if (externalWriteMode === "post") externalWriteMode = "pre";
+      externalBasis.push("repeated_mistakes");
+    }
+    if (hasLowAutonomyRisk) {
+      if (externalWriteMode === "auto") externalWriteMode = "post";
+      if (externalWriteMode === "post") externalWriteMode = "pre";
+      externalBasis.push("low_autonomy");
+    }
+    externalBasis = dedupeBasisCodes(externalBasis);
+  } else {
+    externalBasis = ["no_scope"];
+  }
+
+  let highStakesMode: ApprovalModeCode = "blocked";
+  let highStakesBasis: ApprovalBasisCode[] = ["high_stakes"];
+  if (hasHighStakesScope) {
+    highStakesMode = isQuarantined ? "blocked" : "pre";
+    if (isQuarantined) highStakesBasis.push("quarantine");
+    if (hasHighCostRisk) highStakesBasis.push("high_cost");
+    if (hasHardRecoveryRisk) highStakesBasis.push("hard_recovery");
+    if (hasMediumCostRisk) highStakesBasis.push("medium_cost");
+  } else {
+    highStakesBasis = ["no_scope"];
+  }
+
+  return [
+    { target: "internal_write", mode: internalWriteMode, basis_codes: dedupeBasisCodes(internalBasis) },
+    { target: "external_write", mode: externalWriteMode, basis_codes: dedupeBasisCodes(externalBasis) },
+    { target: "high_stakes", mode: highStakesMode, basis_codes: dedupeBasisCodes(highStakesBasis) },
+  ];
+}
+
 function suggestionFromScore(score: number): CapabilityScopesV1 {
   if (score >= 0.7) {
     return {
@@ -156,13 +523,21 @@ async function getAgent(
   pool: DbPool,
   _workspace_id: string,
   agent_id: string,
-): Promise<{ agent_id: string; principal_id: string; created_at: string } | null> {
+): Promise<{
+  agent_id: string;
+  principal_id: string;
+  created_at: string;
+  quarantined_at: string | null;
+  quarantine_reason: string | null;
+} | null> {
   const agent = await pool.query<{
     agent_id: string;
     principal_id: string;
     created_at: string;
+    quarantined_at: string | null;
+    quarantine_reason: string | null;
   }>(
-    `SELECT agent_id, principal_id, created_at
+    `SELECT agent_id, principal_id, created_at, quarantined_at, quarantine_reason
      FROM sec_agents
      WHERE agent_id = $1`,
     [agent_id],
@@ -423,6 +798,70 @@ export async function registerTrustRoutes(app: FastifyInstance, pool: DbPool): P
         last_recalculated_at: trust.last_recalculated_at,
         created_at: trust.created_at,
         updated_at: trust.updated_at,
+      },
+    });
+  });
+
+  app.get<{
+    Params: { agentId: string };
+  }>("/v1/agents/:agentId/approval-recommendation", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const agent = await getAgent(pool, workspace_id, agent_id);
+    if (!agent) return reply.code(404).send({ error: "agent_not_found" });
+
+    const trust = await getCurrentTrust(pool, workspace_id, agent);
+    const scopeUnion = await loadActiveScopeUnion(pool, workspace_id, agent.principal_id);
+    const actionRows = await loadActionPolicyRows(pool, scopeUnion.actions);
+    const actionPolicyFlags = buildActionPolicyFlags(actionRows);
+
+    const latestSnapshot = await pool.query<{
+      autonomy_rate_7d: number | null;
+      repeated_mistakes_7d: number | null;
+    }>(
+      `SELECT autonomy_rate_7d, repeated_mistakes_7d
+       FROM sec_daily_agent_snapshots
+       WHERE workspace_id = $1
+         AND agent_id = $2
+       ORDER BY snapshot_date DESC
+       LIMIT 1`,
+      [workspace_id, agent_id],
+    );
+
+    const autonomy_rate_7d =
+      latestSnapshot.rowCount === 1 && Number.isFinite(Number(latestSnapshot.rows[0].autonomy_rate_7d))
+        ? Number(latestSnapshot.rows[0].autonomy_rate_7d)
+        : null;
+    const repeated_mistakes_7d =
+      latestSnapshot.rowCount === 1 && Number.isFinite(Number(latestSnapshot.rows[0].repeated_mistakes_7d))
+        ? Math.max(0, Math.floor(Number(latestSnapshot.rows[0].repeated_mistakes_7d)))
+        : 0;
+    const is_quarantined = agent.quarantined_at != null;
+
+    const targets = computeApprovalModeRecommendations({
+      trustScore: trust.trust_score,
+      scopeUnion,
+      actionPolicyFlags,
+      isQuarantined: is_quarantined,
+      repeatedMistakes7d: repeated_mistakes_7d,
+      autonomyRate7d: autonomy_rate_7d,
+    });
+
+    return reply.code(200).send({
+      recommendation: {
+        workspace_id,
+        agent_id,
+        targets,
+        context: {
+          trust_score: trust.trust_score,
+          repeated_mistakes_7d,
+          autonomy_rate_7d,
+          is_quarantined,
+          scope_union: scopeUnion,
+          action_policy_flags: actionPolicyFlags,
+        },
       },
     });
   });

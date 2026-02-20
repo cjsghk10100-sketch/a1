@@ -134,6 +134,71 @@ async function main(): Promise<void> {
       granterPrincipalId,
     ]);
 
+    const capabilityTokenId = randomUUID();
+    await db.query(
+      `INSERT INTO sec_capability_tokens (
+         token_id,
+         workspace_id,
+         issued_to_principal_id,
+         granted_by_principal_id,
+         parent_token_id,
+         scopes,
+         valid_until,
+         created_at
+       ) VALUES (
+         $1,$2,$3,$4,NULL,$5::jsonb,$6,$7
+       )`,
+      [
+        capabilityTokenId,
+        "ws_contract",
+        agent.principal_id,
+        granterPrincipalId,
+        JSON.stringify({
+          action_types: ["external.write"],
+          egress_domains: ["api.example.com"],
+          data_access: { write: ["artifacts"] },
+        }),
+        new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        new Date().toISOString(),
+      ],
+    );
+
+    const approvalRecommendation = await requestJson(
+      baseUrl,
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent.agent_id)}/approval-recommendation`,
+      undefined,
+      workspaceHeader,
+    );
+    assert.equal(approvalRecommendation.status, 200);
+    const approvalRecommendationBody = approvalRecommendation.json as {
+      recommendation: {
+        targets: Array<{
+          target: string;
+          mode: string;
+          basis_codes: string[];
+        }>;
+        context: {
+          is_quarantined: boolean;
+          action_policy_flags: {
+            highCost: number;
+            hardRecovery: number;
+          };
+        };
+      };
+    };
+    const targetMap = new Map(
+      approvalRecommendationBody.recommendation.targets.map((target) => [target.target, target]),
+    );
+    assert.equal(targetMap.get("internal_write")?.mode, "pre");
+    assert.equal(targetMap.get("external_write")?.mode, "pre");
+    assert.equal(targetMap.get("high_stakes")?.mode, "pre");
+    assert.ok(targetMap.get("external_write")?.basis_codes.includes("high_cost"));
+    assert.ok(targetMap.get("external_write")?.basis_codes.includes("hard_recovery"));
+    assert.equal(approvalRecommendationBody.recommendation.context.is_quarantined, false);
+    assert.ok(approvalRecommendationBody.recommendation.context.action_policy_flags.highCost >= 1);
+    assert.ok(approvalRecommendationBody.recommendation.context.action_policy_flags.hardRecovery >= 1);
+
     const recommend = await requestJson(
       baseUrl,
       "POST",
