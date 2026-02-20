@@ -11,6 +11,7 @@ import { registerDataAccessRoutes } from "./dataAccess.js";
 import { registerEgressRoutes } from "./egress.js";
 import { registerEventRoutes } from "./events.js";
 import { registerIncidentRoutes } from "./incidents.js";
+import { registerLifecycleRoutes } from "./lifecycle.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerPrincipalRoutes } from "./principals.js";
 import { registerResourceLabelRoutes } from "./resourceLabels.js";
@@ -38,6 +39,7 @@ export async function registerV1Routes(app: FastifyInstance, pool: DbPool): Prom
   await registerEgressRoutes(app, pool);
   await registerEventRoutes(app, pool);
   await registerIncidentRoutes(app, pool);
+  await registerLifecycleRoutes(app, pool);
   await registerPolicyRoutes(app, pool);
   await registerPrincipalRoutes(app, pool);
   await registerResourceLabelRoutes(app, pool);

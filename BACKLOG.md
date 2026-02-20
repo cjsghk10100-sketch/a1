@@ -41,4 +41,4 @@
 ## MVP-6: Learn or Die + Sustain or Sunset
 - [x] TASK-060 Incidents + RCA + close blockers
 - [x] TASK-061 Survival ledgers + daily rollup
-- [ ] TASK-062 Lifecycle automation (ACTIVE→PROBATION→…)
+- [x] TASK-062 Lifecycle automation (ACTIVE→PROBATION→…)
