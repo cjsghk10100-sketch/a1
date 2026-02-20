@@ -929,6 +929,37 @@ body {
   font-size: 12px;
 }
 
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kpiCard {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  padding: 10px;
+}
+
+.kpiLabel {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kpiValue {
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.kpiSub {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 @media (max-width: 720px) {
   .appHeader {
     flex-wrap: wrap;
@@ -971,6 +1002,10 @@ body {
   }
 
   .agentProfileGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .kpiGrid {
     grid-template-columns: 1fr;
   }
 }

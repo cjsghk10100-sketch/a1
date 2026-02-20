@@ -423,6 +423,11 @@ export const resources = {
       "agent_profile.growth.trend.up": "Up",
       "agent_profile.growth.trend.down": "Down",
       "agent_profile.growth.trend.flat": "Flat",
+      "agent_profile.growth.kpi_title": "Growth KPIs",
+      "agent_profile.growth.kpi.skills_positive": "Skills increasing",
+      "agent_profile.growth.kpi.skills_none": "No new skills",
+      "agent_profile.growth.kpi.mistakes_present": "Repeated mistakes",
+      "agent_profile.growth.kpi.mistakes_clear": "No repeated mistakes",
 
       "agent_profile.snapshots_empty": "No snapshots yet. Run the daily snapshot job.",
       "agent_profile.snapshot.date": "Date",
@@ -889,6 +894,11 @@ export const resources = {
       "agent_profile.growth.trend.up": "상승",
       "agent_profile.growth.trend.down": "하락",
       "agent_profile.growth.trend.flat": "유지",
+      "agent_profile.growth.kpi_title": "성장 KPI",
+      "agent_profile.growth.kpi.skills_positive": "스킬 증가",
+      "agent_profile.growth.kpi.skills_none": "신규 스킬 없음",
+      "agent_profile.growth.kpi.mistakes_present": "반복 실수 존재",
+      "agent_profile.growth.kpi.mistakes_clear": "반복 실수 없음",
 
       "agent_profile.snapshots_empty": "스냅샷이 없습니다. 일일 스냅샷 잡을 실행하세요.",
       "agent_profile.snapshot.date": "날짜",

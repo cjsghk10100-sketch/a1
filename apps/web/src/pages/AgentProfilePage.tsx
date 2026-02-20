@@ -466,6 +466,8 @@ export function AgentProfilePage(): JSX.Element {
     if (autonomyDelta7d == null || Math.abs(autonomyDelta7d) < 0.0001) return "flat";
     return autonomyDelta7d > 0 ? "up" : "down";
   }, [autonomyDelta7d]);
+  const latestNewSkills7d = latestSnapshot?.new_skills_learned_7d ?? 0;
+  const latestRepeatedMistakes7d = latestSnapshot?.repeated_mistakes_7d ?? 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -1726,6 +1728,58 @@ export function AgentProfilePage(): JSX.Element {
 
       {activeTab === "growth" ? (
         <div className="agentProfileGrid">
+          <div className="detailCard" style={{ gridColumn: "1 / -1" }}>
+            <div className="detailHeader">
+              <div className="detailTitle">{t("agent_profile.growth.kpi_title")}</div>
+              <div className="muted">
+                {latestSnapshot ? t("agent_profile.last_recalc", { at: formatTimestamp(latestSnapshot.updated_at) }) : ""}
+              </div>
+            </div>
+            <div className="kpiGrid">
+              <div className="kpiCard">
+                <div className="kpiLabel">{t("agent_profile.trust_score")}</div>
+                <div className="kpiValue mono">{trust ? trust.trust_score.toFixed(3) : "—"}</div>
+                <div className="kpiSub">
+                  <span className={statePillClass(trustTrend)}>{t(`agent_profile.growth.trend.${trustTrend}`)}</span>
+                  <span className="mono">{trustDelta7d == null ? "—" : formatSigned(trustDelta7d)}</span>
+                </div>
+              </div>
+
+              <div className="kpiCard">
+                <div className="kpiLabel">{t("agent_profile.autonomy_rate_7d")}</div>
+                <div className="kpiValue mono">{latestSnapshot ? formatPct01(latestSnapshot.autonomy_rate_7d) : "—"}</div>
+                <div className="kpiSub">
+                  <span className={statePillClass(autonomyTrend)}>{t(`agent_profile.growth.trend.${autonomyTrend}`)}</span>
+                  <span className="mono">{autonomyDelta7d == null ? "—" : formatSignedPct01(autonomyDelta7d)}</span>
+                </div>
+              </div>
+
+              <div className="kpiCard">
+                <div className="kpiLabel">{t("agent_profile.new_skills_learned_7d")}</div>
+                <div className="kpiValue mono">{latestSnapshot ? latestNewSkills7d : "—"}</div>
+                <div className="kpiSub">
+                  <span className={statePillClass(latestNewSkills7d > 0 ? "up" : "flat")}>
+                    {latestNewSkills7d > 0
+                      ? t("agent_profile.growth.kpi.skills_positive")
+                      : t("agent_profile.growth.kpi.skills_none")}
+                  </span>
+                </div>
+              </div>
+
+              <div className="kpiCard">
+                <div className="kpiLabel">{t("agent_profile.repeated_mistakes_7d")}</div>
+                <div className="kpiValue mono">{latestSnapshot ? latestRepeatedMistakes7d : "—"}</div>
+                <div className="kpiSub">
+                  <span className={statePillClass(latestRepeatedMistakes7d > 0 ? "down" : "up")}>
+                    {latestRepeatedMistakes7d > 0
+                      ? t("agent_profile.growth.kpi.mistakes_present")
+                      : t("agent_profile.growth.kpi.mistakes_clear")}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="detailCard">
             <div className="detailHeader">
               <div className="detailTitle">{t("agent_profile.section.trust")}</div>
