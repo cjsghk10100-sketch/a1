@@ -2912,17 +2912,15 @@ export function AgentProfilePage(): JSX.Element {
                           <span className="mono">{c.reason_code}</span>
                           <span className="muted">{formatTimestamp(c.occurred_at)}</span>
                         </div>
-                        {c.run_id ? (
-                          <button
-                            type="button"
-                            className="ghostButton"
-                            onClick={() => {
-                              openInspectorByRun(c.run_id ?? "");
-                            }}
-                          >
-                            {t("agent_profile.open_inspector.run")}
-                          </button>
-                        ) : null}
+                        <button
+                          type="button"
+                          className="ghostButton"
+                          onClick={() => {
+                            openInspectorByEvent(c.event_id, c.run_id);
+                          }}
+                        >
+                          {t("agent_profile.open_inspector.event")}
+                        </button>
                       </div>
                       <div className="muted">
                         <span className="mono">{c.category}</span>
@@ -2948,17 +2946,15 @@ export function AgentProfilePage(): JSX.Element {
                           <span className="mono">{m.reason_code}</span>
                           <span className="muted">{formatTimestamp(m.occurred_at)}</span>
                         </div>
-                        {m.run_id ? (
-                          <button
-                            type="button"
-                            className="ghostButton"
-                            onClick={() => {
-                              openInspectorByRun(m.run_id ?? "");
-                            }}
-                          >
-                            {t("agent_profile.open_inspector.run")}
-                          </button>
-                        ) : null}
+                        <button
+                          type="button"
+                          className="ghostButton"
+                          onClick={() => {
+                            openInspectorByEvent(m.event_id, m.run_id);
+                          }}
+                        >
+                          {t("agent_profile.open_inspector.event")}
+                        </button>
                       </div>
                       <div className="muted">
                         <span className="mono">{m.action}</span>
