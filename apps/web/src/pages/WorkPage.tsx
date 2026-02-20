@@ -10,6 +10,8 @@ import type { ToolCallRow } from "../api/toolcalls";
 import { createToolCall, failToolCall, listToolCalls, succeedToolCall } from "../api/toolcalls";
 import type { ArtifactContentType, ArtifactRow } from "../api/artifacts";
 import { createArtifact, listArtifacts } from "../api/artifacts";
+import type { EgressRequestRow } from "../api/egress";
+import { listEgressRequests } from "../api/egress";
 import type { SearchDocRow } from "../api/search";
 import { searchDocs } from "../api/search";
 import type { MessageRow, ThreadRow } from "../api/threads";
@@ -169,6 +171,9 @@ export function WorkPage(): JSX.Element {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [runsState, setRunsState] = useState<ConnState>("idle");
   const [runsError, setRunsError] = useState<string | null>(null);
+  const [egressRequests, setEgressRequests] = useState<EgressRequestRow[]>([]);
+  const [egressState, setEgressState] = useState<ConnState>("idle");
+  const [egressError, setEgressError] = useState<string | null>(null);
 
   const [createRunTitle, setCreateRunTitle] = useState<string>("");
   const [createRunGoal, setCreateRunGoal] = useState<string>("");
@@ -384,6 +389,29 @@ export function WorkPage(): JSX.Element {
       if (roomIdRef.current !== id) return;
       setRunsError(toErrorCode(e));
       setRunsState("error");
+    }
+  }
+
+  async function reloadEgress(nextRoomId: string): Promise<void> {
+    const id = nextRoomId.trim();
+    if (!id) {
+      setEgressRequests([]);
+      setEgressState("idle");
+      setEgressError(null);
+      return;
+    }
+
+    setEgressState("loading");
+    setEgressError(null);
+    try {
+      const res = await listEgressRequests({ room_id: id, limit: 30 });
+      if (roomIdRef.current !== id) return;
+      setEgressRequests(res);
+      setEgressState("idle");
+    } catch (e) {
+      if (roomIdRef.current !== id) return;
+      setEgressError(toErrorCode(e));
+      setEgressState("error");
     }
   }
 
@@ -698,12 +726,15 @@ export function WorkPage(): JSX.Element {
     setThreads([]);
     setMessages([]);
     setRuns([]);
+    setEgressRequests([]);
     setSteps([]);
     setStepsRunId(loadStepsRunId(roomId).trim());
     setThreadsError(null);
     setMessagesError(null);
     setRunsError(null);
+    setEgressError(null);
     setStepsError(null);
+    setEgressState("idle");
     createRunRequestRef.current += 1;
     createThreadRequestRef.current += 1;
     sendRequestRef.current += 1;
@@ -765,6 +796,7 @@ export function WorkPage(): JSX.Element {
     setThreadId(nextThread);
     void reloadThreads(roomId, false);
     void reloadRuns(roomId);
+    void reloadEgress(roomId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
@@ -1594,6 +1626,91 @@ export function WorkPage(): JSX.Element {
                     </li>
                   );
                 })}
+              </ul>
+            ) : null}
+          </div>
+
+          <div className="detailSection">
+            <div className="detailHeader">
+              <div className="detailSectionTitle">{t("work.egress.title")}</div>
+              <button
+                type="button"
+                className="ghostButton"
+                onClick={() => void reloadEgress(roomId)}
+                disabled={!roomId.trim() || egressState === "loading"}
+              >
+                {t("common.refresh")}
+              </button>
+            </div>
+
+            {!roomId.trim() ? <div className="placeholder">{t("work.room.select_prompt")}</div> : null}
+            {egressError ? <div className="errorBox">{t("error.load_failed", { code: egressError })}</div> : null}
+            {egressState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
+            {roomId.trim() && egressState !== "loading" && !egressError && egressRequests.length === 0 ? (
+              <div className="placeholder">{t("work.egress.empty")}</div>
+            ) : null}
+
+            {egressRequests.length ? (
+              <ul className="eventList">
+                {egressRequests.map((req) => (
+                  <li key={req.egress_request_id}>
+                    <div className="compactRow">
+                      <div className="compactTop">
+                        <div className="mono">{req.target_domain}</div>
+                        <div className="muted">{formatTimestamp(req.created_at)}</div>
+                      </div>
+                      <div className="compactMeta">
+                        <span className="mono">{req.action}</span>
+                        <span className="mono">{req.policy_decision}</span>
+                        <span className={req.blocked ? "statusPill statusDenied" : "statusPill statusApproved"}>
+                          {req.blocked ? t("common.yes") : t("common.no")}
+                        </span>
+                      </div>
+
+                      <details className="eventDetails">
+                        <summary className="eventSummary">{t("inspector.details")}</summary>
+                        <div className="kvGrid">
+                          <div className="kvKey">{t("work.egress.fields.target")}</div>
+                          <div className="kvVal mono">{req.target_url}</div>
+
+                          <div className="kvKey">{t("work.egress.fields.method")}</div>
+                          <div className="kvVal mono">{req.method ?? "-"}</div>
+
+                          <div className="kvKey">{t("work.egress.fields.decision")}</div>
+                          <div className="kvVal mono">{req.policy_decision}</div>
+
+                          <div className="kvKey">{t("work.egress.fields.blocked")}</div>
+                          <div className="kvVal">{req.blocked ? t("common.yes") : t("common.no")}</div>
+
+                          <div className="kvKey">{t("work.egress.fields.reason")}</div>
+                          <div className="kvVal mono">{req.policy_reason ?? req.policy_reason_code}</div>
+
+                          <div className="kvKey">{t("work.egress.fields.approval_id")}</div>
+                          <div className="kvVal mono">{req.approval_id ?? "-"}</div>
+
+                          <div className="kvKey">{t("work.egress.fields.requested_by")}</div>
+                          <div className="kvVal mono">{`${req.requested_by_type}:${req.requested_by_id}`}</div>
+
+                          <div className="kvKey">{t("work.egress.fields.zone")}</div>
+                          <div className="kvVal mono">{req.zone ?? "-"}</div>
+                        </div>
+                        <div className="detailSection">
+                          <div className="detailSectionTitle">{t("work.egress.fields.raw")}</div>
+                          <JsonView
+                            value={{
+                              egress_request_id: req.egress_request_id,
+                              run_id: req.run_id,
+                              step_id: req.step_id,
+                              enforcement_mode: req.enforcement_mode,
+                              correlation_id: req.correlation_id,
+                              requested_by_principal_id: req.requested_by_principal_id,
+                            }}
+                          />
+                        </div>
+                      </details>
+                    </div>
+                  </li>
+                ))}
               </ul>
             ) : null}
           </div>
