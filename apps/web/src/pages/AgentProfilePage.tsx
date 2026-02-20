@@ -160,6 +160,44 @@ function delegationDepthSummary(tokens: CapabilityTokenRow[]): {
   return { maxDepth, rootTokens, delegatedTokens };
 }
 
+function delegationGraphRows(tokens: CapabilityTokenRow[]): Array<{
+  token_id: string;
+  parent_token_id: string | null;
+  depth: number;
+  active: boolean;
+  created_at: string;
+}> {
+  const byId = new Map<string, CapabilityTokenRow>();
+  for (const tok of tokens) byId.set(tok.token_id, tok);
+
+  function depthOf(tok: CapabilityTokenRow): number {
+    let depth = 0;
+    let current: CapabilityTokenRow | undefined = tok;
+    const seen = new Set<string>();
+    while (current?.parent_token_id) {
+      if (seen.has(current.token_id)) break;
+      seen.add(current.token_id);
+      depth += 1;
+      current = byId.get(current.parent_token_id);
+      if (!current) break;
+    }
+    return depth;
+  }
+
+  return tokens
+    .map((tok) => ({
+      token_id: tok.token_id,
+      parent_token_id: tok.parent_token_id,
+      depth: depthOf(tok),
+      active: isTokenActive(tok),
+      created_at: tok.created_at,
+    }))
+    .sort((a, b) => {
+      if (a.depth !== b.depth) return a.depth - b.depth;
+      return b.created_at.localeCompare(a.created_at);
+    });
+}
+
 type ScopeSummary = {
   rooms: string[];
   tools: string[];
@@ -319,6 +357,7 @@ export function AgentProfilePage(): JSX.Element {
       .map((it) => it.skill_package_id);
   }, [skillImportResult]);
   const delegationSummary = useMemo(() => delegationDepthSummary(tokens), [tokens]);
+  const delegationRows = useMemo(() => delegationGraphRows(tokens).slice(0, 40), [tokens]);
 
   const permissionMatrix = useMemo(() => {
     const readScopeCount = scopeUnion.rooms.length + scopeUnion.dataRead.length;
@@ -1121,6 +1160,38 @@ export function AgentProfilePage(): JSX.Element {
                 </div>
 
                 <ul className="agentChainList">
+                  <li className="agentChainRow">
+                    <div className="detailSectionTitle">{t("agent_profile.delegation.graph")}</div>
+                    {!delegationRows.length ? (
+                      <div className="placeholder">{t("agent_profile.tokens_empty")}</div>
+                    ) : (
+                      <ul className="delegationGraphList">
+                        {delegationRows.map((row) => (
+                          <li key={row.token_id} className="delegationGraphRow">
+                            <div className="delegationGraphTop">
+                              <span className="mono">{`${"· ".repeat(Math.min(row.depth, 8))}${row.token_id}`}</span>
+                              <span className={row.active ? "statusPill statusApproved" : "statusPill statusHeld"}>
+                                {row.active ? t("agent_profile.token.active") : t("agent_profile.token.inactive")}
+                              </span>
+                            </div>
+                            <div className="delegationGraphMeta muted">
+                              <span className="mono">
+                                {t("agent_profile.delegation.depth")}: {row.depth}
+                              </span>
+                              {row.parent_token_id ? (
+                                <span className="mono">
+                                  {t("agent_profile.token.parent")}: {row.parent_token_id}
+                                </span>
+                              ) : (
+                                <span className="muted">{t("agent_profile.token.no_parent")}</span>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+
                   {tokens.slice(0, 20).map((tok) => (
                     <li key={tok.token_id} className="agentChainRow">
                       <div className="agentChainTop">

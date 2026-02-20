@@ -409,6 +409,8 @@ export const resources = {
       "agent_profile.delegation.max_depth": "Max depth",
       "agent_profile.delegation.root_tokens": "Root tokens",
       "agent_profile.delegation.delegated_tokens": "Delegated tokens",
+      "agent_profile.delegation.graph": "Delegation graph",
+      "agent_profile.delegation.depth": "depth",
 
       "agent_profile.last_recalc": "last recalculated: {{at}}",
       "agent_profile.trust_score": "Trust",
@@ -873,6 +875,8 @@ export const resources = {
       "agent_profile.delegation.max_depth": "최대 깊이",
       "agent_profile.delegation.root_tokens": "루트 토큰",
       "agent_profile.delegation.delegated_tokens": "위임 토큰",
+      "agent_profile.delegation.graph": "위임 그래프",
+      "agent_profile.delegation.depth": "깊이",
 
       "agent_profile.last_recalc": "마지막 계산: {{at}}",
       "agent_profile.trust_score": "신뢰",
