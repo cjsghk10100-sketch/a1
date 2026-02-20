@@ -72,6 +72,11 @@ function formatPct01(value: number): string {
   return `${pct}%`;
 }
 
+function formatPct01OrDash(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return formatPct01(value);
+}
+
 function formatSigned(value: number, digits = 3): string {
   if (!Number.isFinite(value)) return "0";
   const sign = value > 0 ? "+" : "";
@@ -525,6 +530,36 @@ export function AgentProfilePage(): JSX.Element {
       return startedAtMs >= threshold;
     }).length;
   }, [assessments]);
+  const localAssessmentSignals = useMemo(() => {
+    const now = Date.now();
+    const threshold7d = now - 7 * 24 * 60 * 60 * 1000;
+    const threshold30d = now - 30 * 24 * 60 * 60 * 1000;
+
+    let failed7d = 0;
+    let completed30d = 0;
+    let passed30d = 0;
+
+    for (const assessment of assessments) {
+      const startedAtMs = new Date(assessment.started_at).getTime();
+      if (!Number.isFinite(startedAtMs)) continue;
+
+      if (startedAtMs >= threshold7d && assessment.status === "failed") {
+        failed7d += 1;
+      }
+
+      if (startedAtMs >= threshold30d && (assessment.status === "passed" || assessment.status === "failed")) {
+        completed30d += 1;
+        if (assessment.status === "passed") passed30d += 1;
+      }
+    }
+
+    return {
+      failed7d,
+      completed30d,
+      passed30d,
+      passRate30d: completed30d > 0 ? passed30d / completed30d : null,
+    };
+  }, [assessments]);
   const latestSnapshot = useMemo(() => (snapshots.length ? snapshots[0] : null), [snapshots]);
   const baselineSnapshot = useMemo(() => {
     if (!snapshots.length) return null;
@@ -686,6 +721,11 @@ export function AgentProfilePage(): JSX.Element {
     const autonomyRate7d = latestSnapshot?.autonomy_rate_7d ?? null;
     const hasRepeatedMistakeRisk = repeatedMistakes7d >= 2;
     const hasLowAutonomyRisk = autonomyRate7d != null && autonomyRate7d < 0.5;
+    const hasAssessmentRegressionRisk =
+      localAssessmentSignals.failed7d >= 2 ||
+      (localAssessmentSignals.completed30d >= 3 &&
+        localAssessmentSignals.passRate30d != null &&
+        localAssessmentSignals.passRate30d < 0.6);
     const hasHighCostRisk = actionPolicyFlags.highCost > 0;
     const hasMediumCostRisk = actionPolicyFlags.mediumCost > 0;
     const hasHardRecoveryRisk = actionPolicyFlags.hardRecovery > 0;
@@ -739,6 +779,11 @@ export function AgentProfilePage(): JSX.Element {
         if (internalWriteMode === "post") internalWriteMode = "pre";
         internalBasis.push(t("agent_profile.approval.basis.low_autonomy"));
       }
+      if (hasAssessmentRegressionRisk) {
+        if (internalWriteMode === "auto") internalWriteMode = "post";
+        if (internalWriteMode === "post") internalWriteMode = "pre";
+        internalBasis.push(t("agent_profile.approval.basis.assessment_regression"));
+      }
       internalBasis = dedupe(internalBasis);
     } else {
       internalBasis = [t("agent_profile.approval.basis.no_scope")];
@@ -788,6 +833,11 @@ export function AgentProfilePage(): JSX.Element {
         if (externalWriteMode === "post") externalWriteMode = "pre";
         externalBasis.push(t("agent_profile.approval.basis.low_autonomy"));
       }
+      if (hasAssessmentRegressionRisk) {
+        if (externalWriteMode === "auto") externalWriteMode = "post";
+        if (externalWriteMode === "post") externalWriteMode = "pre";
+        externalBasis.push(t("agent_profile.approval.basis.assessment_regression"));
+      }
       externalBasis = dedupe(externalBasis);
     } else {
       externalBasis = [t("agent_profile.approval.basis.no_scope")];
@@ -825,7 +875,7 @@ export function AgentProfilePage(): JSX.Element {
         basis: dedupe(highStakesBasis).join(" · "),
       },
     ] as Array<{ key: string; label: string; mode: ApprovalMode; basis: string }>;
-  }, [scopeUnion, actionPolicyFlags, trust, isQuarantined, latestSnapshot, t]);
+  }, [scopeUnion, actionPolicyFlags, trust, isQuarantined, latestSnapshot, localAssessmentSignals, t]);
 
   const apiApprovalRecommendations = useMemo(() => {
     if (!approvalRecommendationData) return null;
@@ -875,6 +925,40 @@ export function AgentProfilePage(): JSX.Element {
   }, [approvalRecommendationData, t]);
 
   const approvalRecommendations = apiApprovalRecommendations ?? localApprovalRecommendations;
+  const approvalAssessmentSignals = useMemo(() => {
+    const context = approvalRecommendationData?.context;
+    if (context) {
+      const failed7d = Number(context.assessment_failed_7d ?? 0);
+      const completed30d = Number(context.assessment_completed_30d ?? 0);
+      const passed30d = Number(context.assessment_passed_30d ?? 0);
+      const passRate30d =
+        typeof context.assessment_pass_rate_30d === "number" &&
+        Number.isFinite(context.assessment_pass_rate_30d)
+          ? context.assessment_pass_rate_30d
+          : null;
+
+      return {
+        failed7d: Number.isFinite(failed7d) ? Math.max(0, Math.floor(failed7d)) : 0,
+        completed30d: Number.isFinite(completed30d) ? Math.max(0, Math.floor(completed30d)) : 0,
+        passed30d: Number.isFinite(passed30d) ? Math.max(0, Math.floor(passed30d)) : 0,
+        passRate30d,
+      };
+    }
+    return localAssessmentSignals;
+  }, [approvalRecommendationData, localAssessmentSignals]);
+  const approvalAssessmentRiskElevated = useMemo(() => {
+    return (
+      approvalAssessmentSignals.failed7d >= 2 ||
+      (approvalAssessmentSignals.completed30d >= 3 &&
+        approvalAssessmentSignals.passRate30d != null &&
+        approvalAssessmentSignals.passRate30d < 0.6)
+    );
+  }, [approvalAssessmentSignals]);
+  const approvalAssessmentRiskTrend: TrendState = useMemo(() => {
+    if (approvalAssessmentRiskElevated) return "down";
+    if (approvalAssessmentSignals.completed30d >= 3) return "up";
+    return "flat";
+  }, [approvalAssessmentRiskElevated, approvalAssessmentSignals.completed30d]);
 
   const trustDelta7d = useMemo(() => {
     if (!latestSnapshot || !baselineSnapshot) return null;
@@ -1579,6 +1663,27 @@ export function AgentProfilePage(): JSX.Element {
                       <span className={statePillClass(row.mode)}>{t(`agent_profile.approval.mode.${row.mode}`)}</span>
                     </div>
                   ))}
+                </div>
+
+                <div className="detailSectionTitle">{t("agent_profile.approval.signals")}</div>
+                <div className="kvGrid">
+                  <div className="kvKey">{t("agent_profile.approval.signal.assessment_failed_7d")}</div>
+                  <div className="kvVal mono">{approvalAssessmentSignals.failed7d}</div>
+
+                  <div className="kvKey">{t("agent_profile.approval.signal.assessment_completed_30d")}</div>
+                  <div className="kvVal mono">{approvalAssessmentSignals.completed30d}</div>
+
+                  <div className="kvKey">{t("agent_profile.approval.signal.assessment_pass_rate_30d")}</div>
+                  <div className="kvVal mono">{formatPct01OrDash(approvalAssessmentSignals.passRate30d)}</div>
+
+                  <div className="kvKey">{t("agent_profile.approval.signal.risk")}</div>
+                  <div className="kvVal">
+                    <span className={statePillClass(approvalAssessmentRiskTrend)}>
+                      {approvalAssessmentRiskElevated
+                        ? t("agent_profile.approval.signal.risk.elevated")
+                        : t("agent_profile.approval.signal.risk.low")}
+                    </span>
+                  </div>
                 </div>
               </div>
             ) : null}
