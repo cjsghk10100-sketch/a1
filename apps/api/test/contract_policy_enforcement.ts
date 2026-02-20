@@ -110,6 +110,12 @@ async function main(): Promise<void> {
       { title: "Policy Contract Room", room_mode: "default", default_lang: "en" },
       workspaceHeader,
     );
+    const agent = await postJson<{ agent_id: string; principal_id: string }>(
+      baseUrl,
+      "/v1/agents",
+      { display_name: "Policy Agent", actor_type: "service", actor_id: "agent-seeder" },
+      workspaceHeader,
+    );
 
     const before = await postJson<{ decision: string; reason_code: string }>(
       baseUrl,
@@ -171,6 +177,60 @@ async function main(): Promise<void> {
       ["ws_contract", room_id],
     );
     assert.equal(Number.parseInt(allowAuditCount.rows[0].count, 10), 1);
+
+    const missingAgentPrincipal = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      { action: "artifact.create", actor_type: "agent", actor_id: agent.agent_id, room_id },
+      workspaceHeader,
+    );
+    assert.equal(missingAgentPrincipal.decision, "deny");
+    assert.equal(missingAgentPrincipal.reason_code, "agent_principal_required");
+
+    const unknownAgentPrincipal = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "artifact.create",
+        actor_type: "agent",
+        actor_id: agent.agent_id,
+        principal_id: "00000000-0000-0000-0000-000000000000",
+        room_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(unknownAgentPrincipal.decision, "deny");
+    assert.equal(unknownAgentPrincipal.reason_code, "agent_principal_not_found");
+
+    const mismatchedAgentActor = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "artifact.create",
+        actor_type: "agent",
+        actor_id: "agt_mismatch",
+        principal_id: agent.principal_id,
+        room_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(mismatchedAgentActor.decision, "deny");
+    assert.equal(mismatchedAgentActor.reason_code, "agent_actor_id_mismatch");
+
+    const validAgentPrincipal = await postJson<{ decision: string; reason_code: string }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "artifact.create",
+        actor_type: "agent",
+        actor_id: agent.agent_id,
+        principal_id: agent.principal_id,
+        room_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(validAgentPrincipal.decision, "allow");
+    assert.equal(validAgentPrincipal.reason_code, "default_allow");
 
     const zoneMismatch = await postJson<{ decision: string; reason_code: string }>(
       baseUrl,

@@ -55,6 +55,10 @@ interface ActionRegistryRow {
   requires_pre_approval: boolean;
 }
 
+interface AgentPrincipalRow {
+  agent_id: string;
+}
+
 function normalizeAction(action: string): string {
   const a = action.trim();
   if (a === "external_write") return "external.write";
@@ -363,6 +367,48 @@ async function evaluateCapabilityToken(
   return null;
 }
 
+async function evaluateAgentPrincipal(
+  pool: DbPool,
+  input: AuthorizeInputV2,
+): Promise<PolicyCheckResultV1 | null> {
+  if (input.actor.actor_type !== "agent") return null;
+
+  const principal_id = input.principal_id?.trim();
+  if (!principal_id) {
+    return {
+      decision: PolicyDecision.Deny,
+      reason_code: "agent_principal_required",
+      reason: "Agent actor requires principal_id.",
+    };
+  }
+
+  const agentRes = await pool.query<AgentPrincipalRow>(
+    `SELECT agent_id
+     FROM sec_agents
+     WHERE principal_id = $1
+     LIMIT 1`,
+    [principal_id],
+  );
+  if (agentRes.rowCount !== 1) {
+    return {
+      decision: PolicyDecision.Deny,
+      reason_code: "agent_principal_not_found",
+      reason: "Agent principal was not found.",
+    };
+  }
+
+  const actor_id = input.actor.actor_id.trim();
+  if (actor_id !== agentRes.rows[0].agent_id) {
+    return {
+      decision: PolicyDecision.Deny,
+      reason_code: "agent_actor_id_mismatch",
+      reason: "actor_id does not match principal agent.",
+    };
+  }
+
+  return null;
+}
+
 async function isQuarantinedAgentPrincipal(
   pool: DbPool,
   principal_id: string | undefined,
@@ -501,19 +547,24 @@ async function authorizeCore(
   category: AuthorizeCategory,
   input: AuthorizeInputV2,
 ): Promise<AuthorizeResultV2> {
-  const capabilityDecision = await evaluateCapabilityToken(pool, category, input);
+  const agentPrincipalDecision = await evaluateAgentPrincipal(pool, input);
+  const capabilityDecision =
+    agentPrincipalDecision == null ? await evaluateCapabilityToken(pool, category, input) : null;
   const actionRegistryDecision =
-    capabilityDecision == null ? await evaluateActionRegistryPolicy(pool, category, input) : null;
+    capabilityDecision == null && agentPrincipalDecision == null
+      ? await evaluateActionRegistryPolicy(pool, category, input)
+      : null;
   const quarantined =
-    category === "egress" && !capabilityDecision && !actionRegistryDecision
+    category === "egress" && !agentPrincipalDecision && !capabilityDecision && !actionRegistryDecision
       ? await isQuarantinedAgentPrincipal(pool, input.principal_id)
       : null;
   const quotaDecision =
-    category === "egress" && !capabilityDecision
+    category === "egress" && !agentPrincipalDecision && !capabilityDecision
       ? await checkEgressQuota(pool, input.workspace_id, input.actor, input.principal_id)
       : null;
 
   const policyBase =
+    agentPrincipalDecision ??
     capabilityDecision ??
     actionRegistryDecision ??
     (quarantined
@@ -536,6 +587,7 @@ async function authorizeCore(
         }));
 
   const base =
+    !agentPrincipalDecision &&
     !capabilityDecision &&
     !actionRegistryDecision &&
     !quarantined &&
