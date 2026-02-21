@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import type {
   AgentRecordV1,
   AgentSkillAssessImportedResponseV1,
+  AgentSkillCertifyImportedResponseV1,
   AgentSkillImportResponseV1,
   AgentSkillOnboardingStatusResponseV1,
   AutonomyApproveResponseV1,
@@ -474,6 +475,11 @@ export function AgentProfilePage(): JSX.Element {
   const [onboardingStatus, setOnboardingStatus] = useState<AgentSkillOnboardingStatusResponseV1 | null>(null);
   const [onboardingStatusLoading, setOnboardingStatusLoading] = useState<boolean>(false);
   const [onboardingStatusError, setOnboardingStatusError] = useState<string | null>(null);
+  const [onboardingCertifyLoading, setOnboardingCertifyLoading] = useState<boolean>(false);
+  const [onboardingCertifyError, setOnboardingCertifyError] = useState<string | null>(null);
+  const [onboardingCertifyResult, setOnboardingCertifyResult] = useState<AgentSkillCertifyImportedResponseV1 | null>(
+    null,
+  );
   const [autoVerifyPendingOnImport, setAutoVerifyPendingOnImport] = useState<boolean>(() =>
     readStoredBool(autoVerifyPendingStorageKey, true),
   );
@@ -620,6 +626,11 @@ export function AgentProfilePage(): JSX.Element {
       .filter((it) => it.status === "pending")
       .map((it) => it.skill_package_id);
   }, [skillImportResult]);
+  const onboardingNeedsCertify = useMemo(() => {
+    const summary = onboardingStatus?.summary;
+    if (!summary) return false;
+    return summary.pending > 0 || summary.verified_unassessed > 0;
+  }, [onboardingStatus]);
   const delegationSummary = useMemo(() => delegationDepthSummary(tokens), [tokens]);
   const delegationRows = useMemo(() => delegationGraphRows(tokens).slice(0, 40), [tokens]);
   const agentTokenIds = useMemo(() => new Set(tokens.map((tok) => tok.token_id)), [tokens]);
@@ -1094,6 +1105,9 @@ export function AgentProfilePage(): JSX.Element {
     setOnboardingStatus(null);
     setOnboardingStatusError(null);
     setOnboardingStatusLoading(false);
+    setOnboardingCertifyLoading(false);
+    setOnboardingCertifyError(null);
+    setOnboardingCertifyResult(null);
 
     setTrust(null);
     setTokens([]);
@@ -1387,6 +1401,35 @@ export function AgentProfilePage(): JSX.Element {
       setOnboardingStatusError(toErrorCode(e));
     } finally {
       setOnboardingStatusLoading(false);
+    }
+  }
+
+  async function certifyImportedSkillsFromStatus(): Promise<void> {
+    const nextAgentId = agentId.trim();
+    if (!nextAgentId) return;
+
+    setOnboardingCertifyLoading(true);
+    setOnboardingCertifyError(null);
+    setOnboardingCertifyResult(null);
+    try {
+      const actor_id = operatorActorId.trim() || "anon";
+      const principal_id = await ensureOperatorPrincipalId();
+      const certified = await certifyImportedAgentSkills(nextAgentId, {
+        actor_type: "user",
+        actor_id,
+        principal_id,
+        actor_principal_id: principal_id,
+        only_unassessed: true,
+        limit: 200,
+      });
+      setOnboardingCertifyResult(certified);
+      await reloadSkillPackages();
+      await refreshAgentGrowthViews(nextAgentId);
+      await reloadOnboardingStatus(nextAgentId);
+    } catch (e) {
+      setOnboardingCertifyError(toErrorCode(e));
+    } finally {
+      setOnboardingCertifyLoading(false);
     }
   }
 
@@ -2259,16 +2302,54 @@ export function AgentProfilePage(): JSX.Element {
                 <button
                   type="button"
                   className="ghostButton"
-                  disabled={onboardingStatusLoading || !agentId.trim()}
+                  disabled={onboardingStatusLoading || onboardingCertifyLoading || !agentId.trim()}
                   onClick={() => void reloadOnboardingStatus()}
                 >
                   {t("common.refresh")}
+                </button>
+                <button
+                  type="button"
+                  className="primaryButton"
+                  disabled={
+                    onboardingStatusLoading ||
+                    onboardingCertifyLoading ||
+                    skillImportLoading ||
+                    skillImportVerifyLoading ||
+                    skillImportAssessLoading ||
+                    !agentId.trim() ||
+                    !onboardingNeedsCertify
+                  }
+                  onClick={() => void certifyImportedSkillsFromStatus()}
+                >
+                  {t("agent_profile.onboarding.button_certify_status")}
                 </button>
               </div>
 
               {onboardingStatusError ? (
                 <div className="errorBox" style={{ marginTop: 10 }}>
                   {t("error.load_failed", { code: onboardingStatusError })}
+                </div>
+              ) : null}
+              {onboardingCertifyError ? (
+                <div className="errorBox" style={{ marginTop: 10 }}>
+                  {t("error.load_failed", { code: onboardingCertifyError })}
+                </div>
+              ) : null}
+              {onboardingCertifyLoading ? (
+                <div className="placeholder" style={{ marginTop: 10 }}>
+                  {t("agent_profile.onboarding.status_action_loading")}
+                </div>
+              ) : null}
+              {onboardingCertifyResult ? (
+                <div className="muted" style={{ marginTop: 10 }}>
+                  {t("agent_profile.onboarding.status_action_summary_line", {
+                    review_total: onboardingCertifyResult.review.summary.total,
+                    review_verified: onboardingCertifyResult.review.summary.verified,
+                    review_quarantined: onboardingCertifyResult.review.summary.quarantined,
+                    candidates: onboardingCertifyResult.assess.summary.total_candidates,
+                    assessed: onboardingCertifyResult.assess.summary.assessed,
+                    skipped: onboardingCertifyResult.assess.summary.skipped,
+                  })}
                 </div>
               ) : null}
 
@@ -2305,6 +2386,11 @@ export function AgentProfilePage(): JSX.Element {
                   {t("common.not_available")}
                 </div>
               )}
+              {agentId.trim() && onboardingStatus && !onboardingNeedsCertify ? (
+                <div className="muted" style={{ marginTop: 10 }}>
+                  {t("agent_profile.onboarding.status.no_pending_work")}
+                </div>
+              ) : null}
             </div>
 
             <div className="detailSectionTitle">{t("agent_profile.onboarding.register_title")}</div>

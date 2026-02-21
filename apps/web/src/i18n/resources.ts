@@ -409,6 +409,11 @@ export const resources = {
       "agent_profile.onboarding.status.quarantined": "quarantined",
       "agent_profile.onboarding.status.verified_assessed": "verified assessed",
       "agent_profile.onboarding.status.verified_unassessed": "verified unassessed",
+      "agent_profile.onboarding.status.no_pending_work": "No pending onboarding work.",
+      "agent_profile.onboarding.button_certify_status": "Certify now",
+      "agent_profile.onboarding.status_action_loading": "Running certify flow…",
+      "agent_profile.onboarding.status_action_summary_line":
+        "reviewed {{review_total}} (verified {{review_verified}}, quarantined {{review_quarantined}}) · assessed {{assessed}} / {{candidates}} · skipped {{skipped}}",
 
       "agent_profile.tokens_active": "{{active}} active / {{total}} total",
       "agent_profile.principal_missing": "Principal ID is missing. Pick an agent from the list to load capability tokens.",
@@ -993,6 +998,11 @@ export const resources = {
       "agent_profile.onboarding.status.quarantined": "격리",
       "agent_profile.onboarding.status.verified_assessed": "검증+평가 완료",
       "agent_profile.onboarding.status.verified_unassessed": "검증됨 미평가",
+      "agent_profile.onboarding.status.no_pending_work": "처리할 온보딩 작업이 없습니다.",
+      "agent_profile.onboarding.button_certify_status": "지금 인증",
+      "agent_profile.onboarding.status_action_loading": "인증 플로우 실행 중…",
+      "agent_profile.onboarding.status_action_summary_line":
+        "검수 {{review_total}}건(검증 {{review_verified}}, 격리 {{review_quarantined}}) · 평가 {{assessed}} / {{candidates}} · 건너뜀 {{skipped}}",
 
       "agent_profile.tokens_active": "활성 {{active}} / 전체 {{total}}",
       "agent_profile.principal_missing": "프린시펄 ID가 없습니다. 목록에서 에이전트를 선택하면 권한 토큰을 불러올 수 있습니다.",
