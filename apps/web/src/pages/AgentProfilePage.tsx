@@ -1600,13 +1600,16 @@ export function AgentProfilePage(): JSX.Element {
         only_unassessed: true,
         limit: 200,
       });
+      if (!isStillActiveAgent(nextAgentId)) return;
       setOnboardingCertifyResult(certified);
       await reloadSkillPackages();
       await refreshAgentGrowthViews(nextAgentId);
       await reloadOnboardingStatus(nextAgentId);
     } catch (e) {
+      if (!isStillActiveAgent(nextAgentId)) return;
       setOnboardingCertifyError(toErrorCode(e));
     } finally {
+      if (!isStillActiveAgent(nextAgentId)) return;
       setOnboardingCertifyLoading(false);
     }
   }
@@ -1633,6 +1636,7 @@ export function AgentProfilePage(): JSX.Element {
           actor_id,
           principal_id: principal,
         });
+        if (!isStillActiveAgent(agent_id)) return;
         const statusById = new Map(reviewed.items.map((it) => [it.skill_package_id, it.status] as const));
 
         setSkillImportResult((prev) => {
@@ -1663,10 +1667,12 @@ export function AgentProfilePage(): JSX.Element {
           } catch (e) {
             errors.push({ skill_package_id, error_code: toErrorCode(e) });
           } finally {
+            if (!isStillActiveAgent(agent_id)) return;
             setSkillImportVerifyProgress({ done: idx + 1, total: pendingIds.length });
           }
         }
 
+        if (!isStillActiveAgent(agent_id)) return;
         setSkillImportVerifyErrors(errors);
         setSkillImportResult((prev) => {
           const current = prev ?? baseResult ?? null;
@@ -1690,6 +1696,7 @@ export function AgentProfilePage(): JSX.Element {
       }
       await reloadOnboardingStatus(agent_id);
     } finally {
+      if (!isStillActiveAgent(agent_id)) return;
       setSkillImportVerifyLoading(false);
     }
   }
@@ -1738,12 +1745,15 @@ export function AgentProfilePage(): JSX.Element {
         only_unassessed: true,
         limit: 200,
       });
+      if (!isStillActiveAgent(agent_id)) return;
       setSkillImportAssessResult(assessed);
       await refreshAgentGrowthViews(agent_id);
       await reloadOnboardingStatus(agent_id);
     } catch (e) {
+      if (!isStillActiveAgent(agent_id)) return;
       setSkillImportAssessError(toErrorCode(e));
     } finally {
+      if (!isStillActiveAgent(agent_id)) return;
       setSkillImportAssessLoading(false);
     }
   }
@@ -1772,6 +1782,7 @@ export function AgentProfilePage(): JSX.Element {
         only_unassessed: true,
         limit: 200,
       });
+      if (!isStillActiveAgent(agent_id)) return;
 
       const statusById = new Map(certified.review.items.map((item) => [item.skill_package_id, item.status] as const));
       setSkillImportResult((prev) => {
@@ -1807,9 +1818,11 @@ export function AgentProfilePage(): JSX.Element {
       await refreshAgentGrowthViews(agent_id);
       await reloadOnboardingStatus(agent_id);
     } catch (e) {
+      if (!isStillActiveAgent(agent_id)) return;
       setSkillImportError(toErrorCode(e));
       setSkillImportAssessError(toErrorCode(e));
     } finally {
+      if (!isStillActiveAgent(agent_id)) return;
       setSkillImportVerifyLoading(false);
       setSkillImportAssessLoading(false);
     }
@@ -2354,14 +2367,17 @@ export function AgentProfilePage(): JSX.Element {
                         actor_id,
                         actor_principal_id: operator_principal_id,
                       });
+                      if (!isStillActiveAgent(nextAgentId)) return;
 
                       setAutonomyRecommendation(res.recommendation);
                       setAutonomyRecommendationId(res.recommendation.recommendation_id);
                       setTrust(res.trust);
                       await reloadApprovalRecommendation(nextAgentId);
                     } catch (e) {
+                      if (!isStillActiveAgent(nextAgentId)) return;
                       setAutonomyRecommendError(toErrorCode(e));
                     } finally {
+                      if (!isStillActiveAgent(nextAgentId)) return;
                       setAutonomyRecommendLoading(false);
                     }
                   })();
@@ -2447,12 +2463,15 @@ export function AgentProfilePage(): JSX.Element {
                         recommendation_id,
                         granted_by_principal_id,
                       });
+                      if (!isStillActiveAgent(nextAgentId)) return;
                       setAutonomyApproveResult(res);
                       await reloadTokens();
                       await reloadApprovalRecommendation(nextAgentId);
                     } catch (e) {
+                      if (!isStillActiveAgent(nextAgentId)) return;
                       setAutonomyApproveError(toErrorCode(e));
                     } finally {
+                      if (!isStillActiveAgent(nextAgentId)) return;
                       setAutonomyApproveLoading(false);
                     }
                   })();
@@ -2706,16 +2725,20 @@ export function AgentProfilePage(): JSX.Element {
                   void (async () => {
                     const display_name = registerDisplayName.trim();
                     if (!display_name) return;
+                    const anchorAgentId = activeAgentIdRef.current.trim();
                     setRegisterLoading(true);
                     setRegisterError(null);
                     try {
                       const res = await registerAgent({ display_name });
+                      if (activeAgentIdRef.current.trim() !== anchorAgentId) return;
                       setRegisterDisplayName("");
                       setAgentId(res.agent_id);
                       await reloadAgentList({ resetOnboardingWork: true });
                     } catch (e) {
+                      if (activeAgentIdRef.current.trim() !== anchorAgentId) return;
                       setRegisterError(toErrorCode(e));
                     } finally {
+                      if (activeAgentIdRef.current.trim() !== anchorAgentId) return;
                       setRegisterLoading(false);
                     }
                   })();
@@ -2793,6 +2816,7 @@ export function AgentProfilePage(): JSX.Element {
                             only_unassessed: true,
                             limit: 200,
                           });
+                          if (!isStillActiveAgent(nextAgentId)) return;
 
                           const statusById = new Map(
                             flow.certify.review.items.map((item) => [item.skill_package_id, item.status] as const),
@@ -2826,6 +2850,7 @@ export function AgentProfilePage(): JSX.Element {
                           await reloadOnboardingStatus(nextAgentId);
                         } else {
                           const res = await importAgentSkills(nextAgentId, { packages: packages as any[] });
+                          if (!isStillActiveAgent(nextAgentId)) return;
                           setSkillImportResult(res);
                           await reloadSkillPackages();
                           await reloadOnboardingStatus(nextAgentId);
@@ -2844,8 +2869,10 @@ export function AgentProfilePage(): JSX.Element {
                           }
                         }
                       } catch (e) {
+                        if (!isStillActiveAgent(nextAgentId)) return;
                         setSkillImportError(toErrorCode(e));
                       } finally {
+                        if (!isStillActiveAgent(nextAgentId)) return;
                         setSkillImportLoading(false);
                       }
                     })();
@@ -3069,19 +3096,24 @@ export function AgentProfilePage(): JSX.Element {
                   disabled={quarantineActionLoading || !agentId.trim() || isQuarantined}
                   onClick={() => {
                     void (async () => {
-                      if (!agentId.trim()) return;
+                      const targetAgentId = agentId.trim();
+                      if (!targetAgentId) return;
                       setQuarantineActionLoading(true);
                       setQuarantineActionError(null);
                       try {
-                        await quarantineAgent(agentId, {
+                        await quarantineAgent(targetAgentId, {
                           quarantine_reason: quarantineReason.trim() || undefined,
                         });
-                        const meta = await getAgent(agentId);
+                        if (!isStillActiveAgent(targetAgentId)) return;
+                        const meta = await getAgent(targetAgentId);
+                        if (!isStillActiveAgent(targetAgentId)) return;
                         setAgentMeta(meta);
-                        await reloadApprovalRecommendation(agentId);
+                        await reloadApprovalRecommendation(targetAgentId);
                       } catch (e) {
+                        if (!isStillActiveAgent(targetAgentId)) return;
                         setQuarantineActionError(toErrorCode(e));
                       } finally {
+                        if (!isStillActiveAgent(targetAgentId)) return;
                         setQuarantineActionLoading(false);
                       }
                     })();
@@ -3098,17 +3130,22 @@ export function AgentProfilePage(): JSX.Element {
                   disabled={quarantineActionLoading || !agentId.trim() || !isQuarantined}
                   onClick={() => {
                     void (async () => {
-                      if (!agentId.trim()) return;
+                      const targetAgentId = agentId.trim();
+                      if (!targetAgentId) return;
                       setQuarantineActionLoading(true);
                       setQuarantineActionError(null);
                       try {
-                        await unquarantineAgent(agentId);
-                        const meta = await getAgent(agentId);
+                        await unquarantineAgent(targetAgentId);
+                        if (!isStillActiveAgent(targetAgentId)) return;
+                        const meta = await getAgent(targetAgentId);
+                        if (!isStillActiveAgent(targetAgentId)) return;
                         setAgentMeta(meta);
-                        await reloadApprovalRecommendation(agentId);
+                        await reloadApprovalRecommendation(targetAgentId);
                       } catch (e) {
+                        if (!isStillActiveAgent(targetAgentId)) return;
                         setQuarantineActionError(toErrorCode(e));
                       } finally {
+                        if (!isStillActiveAgent(targetAgentId)) return;
                         setQuarantineActionLoading(false);
                       }
                     })();
