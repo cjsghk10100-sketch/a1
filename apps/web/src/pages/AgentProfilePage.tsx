@@ -458,6 +458,7 @@ export function AgentProfilePage(): JSX.Element {
 
   const [agentId, setAgentId] = useState<string>(() => localStorage.getItem(agentStorageKey) ?? "");
   const [manualAgentId, setManualAgentId] = useState<string>("");
+  const [agentFilterQuery, setAgentFilterQuery] = useState<string>("");
   const [operatorActorId, setOperatorActorId] = useState<string>(
     () => localStorage.getItem(operatorStorageKey) ?? "anon",
   );
@@ -1744,8 +1745,26 @@ export function AgentProfilePage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId, principalId]);
 
+  const filteredAgents = useMemo(() => {
+    const query = agentFilterQuery.trim().toLowerCase();
+    if (!query) return agents;
+
+    const filtered = agents.filter((agent) => {
+      const name = agent.display_name.toLowerCase();
+      const id = agent.agent_id.toLowerCase();
+      return name.includes(query) || id.includes(query);
+    });
+
+    const selected = agentId.trim();
+    if (selected && !filtered.some((agent) => agent.agent_id === selected)) {
+      const selectedAgent = agents.find((agent) => agent.agent_id === selected);
+      if (selectedAgent) filtered.unshift(selectedAgent);
+    }
+    return filtered;
+  }, [agents, agentFilterQuery, agentId]);
+
   const agentOptions = useMemo(() => {
-    return agents.map((a) => ({
+    return filteredAgents.map((a) => ({
       value: a.agent_id,
       label: `${a.display_name} (${a.agent_id})${
         (agentOnboardingWorkById[a.agent_id] ?? 0) > 0
@@ -1755,7 +1774,7 @@ export function AgentProfilePage(): JSX.Element {
           : ""
       }`,
     }));
-  }, [agents, agentOnboardingWorkById, t]);
+  }, [filteredAgents, agentOnboardingWorkById, t]);
 
   return (
     <section className="page">
@@ -1791,6 +1810,15 @@ export function AgentProfilePage(): JSX.Element {
           <label className="fieldLabel" htmlFor="agentSelect">
             {t("agent_profile.agent")}
           </label>
+
+          <div className="timelineManualRow">
+            <input
+              className="textInput"
+              value={agentFilterQuery}
+              onChange={(e) => setAgentFilterQuery(e.target.value)}
+              placeholder={t("agent_profile.agent_filter_placeholder")}
+            />
+          </div>
 
           <div className="timelineRoomRow">
             <select
@@ -1854,6 +1882,14 @@ export function AgentProfilePage(): JSX.Element {
           {agentsError ? <div className="errorBox">{t("error.load_failed", { code: agentsError })}</div> : null}
           {agentOnboardingWorkError ? (
             <div className="errorBox">{t("error.load_failed", { code: agentOnboardingWorkError })}</div>
+          ) : null}
+          {agentFilterQuery.trim().length > 0 ? (
+            <div className="muted">
+              {t("agent_profile.agent_filter_result", {
+                count: filteredAgents.length,
+                total: agents.length,
+              })}
+            </div>
           ) : null}
           {agentsLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
           {agentOnboardingWorkLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
