@@ -147,14 +147,25 @@ export interface AgentSkillImportCertifyResponseV1 {
   certify: AgentSkillCertifyImportedResponseV1;
 }
 
+export interface AgentSkillOnboardingSummaryV1 {
+  total_linked: number;
+  verified: number;
+  verified_skills: number;
+  pending: number;
+  quarantined: number;
+  verified_assessed: number;
+  verified_unassessed: number;
+}
+
 export interface AgentSkillOnboardingStatusResponseV1 {
-  summary: {
-    total_linked: number;
-    verified: number;
-    verified_skills: number;
-    pending: number;
-    quarantined: number;
-    verified_assessed: number;
-    verified_unassessed: number;
-  };
+  summary: AgentSkillOnboardingSummaryV1;
+}
+
+export interface AgentSkillOnboardingStatusItemV1 {
+  agent_id: string;
+  summary: AgentSkillOnboardingSummaryV1;
+}
+
+export interface AgentSkillOnboardingStatusListResponseV1 {
+  items: AgentSkillOnboardingStatusItemV1[];
 }

@@ -12,6 +12,8 @@ import type {
   AgentSkillImportRequestV1,
   AgentSkillImportCertifyRequestV1,
   AgentSkillImportCertifyResponseV1,
+  AgentSkillOnboardingStatusItemV1,
+  AgentSkillOnboardingStatusListResponseV1,
   AgentSkillImportResponseV1,
   AgentSkillOnboardingStatusResponseV1,
   AgentSkillReviewPendingRequestV1,
@@ -121,6 +123,23 @@ export async function getAgentSkillOnboardingStatus(
   return await apiGet<AgentSkillOnboardingStatusResponseV1>(
     `/v1/agents/${encodeURIComponent(agent_id)}/skills/onboarding-status`,
   );
+}
+
+export async function listAgentSkillOnboardingStatuses(params?: {
+  limit?: number;
+  only_with_work?: boolean;
+}): Promise<AgentSkillOnboardingStatusItemV1[]> {
+  const query = new URLSearchParams();
+  const limit = params?.limit;
+  if (typeof limit === "number" && Number.isFinite(limit)) {
+    query.set("limit", String(Math.max(1, Math.min(500, Math.floor(limit)))));
+  }
+  if (params?.only_with_work) query.set("only_with_work", "1");
+  const path = query.toString().length
+    ? `/v1/agents/skills/onboarding-statuses?${query.toString()}`
+    : "/v1/agents/skills/onboarding-statuses";
+  const res = await apiGet<AgentSkillOnboardingStatusListResponseV1>(path);
+  return res.items ?? [];
 }
 
 export async function reviewPendingAgentSkills(

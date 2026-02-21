@@ -11,6 +11,8 @@ import {
   type AgentSkillCertifyImportedResponseV1,
   type AgentSkillImportCertifyRequestV1,
   type AgentSkillImportCertifyResponseV1,
+  type AgentSkillOnboardingStatusListResponseV1,
+  type AgentSkillOnboardingSummaryV1,
   type AgentSkillOnboardingStatusResponseV1,
   type AgentSkillImportResponseV1,
   type AgentSkillReviewPendingResponseV1,
@@ -44,6 +46,18 @@ function normalizeRequiredString(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const v = raw.trim();
   return v.length ? v : null;
+}
+
+function parseListLimit(raw: unknown): number {
+  const parsed = Number.parseInt(typeof raw === "string" ? raw : "", 10);
+  if (!Number.isFinite(parsed)) return 200;
+  return Math.min(500, Math.max(1, parsed));
+}
+
+function parseBooleanFlag(raw: unknown): boolean {
+  if (typeof raw !== "string") return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function normalizeHash(raw: unknown): string | null {
@@ -184,6 +198,112 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
     });
 
     return reply.code(201).send({ agent_id, principal_id });
+  });
+
+  app.get<{
+    Querystring: { limit?: string; only_with_work?: string };
+  }>("/v1/agents/skills/onboarding-statuses", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const limit = parseListLimit(req.query.limit);
+    const only_with_work = parseBooleanFlag(req.query.only_with_work);
+
+    const rows = await pool.query<{
+      agent_id: string;
+      total_linked: number;
+      verified: number;
+      verified_skills: number;
+      pending: number;
+      quarantined: number;
+      verified_assessed: number;
+    }>(
+      `WITH scoped_agents AS (
+         SELECT agent_id, created_at
+         FROM sec_agents
+         ORDER BY created_at DESC
+         LIMIT $2
+       ),
+       package_counts AS (
+         SELECT
+           asp.agent_id,
+           COUNT(*)::int AS total_linked,
+           COUNT(*) FILTER (WHERE asp.verification_status = 'verified')::int AS verified,
+           COUNT(*) FILTER (WHERE asp.verification_status = 'pending')::int AS pending,
+           COUNT(*) FILTER (WHERE asp.verification_status = 'quarantined')::int AS quarantined
+         FROM sec_agent_skill_packages asp
+         JOIN sec_skill_packages sp
+           ON sp.skill_package_id = asp.skill_package_id
+         JOIN scoped_agents sa
+           ON sa.agent_id = asp.agent_id
+         WHERE sp.workspace_id = $1
+         GROUP BY asp.agent_id
+       ),
+       verified_skills AS (
+         SELECT asp.agent_id, asp.skill_id
+         FROM sec_agent_skill_packages asp
+         JOIN sec_skill_packages sp
+           ON sp.skill_package_id = asp.skill_package_id
+         JOIN scoped_agents sa
+           ON sa.agent_id = asp.agent_id
+         WHERE sp.workspace_id = $1
+           AND asp.verification_status = 'verified'
+         GROUP BY asp.agent_id, asp.skill_id
+       ),
+       verified_skill_counts AS (
+         SELECT agent_id, COUNT(*)::int AS verified_skills
+         FROM verified_skills
+         GROUP BY agent_id
+       ),
+       assessed_counts AS (
+         SELECT vs.agent_id, COUNT(*)::int AS verified_assessed
+         FROM verified_skills vs
+         JOIN sec_agent_skills sk
+           ON sk.workspace_id = $1
+          AND sk.agent_id = vs.agent_id
+          AND sk.skill_id = vs.skill_id
+          AND sk.assessment_total > 0
+         GROUP BY vs.agent_id
+       )
+       SELECT
+         sa.agent_id,
+         COALESCE(pc.total_linked, 0)::int AS total_linked,
+         COALESCE(pc.verified, 0)::int AS verified,
+         COALESCE(vsc.verified_skills, 0)::int AS verified_skills,
+         COALESCE(pc.pending, 0)::int AS pending,
+         COALESCE(pc.quarantined, 0)::int AS quarantined,
+         COALESCE(ac.verified_assessed, 0)::int AS verified_assessed
+       FROM scoped_agents sa
+       LEFT JOIN package_counts pc
+         ON pc.agent_id = sa.agent_id
+       LEFT JOIN verified_skill_counts vsc
+         ON vsc.agent_id = sa.agent_id
+       LEFT JOIN assessed_counts ac
+         ON ac.agent_id = sa.agent_id
+       ORDER BY sa.created_at DESC`,
+      [workspace_id, limit],
+    );
+
+    const items = rows.rows
+      .map((row) => {
+        const summary: AgentSkillOnboardingSummaryV1 = {
+          total_linked: Number(row.total_linked) || 0,
+          verified: Number(row.verified) || 0,
+          verified_skills: Number(row.verified_skills) || 0,
+          pending: Number(row.pending) || 0,
+          quarantined: Number(row.quarantined) || 0,
+          verified_assessed: Number(row.verified_assessed) || 0,
+          verified_unassessed: Math.max((Number(row.verified_skills) || 0) - (Number(row.verified_assessed) || 0), 0),
+        };
+        return {
+          agent_id: row.agent_id,
+          summary,
+        };
+      })
+      .filter((row) => !only_with_work || row.summary.pending + row.summary.verified_unassessed > 0);
+
+    const response: AgentSkillOnboardingStatusListResponseV1 = {
+      items,
+    };
+    return reply.code(200).send(response);
   });
 
   app.get<{

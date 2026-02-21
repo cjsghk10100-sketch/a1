@@ -400,6 +400,32 @@ async function main(): Promise<void> {
     assert.equal(onboardingStatus2Before.summary.quarantined, 0);
     assert.equal(onboardingStatus2Before.summary.verified_assessed, 0);
     assert.equal(onboardingStatus2Before.summary.verified_unassessed, 1);
+    const onboardingList = await getJson<{
+      items: Array<{
+        agent_id: string;
+        summary: {
+          total_linked: number;
+          verified: number;
+          verified_skills: number;
+          pending: number;
+          quarantined: number;
+          verified_assessed: number;
+          verified_unassessed: number;
+        };
+      }>;
+    }>(baseUrl, "/v1/agents/skills/onboarding-statuses?limit=20", workspaceHeader);
+    const onboardingListItem2 = onboardingList.items.find((item) => item.agent_id === registered2.agent_id);
+    assert.ok(onboardingListItem2);
+    assert.equal(onboardingListItem2?.summary.total_linked, 2);
+    assert.equal(onboardingListItem2?.summary.verified, 1);
+    assert.equal(onboardingListItem2?.summary.verified_skills, 1);
+    assert.equal(onboardingListItem2?.summary.pending, 1);
+    assert.equal(onboardingListItem2?.summary.verified_unassessed, 1);
+
+    const onboardingListOnlyWork = await getJson<{
+      items: Array<{ agent_id: string }>;
+    }>(baseUrl, "/v1/agents/skills/onboarding-statuses?limit=20&only_with_work=1", workspaceHeader);
+    assert.ok(onboardingListOnlyWork.items.some((item) => item.agent_id === registered2.agent_id));
 
     const certify = await postJson<{
       review: {

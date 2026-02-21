@@ -7,6 +7,7 @@ import type {
   AgentSkillAssessImportedResponseV1,
   AgentSkillCertifyImportedResponseV1,
   AgentSkillImportResponseV1,
+  AgentSkillOnboardingSummaryV1,
   AgentSkillOnboardingStatusResponseV1,
   AutonomyApproveResponseV1,
   AutonomyRecommendationV1,
@@ -38,6 +39,7 @@ import {
   getAgentTrust,
   importAndCertifyAgentSkills,
   importAgentSkills,
+  listAgentSkillOnboardingStatuses,
   listAgentSkills,
   listAgentSkillAssessments,
   listAgentSnapshots,
@@ -118,8 +120,8 @@ function formatSignedPercent(value: number): string {
   return `${sign}${pct.toFixed(1)}%`;
 }
 
-function onboardingWorkCount(status: AgentSkillOnboardingStatusResponseV1): number {
-  return Math.max(0, status.summary.pending) + Math.max(0, status.summary.verified_unassessed);
+function onboardingWorkCount(summary: AgentSkillOnboardingSummaryV1): number {
+  return Math.max(0, summary.pending) + Math.max(0, summary.verified_unassessed);
 }
 
 function isTokenActive(token: CapabilityTokenRow): boolean {
@@ -1239,7 +1241,7 @@ export function AgentProfilePage(): JSX.Element {
           setOnboardingStatusError(null);
           setAgentOnboardingWorkById((prev) => ({
             ...prev,
-            [agentId]: onboardingWorkCount(onboardingResult.value),
+            [agentId]: onboardingWorkCount(onboardingResult.value.summary),
           }));
         } else {
           setOnboardingStatusError(toErrorCode(onboardingResult.reason));
@@ -1276,28 +1278,12 @@ export function AgentProfilePage(): JSX.Element {
 
     void (async () => {
       try {
-        const next: Record<string, number> = {};
-        const chunkSize = 8;
-
-        for (let idx = 0; idx < agents.length; idx += chunkSize) {
-          const chunk = agents.slice(idx, idx + chunkSize);
-          const settled = await Promise.allSettled(
-            chunk.map(async (agent) => {
-              const status = await getAgentSkillOnboardingStatus(agent.agent_id);
-              return {
-                agent_id: agent.agent_id,
-                work_count: onboardingWorkCount(status),
-              };
-            }),
-          );
-          if (cancelled) return;
-          for (const item of settled) {
-            if (item.status !== "fulfilled") continue;
-            next[item.value.agent_id] = item.value.work_count;
-          }
-        }
-
+        const rows = await listAgentSkillOnboardingStatuses({ limit: Math.max(agents.length, 1) });
         if (cancelled) return;
+        const next: Record<string, number> = {};
+        for (const row of rows) {
+          next[row.agent_id] = onboardingWorkCount(row.summary);
+        }
         setAgentOnboardingWorkById(next);
       } catch (e) {
         if (cancelled) return;
@@ -1464,7 +1450,7 @@ export function AgentProfilePage(): JSX.Element {
       setOnboardingStatus(status);
       setAgentOnboardingWorkById((prev) => ({
         ...prev,
-        [nextAgentId]: onboardingWorkCount(status),
+        [nextAgentId]: onboardingWorkCount(status.summary),
       }));
     } catch (e) {
       setOnboardingStatusError(toErrorCode(e));
