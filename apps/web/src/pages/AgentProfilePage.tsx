@@ -581,6 +581,7 @@ export function AgentProfilePage(): JSX.Element {
   const [agentMetaLoading, setAgentMetaLoading] = useState<boolean>(false);
 
   const principalId = agentMeta?.principal_id ?? selectedAgent?.principal_id ?? null;
+  const activePrincipalIdRef = useRef<string | null>(principalId?.trim() || null);
   const isQuarantined = Boolean(agentMeta?.quarantined_at);
 
   const [quarantineReason, setQuarantineReason] = useState<string>("manual_quarantine");
@@ -649,6 +650,10 @@ export function AgentProfilePage(): JSX.Element {
 
   function isStillActiveAgent(nextAgentId: string): boolean {
     return activeAgentIdRef.current.trim() === nextAgentId.trim();
+  }
+
+  function isStillActivePrincipal(nextPrincipalId: string): boolean {
+    return (activePrincipalIdRef.current ?? "") === nextPrincipalId.trim();
   }
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
@@ -1405,6 +1410,10 @@ export function AgentProfilePage(): JSX.Element {
   }, [operatorActorId]);
 
   useEffect(() => {
+    activePrincipalIdRef.current = principalId?.trim() || null;
+  }, [principalId]);
+
+  useEffect(() => {
     localStorage.setItem(autoVerifyPendingStorageKey, autoVerifyPendingOnImport ? "1" : "0");
   }, [autoVerifyPendingOnImport]);
 
@@ -1455,10 +1464,13 @@ export function AgentProfilePage(): JSX.Element {
     setTokensError(null);
     try {
       const tok = await listCapabilityTokens(nextPrincipalId);
+      if (!isStillActivePrincipal(nextPrincipalId)) return;
       setTokens(tok);
     } catch (e) {
+      if (!isStillActivePrincipal(nextPrincipalId)) return;
       setTokensError(toErrorCode(e));
     } finally {
+      if (!isStillActivePrincipal(nextPrincipalId)) return;
       setTokensLoading(false);
     }
   }
