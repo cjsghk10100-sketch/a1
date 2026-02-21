@@ -348,6 +348,9 @@ export const resources = {
       "agent_profile.agent_select_placeholder": "Select an agent…",
       "agent_profile.agent_id_placeholder": "Or paste an agent_id (agt_…)",
       "agent_profile.use_agent_id": "Use",
+      "agent_profile.next_onboarding_agent": "Next onboarding",
+      "agent_profile.agent_option.work_suffix": " [needs {{count}}]",
+      "agent_profile.onboarding_agents_pending": "{{count}} agents need onboarding work",
 
       "agent_profile.section.capabilities": "Capabilities",
       "agent_profile.section.delegation": "Delegation",
@@ -938,6 +941,9 @@ export const resources = {
       "agent_profile.agent_select_placeholder": "에이전트 선택…",
       "agent_profile.agent_id_placeholder": "또는 agent_id 붙여넣기 (agt_…)",
       "agent_profile.use_agent_id": "사용",
+      "agent_profile.next_onboarding_agent": "다음 온보딩",
+      "agent_profile.agent_option.work_suffix": " [작업 {{count}}]",
+      "agent_profile.onboarding_agents_pending": "{{count}}개 에이전트에 온보딩 작업이 남아 있습니다",
 
       "agent_profile.section.capabilities": "권한",
       "agent_profile.section.delegation": "위임 체인",

@@ -118,6 +118,10 @@ function formatSignedPercent(value: number): string {
   return `${sign}${pct.toFixed(1)}%`;
 }
 
+function onboardingWorkCount(status: AgentSkillOnboardingStatusResponseV1): number {
+  return Math.max(0, status.summary.pending) + Math.max(0, status.summary.verified_unassessed);
+}
+
 function isTokenActive(token: CapabilityTokenRow): boolean {
   if (token.revoked_at) return false;
   if (token.valid_until) {
@@ -446,6 +450,9 @@ export function AgentProfilePage(): JSX.Element {
   const [agents, setAgents] = useState<RegisteredAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState<boolean>(false);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [agentOnboardingWorkById, setAgentOnboardingWorkById] = useState<Record<string, number>>({});
+  const [agentOnboardingWorkLoading, setAgentOnboardingWorkLoading] = useState<boolean>(false);
+  const [agentOnboardingWorkError, setAgentOnboardingWorkError] = useState<string | null>(null);
 
   const [agentId, setAgentId] = useState<string>(() => localStorage.getItem(agentStorageKey) ?? "");
   const [manualAgentId, setManualAgentId] = useState<string>("");
@@ -631,6 +638,10 @@ export function AgentProfilePage(): JSX.Element {
     if (!summary) return false;
     return summary.pending > 0 || summary.verified_unassessed > 0;
   }, [onboardingStatus]);
+  const agentsWithOnboardingWork = useMemo(
+    () => agents.filter((agent) => (agentOnboardingWorkById[agent.agent_id] ?? 0) > 0).length,
+    [agents, agentOnboardingWorkById],
+  );
   const delegationSummary = useMemo(() => delegationDepthSummary(tokens), [tokens]);
   const delegationRows = useMemo(() => delegationGraphRows(tokens).slice(0, 40), [tokens]);
   const agentTokenIds = useMemo(() => new Set(tokens.map((tok) => tok.token_id)), [tokens]);
@@ -1226,6 +1237,10 @@ export function AgentProfilePage(): JSX.Element {
         if (onboardingResult.status === "fulfilled") {
           setOnboardingStatus(onboardingResult.value);
           setOnboardingStatusError(null);
+          setAgentOnboardingWorkById((prev) => ({
+            ...prev,
+            [agentId]: onboardingWorkCount(onboardingResult.value),
+          }));
         } else {
           setOnboardingStatusError(toErrorCode(onboardingResult.reason));
         }
@@ -1246,6 +1261,56 @@ export function AgentProfilePage(): JSX.Element {
       cancelled = true;
     };
   }, [agentId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!agents.length) {
+      setAgentOnboardingWorkById({});
+      setAgentOnboardingWorkLoading(false);
+      setAgentOnboardingWorkError(null);
+      return;
+    }
+
+    setAgentOnboardingWorkLoading(true);
+    setAgentOnboardingWorkError(null);
+
+    void (async () => {
+      try {
+        const next: Record<string, number> = {};
+        const chunkSize = 8;
+
+        for (let idx = 0; idx < agents.length; idx += chunkSize) {
+          const chunk = agents.slice(idx, idx + chunkSize);
+          const settled = await Promise.allSettled(
+            chunk.map(async (agent) => {
+              const status = await getAgentSkillOnboardingStatus(agent.agent_id);
+              return {
+                agent_id: agent.agent_id,
+                work_count: onboardingWorkCount(status),
+              };
+            }),
+          );
+          if (cancelled) return;
+          for (const item of settled) {
+            if (item.status !== "fulfilled") continue;
+            next[item.value.agent_id] = item.value.work_count;
+          }
+        }
+
+        if (cancelled) return;
+        setAgentOnboardingWorkById(next);
+      } catch (e) {
+        if (cancelled) return;
+        setAgentOnboardingWorkError(toErrorCode(e));
+      } finally {
+        if (!cancelled) setAgentOnboardingWorkLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [agents]);
 
   useEffect(() => {
     localStorage.setItem(operatorStorageKey, operatorActorId);
@@ -1397,6 +1462,10 @@ export function AgentProfilePage(): JSX.Element {
     try {
       const status = await getAgentSkillOnboardingStatus(nextAgentId);
       setOnboardingStatus(status);
+      setAgentOnboardingWorkById((prev) => ({
+        ...prev,
+        [nextAgentId]: onboardingWorkCount(status),
+      }));
     } catch (e) {
       setOnboardingStatusError(toErrorCode(e));
     } finally {
@@ -1641,6 +1710,18 @@ export function AgentProfilePage(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function selectNextAgentWithOnboardingWork(): void {
+    if (!agents.length) return;
+    const currentIdx = agents.findIndex((agent) => agent.agent_id === agentId);
+    for (let offset = 1; offset <= agents.length; offset += 1) {
+      const nextIdx = (Math.max(currentIdx, -1) + offset) % agents.length;
+      const candidate = agents[nextIdx];
+      if ((agentOnboardingWorkById[candidate.agent_id] ?? 0) <= 0) continue;
+      setAgentId(candidate.agent_id);
+      return;
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     setActionRegistryLoading(true);
@@ -1672,9 +1753,15 @@ export function AgentProfilePage(): JSX.Element {
   const agentOptions = useMemo(() => {
     return agents.map((a) => ({
       value: a.agent_id,
-      label: `${a.display_name} (${a.agent_id})`,
+      label: `${a.display_name} (${a.agent_id})${
+        (agentOnboardingWorkById[a.agent_id] ?? 0) > 0
+          ? t("agent_profile.agent_option.work_suffix", {
+              count: agentOnboardingWorkById[a.agent_id] ?? 0,
+            })
+          : ""
+      }`,
     }));
-  }, [agents]);
+  }, [agents, agentOnboardingWorkById, t]);
 
   return (
     <section className="page">
@@ -1728,6 +1815,16 @@ export function AgentProfilePage(): JSX.Element {
             <button
               type="button"
               className="ghostButton"
+              disabled={agentsWithOnboardingWork === 0}
+              onClick={() => {
+                selectNextAgentWithOnboardingWork();
+              }}
+            >
+              {t("agent_profile.next_onboarding_agent")}
+            </button>
+            <button
+              type="button"
+              className="ghostButton"
               onClick={() => {
                 const next = manualAgentId.trim();
                 if (!next) return;
@@ -1761,7 +1858,16 @@ export function AgentProfilePage(): JSX.Element {
           </div>
 
           {agentsError ? <div className="errorBox">{t("error.load_failed", { code: agentsError })}</div> : null}
+          {agentOnboardingWorkError ? (
+            <div className="errorBox">{t("error.load_failed", { code: agentOnboardingWorkError })}</div>
+          ) : null}
           {agentsLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+          {agentOnboardingWorkLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
+          {!agentOnboardingWorkLoading && agentsWithOnboardingWork > 0 ? (
+            <div className="muted">
+              {t("agent_profile.onboarding_agents_pending", { count: agentsWithOnboardingWork })}
+            </div>
+          ) : null}
         </div>
 
         <div className="timelineConnection">
