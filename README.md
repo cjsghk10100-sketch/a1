@@ -40,6 +40,29 @@ pnpm -C apps/api db:migrate
 pnpm -C apps/api db:status
 ```
 
+## Run Execution (Queued Runs)
+
+Queued runs need a worker loop. Choose one mode:
+
+1. API + standalone worker (recommended during development)
+
+```bash
+pnpm -C apps/api dev
+pnpm -C apps/api runs:worker:watch
+```
+
+2. API with embedded worker
+
+```bash
+RUN_WORKER_EMBEDDED=1 pnpm -C apps/api dev
+```
+
+Optional tuning:
+
+- `RUN_WORKER_POLL_MS` (default `1000`)
+- `RUN_WORKER_BATCH_LIMIT` (unset = default worker batch)
+- `RUN_WORKER_WORKSPACE_ID` (unset = all workspaces)
+
 ## Secrets Vault (Optional)
 
 `SECRETS_MASTER_KEY` is only required for the secrets-vault endpoints:
