@@ -316,6 +316,17 @@ function unionScopes(tokens: CapabilityTokenRow[]): ScopeSummary {
 
 const agentStorageKey = "agentapp.agent_id";
 const operatorStorageKey = "agentapp.operator_actor_id";
+const autoVerifyPendingStorageKey = "agentapp.onboarding.auto_verify_pending";
+const autoAssessVerifiedStorageKey = "agentapp.onboarding.auto_assess_verified";
+
+function readStoredBool(key: string, fallback: boolean): boolean {
+  const raw = localStorage.getItem(key);
+  if (raw == null) return fallback;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true") return true;
+  if (normalized === "0" || normalized === "false") return false;
+  return fallback;
+}
 
 const agentChangeEventTypes = [
   "agent.capability.granted",
@@ -456,8 +467,12 @@ export function AgentProfilePage(): JSX.Element {
   const [skillImportAssessError, setSkillImportAssessError] = useState<string | null>(null);
   const [skillImportAssessResult, setSkillImportAssessResult] =
     useState<AgentSkillAssessImportedResponseV1 | null>(null);
-  const [autoVerifyPendingOnImport, setAutoVerifyPendingOnImport] = useState<boolean>(true);
-  const [autoAssessVerifiedOnImport, setAutoAssessVerifiedOnImport] = useState<boolean>(true);
+  const [autoVerifyPendingOnImport, setAutoVerifyPendingOnImport] = useState<boolean>(() =>
+    readStoredBool(autoVerifyPendingStorageKey, true),
+  );
+  const [autoAssessVerifiedOnImport, setAutoAssessVerifiedOnImport] = useState<boolean>(() =>
+    readStoredBool(autoAssessVerifiedStorageKey, true),
+  );
 
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
 
@@ -1199,6 +1214,14 @@ export function AgentProfilePage(): JSX.Element {
   useEffect(() => {
     localStorage.setItem(operatorStorageKey, operatorActorId);
   }, [operatorActorId]);
+
+  useEffect(() => {
+    localStorage.setItem(autoVerifyPendingStorageKey, autoVerifyPendingOnImport ? "1" : "0");
+  }, [autoVerifyPendingOnImport]);
+
+  useEffect(() => {
+    localStorage.setItem(autoAssessVerifiedStorageKey, autoAssessVerifiedOnImport ? "1" : "0");
+  }, [autoAssessVerifiedOnImport]);
 
   useEffect(() => {
     setTokens([]);
