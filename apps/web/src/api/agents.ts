@@ -42,12 +42,16 @@ export interface RegisteredAgentPage {
 export async function listRegisteredAgentsPage(params?: {
   limit?: number;
   cursor?: string;
+  q?: string;
 }): Promise<RegisteredAgentPage> {
   const query = new URLSearchParams();
   const limit = Math.max(1, Math.min(500, Math.floor(Number(params?.limit ?? 200))));
   query.set("limit", String(limit));
   if (typeof params?.cursor === "string" && params.cursor.trim().length) {
     query.set("cursor", params.cursor.trim());
+  }
+  if (typeof params?.q === "string" && params.q.trim().length) {
+    query.set("q", params.q.trim().slice(0, 128));
   }
   const res = await apiGet<AgentListResponseV1>(`/v1/agents?${query.toString()}`);
   const next_cursor =
@@ -62,6 +66,7 @@ export async function listRegisteredAgentsPage(params?: {
 export async function listRegisteredAgents(params?: {
   limit?: number;
   cursor?: string;
+  q?: string;
 }): Promise<RegisteredAgent[]> {
   const res = await listRegisteredAgentsPage(params);
   return res.agents;

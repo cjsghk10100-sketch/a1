@@ -372,6 +372,28 @@ async function main(): Promise<void> {
     const firstTwoPagedIds = [pagedAgents1.agents[0].agent_id, pagedAgents2.agents[0].agent_id];
     assert.ok(firstTwoPagedIds.includes(registered.agent_id));
     assert.ok(firstTwoPagedIds.includes(registered2.agent_id));
+    const agentsByIdQuery = await getJson<{
+      agents: Array<{ agent_id: string; display_name: string }>;
+      has_more: boolean;
+    }>(
+      baseUrl,
+      `/v1/agents?limit=20&q=${encodeURIComponent(registered2.agent_id)}`,
+      workspaceHeader,
+    );
+    assert.ok(agentsByIdQuery.agents.some((agent) => agent.agent_id === registered2.agent_id));
+    assert.equal(
+      agentsByIdQuery.agents.filter((agent) => agent.agent_id === registered2.agent_id).length,
+      1,
+    );
+    const agentsByNameQuery = await getJson<{
+      agents: Array<{ agent_id: string; display_name: string }>;
+      has_more: boolean;
+    }>(
+      baseUrl,
+      `/v1/agents?limit=20&q=${encodeURIComponent("Imported Agent 2")}`,
+      workspaceHeader,
+    );
+    assert.ok(agentsByNameQuery.agents.some((agent) => agent.agent_id === registered2.agent_id));
 
     const inventory2 = {
       packages: [

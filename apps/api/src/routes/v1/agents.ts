@@ -54,6 +54,13 @@ function parseListLimit(raw: unknown): number {
   return Math.min(500, Math.max(1, parsed));
 }
 
+function parseAgentSearchQuery(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!value) return null;
+  return value.slice(0, 128);
+}
+
 interface AgentListCursor {
   created_at: string;
   agent_id: string;
@@ -206,9 +213,10 @@ function decideImportedStatus(input: {
 
 export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.get<{
-    Querystring: { limit?: string; cursor?: string };
+    Querystring: { limit?: string; cursor?: string; q?: string };
   }>("/v1/agents", async (req, reply) => {
     const limit = parseListLimit(req.query.limit);
+    const q = parseAgentSearchQuery(req.query.q);
     const rawCursor = req.query.cursor;
     const cursor = parseAgentListCursor(rawCursor);
     if (typeof rawCursor === "string" && rawCursor.trim().length > 0 && !cursor) {
@@ -217,6 +225,10 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
 
     const params: Array<string | number> = [];
     const where: string[] = [];
+    if (q) {
+      params.push(`%${q}%`);
+      where.push(`(agent_id ILIKE $${params.length} OR display_name ILIKE $${params.length})`);
+    }
     if (cursor) {
       params.push(cursor.created_at, cursor.agent_id);
       where.push(`(created_at, agent_id) < ($${params.length - 1}::timestamptz, $${params.length})`);

@@ -457,6 +457,7 @@ export function AgentProfilePage(): JSX.Element {
   const [agentsNextCursor, setAgentsNextCursor] = useState<string | null>(null);
   const [agentsHasMore, setAgentsHasMore] = useState<boolean>(false);
   const agentListRequestSeqRef = useRef<number>(0);
+  const agentFilterMountedRef = useRef<boolean>(false);
   const [agentOnboardingWorkById, setAgentOnboardingWorkById] = useState<Record<string, number>>({});
   const [agentOnboardingWorkLoading, setAgentOnboardingWorkLoading] = useState<boolean>(false);
   const [agentOnboardingWorkError, setAgentOnboardingWorkError] = useState<string | null>(null);
@@ -511,6 +512,52 @@ export function AgentProfilePage(): JSX.Element {
 
   function isLatestAgentListRequest(requestSeq: number): boolean {
     return agentListRequestSeqRef.current === requestSeq;
+  }
+
+  function normalizedAgentFilterQuery(): string | undefined {
+    const value = agentFilterQuery.trim();
+    if (!value) return undefined;
+    return value.slice(0, 128);
+  }
+
+  async function reloadAgentList(options?: {
+    resetOnboardingWork?: boolean;
+    ensureInitialSelection?: boolean;
+  }): Promise<void> {
+    const requestSeq = beginAgentListRequest();
+    setAgentsLoading(true);
+    setAgentsLoadMoreLoading(false);
+    setAgentsError(null);
+    if (options?.resetOnboardingWork) {
+      setAgentOnboardingWorkById({});
+    }
+
+    try {
+      const res = await listRegisteredAgentsPage({
+        limit: AGENT_LIST_PAGE_LIMIT,
+        q: normalizedAgentFilterQuery(),
+      });
+      if (!isLatestAgentListRequest(requestSeq)) return;
+      setAgents(res.agents);
+      setAgentsNextCursor(res.next_cursor ?? null);
+      setAgentsHasMore(res.has_more);
+
+      if (options?.ensureInitialSelection) {
+        const stored = localStorage.getItem(agentStorageKey) ?? "";
+        if (!stored && res.agents.length) {
+          setAgentId(res.agents[0].agent_id);
+        }
+      }
+    } catch (e) {
+      if (!isLatestAgentListRequest(requestSeq)) return;
+      setAgentsError(toErrorCode(e));
+      setAgentsNextCursor(null);
+      setAgentsHasMore(false);
+    } finally {
+      if (isLatestAgentListRequest(requestSeq)) {
+        setAgentsLoading(false);
+      }
+    }
   }
 
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
@@ -1088,43 +1135,21 @@ export function AgentProfilePage(): JSX.Element {
   const latestRepeatedMistakes7d = latestSnapshot?.repeated_mistakes_7d ?? 0;
 
   useEffect(() => {
-    let cancelled = false;
-    const requestSeq = beginAgentListRequest();
-    setAgentsLoading(true);
-    setAgentsLoadMoreLoading(false);
-    setAgentsError(null);
-
-    void (async () => {
-      try {
-        const res = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
-        if (cancelled) return;
-        if (!isLatestAgentListRequest(requestSeq)) return;
-        setAgents(res.agents);
-        setAgentsNextCursor(res.next_cursor ?? null);
-        setAgentsHasMore(res.has_more);
-
-        // If no agent selected yet, pick the most recent one (if any).
-        const stored = localStorage.getItem(agentStorageKey) ?? "";
-        if (!stored && res.agents.length) {
-          setAgentId(res.agents[0].agent_id);
-        }
-      } catch (e) {
-        if (cancelled) return;
-        if (!isLatestAgentListRequest(requestSeq)) return;
-        setAgentsError(toErrorCode(e));
-        setAgentsNextCursor(null);
-        setAgentsHasMore(false);
-      } finally {
-        if (!cancelled && isLatestAgentListRequest(requestSeq)) {
-          setAgentsLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    void reloadAgentList({ ensureInitialSelection: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!agentFilterMountedRef.current) {
+      agentFilterMountedRef.current = true;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void reloadAgentList({ resetOnboardingWork: true });
+    }, 250);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentFilterQuery]);
 
   useEffect(() => {
     localStorage.setItem(agentStorageKey, agentId);
@@ -1831,25 +1856,7 @@ export function AgentProfilePage(): JSX.Element {
             type="button"
             className="ghostButton"
             onClick={() => {
-              void (async () => {
-                const requestSeq = beginAgentListRequest();
-                setAgentsLoading(true);
-                setAgentsLoadMoreLoading(false);
-                setAgentsError(null);
-                try {
-                  setAgentOnboardingWorkById({});
-                  const res = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
-                  if (!isLatestAgentListRequest(requestSeq)) return;
-                  setAgents(res.agents);
-                  setAgentsNextCursor(res.next_cursor ?? null);
-                  setAgentsHasMore(res.has_more);
-                } catch (e) {
-                  if (!isLatestAgentListRequest(requestSeq)) return;
-                  setAgentsError(toErrorCode(e));
-                } finally {
-                  if (isLatestAgentListRequest(requestSeq)) setAgentsLoading(false);
-                }
-              })();
+              void reloadAgentList({ resetOnboardingWork: true });
             }}
             disabled={agentsLoading}
           >
@@ -1869,6 +1876,7 @@ export function AgentProfilePage(): JSX.Element {
                   const res = await listRegisteredAgentsPage({
                     limit: AGENT_LIST_PAGE_LIMIT,
                     cursor: requestCursor,
+                    q: normalizedAgentFilterQuery(),
                   });
                   if (!isLatestAgentListRequest(requestSeq)) return;
                   setAgents((prev) => {
@@ -2649,29 +2657,14 @@ export function AgentProfilePage(): JSX.Element {
                     if (!display_name) return;
                     setRegisterLoading(true);
                     setRegisterError(null);
-                    let listRequestSeq: number | null = null;
                     try {
                       const res = await registerAgent({ display_name });
                       setRegisterDisplayName("");
                       setAgentId(res.agent_id);
-
-                      listRequestSeq = beginAgentListRequest();
-                      setAgentsLoading(true);
-                      setAgentsLoadMoreLoading(false);
-                      setAgentsError(null);
-                      setAgentOnboardingWorkById({});
-                      const list = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
-                      if (!isLatestAgentListRequest(listRequestSeq)) return;
-                      setAgents(list.agents);
-                      setAgentsNextCursor(list.next_cursor ?? null);
-                      setAgentsHasMore(list.has_more);
+                      await reloadAgentList({ resetOnboardingWork: true });
                     } catch (e) {
-                      if (listRequestSeq != null && !isLatestAgentListRequest(listRequestSeq)) return;
                       setRegisterError(toErrorCode(e));
                     } finally {
-                      if (listRequestSeq == null || isLatestAgentListRequest(listRequestSeq)) {
-                        setAgentsLoading(false);
-                      }
                       setRegisterLoading(false);
                     }
                   })();
