@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { newStepId, newToolCallId, type RunEventV1, type ToolEventV1 } from "@agentapp/shared";
 
 import type { DbClient, DbPool } from "../db/pool.js";
+import { requestEgress } from "../egress/requestEgress.js";
 import { appendToStream } from "../eventStore/index.js";
 import { applyRunEvent } from "../projectors/runProjector.js";
 import { applyToolEvent } from "../projectors/toolProjector.js";
@@ -18,12 +19,26 @@ type QueuedRunRow = {
   workspace_id: string;
   room_id: string | null;
   thread_id: string | null;
+  input: Record<string, unknown> | null;
   correlation_id: string;
   last_event_id: string | null;
   status: string;
 };
 
 type StreamRef = { stream_type: "room" | "workspace"; stream_id: string };
+type RuntimeEgressConfig = {
+  action: string;
+  target_url: string;
+  method?: string;
+  context?: Record<string, unknown>;
+};
+type RuntimeToolResult = {
+  tool_call_id: string;
+  event_id: string;
+  blocked?: boolean;
+  message?: string;
+  error?: Record<string, unknown>;
+};
 
 type ProcessRunResult = "completed" | "failed" | "skipped";
 
@@ -57,6 +72,43 @@ function streamForRun(row: QueuedRunRow): StreamRef {
 
 function runActor() {
   return { actor_type: "service" as const, actor_id: "run_worker" };
+}
+
+function normalizeOptionalString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim();
+  return value.length > 0 ? value : undefined;
+}
+
+function normalizeAction(raw: string | undefined): string {
+  const action = normalizeOptionalString(raw) ?? "internal.read";
+  if (action === "external_write") return "external.write";
+  return action;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object") return null;
+  return value as Record<string, unknown>;
+}
+
+function parseRuntimeEgressConfig(input: Record<string, unknown> | null): RuntimeEgressConfig | null {
+  const runtime = asRecord(input?.runtime);
+  const egress = asRecord(runtime?.egress);
+  if (!egress) return null;
+
+  const target_url = normalizeOptionalString(egress.target_url);
+  if (!target_url) return null;
+
+  const action = normalizeAction(normalizeOptionalString(egress.action));
+  const method = normalizeOptionalString(egress.method);
+  const context = asRecord(egress.context) ?? undefined;
+
+  return {
+    action,
+    target_url,
+    method,
+    context,
+  };
 }
 
 async function listQueuedRunIds(
@@ -116,6 +168,7 @@ async function loadRun(pool: DbPool, run_id: string): Promise<QueuedRunRow | nul
        workspace_id,
        room_id,
        thread_id,
+       input,
        correlation_id,
        last_event_id,
        status
@@ -192,12 +245,12 @@ async function appendStepCreated(
   return { step_id, event_id: event.event_id };
 }
 
-async function appendRuntimeTool(
+async function appendRuntimeNoopTool(
   pool: DbPool,
   run: QueuedRunRow,
   step_id: string,
   causation_id: string,
-): Promise<{ tool_call_id: string; event_id: string }> {
+): Promise<RuntimeToolResult> {
   const tool_call_id = newToolCallId();
   const stream = streamForRun(run);
 
@@ -260,6 +313,155 @@ async function appendRuntimeTool(
   return { tool_call_id, event_id: succeeded.event_id };
 }
 
+async function appendRuntimeEgressTool(
+  pool: DbPool,
+  run: QueuedRunRow,
+  step_id: string,
+  causation_id: string,
+  egress: RuntimeEgressConfig,
+): Promise<RuntimeToolResult> {
+  const tool_call_id = newToolCallId();
+  const stream = streamForRun(run);
+
+  const invoked = await appendToStream(pool, {
+    event_id: randomUUID(),
+    event_type: "tool.invoked",
+    event_version: 1,
+    occurred_at: new Date().toISOString(),
+    workspace_id: run.workspace_id,
+    room_id: run.room_id ?? undefined,
+    thread_id: run.thread_id ?? undefined,
+    run_id: run.run_id,
+    step_id,
+    actor: runActor(),
+    zone: "sandbox",
+    stream,
+    correlation_id: run.correlation_id,
+    causation_id,
+    data: {
+      tool_call_id,
+      tool_name: "egress.request",
+      title: "Runtime egress request",
+      input: {
+        source: "run_worker",
+        action: egress.action,
+        target_url: egress.target_url,
+        method: egress.method,
+        context: egress.context,
+      },
+    },
+    policy_context: {},
+    model_context: {},
+    display: {},
+  });
+  await applyToolEvent(pool, invoked as ToolEventV1);
+
+  const egressResult = await requestEgress(pool, {
+    workspace_id: run.workspace_id,
+    action: egress.action,
+    target_url: egress.target_url,
+    method: egress.method,
+    room_id: run.room_id ?? undefined,
+    run_id: run.run_id,
+    step_id,
+    actor_type: "service",
+    actor_id: "run_worker",
+    zone: "sandbox",
+    context: egress.context,
+    correlation_id: run.correlation_id,
+  });
+
+  if (egressResult.blocked) {
+    const failed = await appendToStream(pool, {
+      event_id: randomUUID(),
+      event_type: "tool.failed",
+      event_version: 1,
+      occurred_at: new Date().toISOString(),
+      workspace_id: run.workspace_id,
+      room_id: run.room_id ?? undefined,
+      thread_id: run.thread_id ?? undefined,
+      run_id: run.run_id,
+      step_id,
+      actor: runActor(),
+      zone: "sandbox",
+      stream,
+      correlation_id: run.correlation_id,
+      causation_id: invoked.event_id,
+      data: {
+        tool_call_id,
+        message: egressResult.reason ?? egressResult.reason_code,
+        error: {
+          source: "run_worker",
+          stage: "egress",
+          egress_request_id: egressResult.egress_request_id,
+          decision: egressResult.decision,
+          reason_code: egressResult.reason_code,
+          reason: egressResult.reason,
+          blocked: egressResult.blocked,
+          enforcement_mode: egressResult.enforcement_mode,
+          approval_id: egressResult.approval_id,
+        },
+      },
+      policy_context: {},
+      model_context: {},
+      display: {},
+    });
+    await applyToolEvent(pool, failed as ToolEventV1);
+    return {
+      tool_call_id,
+      event_id: failed.event_id,
+      blocked: true,
+      message: egressResult.reason ?? egressResult.reason_code,
+      error: {
+        source: "run_worker",
+        stage: "egress",
+        egress_request_id: egressResult.egress_request_id,
+        decision: egressResult.decision,
+        reason_code: egressResult.reason_code,
+        reason: egressResult.reason,
+        blocked: egressResult.blocked,
+        enforcement_mode: egressResult.enforcement_mode,
+        approval_id: egressResult.approval_id,
+      },
+    };
+  }
+
+  const succeeded = await appendToStream(pool, {
+    event_id: randomUUID(),
+    event_type: "tool.succeeded",
+    event_version: 1,
+    occurred_at: new Date().toISOString(),
+    workspace_id: run.workspace_id,
+    room_id: run.room_id ?? undefined,
+    thread_id: run.thread_id ?? undefined,
+    run_id: run.run_id,
+    step_id,
+    actor: runActor(),
+    zone: "sandbox",
+    stream,
+    correlation_id: run.correlation_id,
+    causation_id: invoked.event_id,
+    data: {
+      tool_call_id,
+      output: {
+        ok: true,
+        source: "run_worker",
+        egress_request_id: egressResult.egress_request_id,
+        decision: egressResult.decision,
+        reason_code: egressResult.reason_code,
+        blocked: egressResult.blocked,
+        enforcement_mode: egressResult.enforcement_mode,
+        approval_id: egressResult.approval_id,
+      },
+    },
+    policy_context: {},
+    model_context: {},
+    display: {},
+  });
+  await applyToolEvent(pool, succeeded as ToolEventV1);
+  return { tool_call_id, event_id: succeeded.event_id, blocked: false };
+}
+
 async function appendRunCompleted(
   pool: DbPool,
   run: QueuedRunRow,
@@ -300,7 +502,7 @@ async function appendRunCompleted(
 async function appendRunFailed(
   pool: DbPool,
   run: QueuedRunRow,
-  input: { causation_id?: string; message: string },
+  input: { causation_id?: string; message: string; error?: Record<string, unknown> },
 ): Promise<void> {
   const latest = await loadRun(pool, run.run_id);
   if (!latest) return;
@@ -324,7 +526,7 @@ async function appendRunFailed(
     data: {
       run_id: latest.run_id,
       message: input.message,
-      error: {
+      error: input.error ?? {
         source: "run_worker",
       },
     },
@@ -341,6 +543,8 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
   let lastEventId: string | undefined = run.last_event_id ?? undefined;
   let started = false;
   try {
+    const egressConfig = parseRuntimeEgressConfig(run.input);
+
     const startedEvent = await appendRunStarted(pool, run);
     started = true;
     lastEventId = startedEvent.event_id;
@@ -348,8 +552,19 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
     const step = await appendStepCreated(pool, run, lastEventId);
     lastEventId = step.event_id;
 
-    const tool = await appendRuntimeTool(pool, run, step.step_id, lastEventId);
+    const tool = egressConfig
+      ? await appendRuntimeEgressTool(pool, run, step.step_id, lastEventId, egressConfig)
+      : await appendRuntimeNoopTool(pool, run, step.step_id, lastEventId);
     lastEventId = tool.event_id;
+
+    if (tool.blocked) {
+      await appendRunFailed(pool, run, {
+        causation_id: lastEventId,
+        message: tool.message ?? "run_worker_egress_blocked",
+        error: tool.error,
+      });
+      return "failed";
+    }
 
     await appendRunCompleted(pool, run, {
       step_id: step.step_id,
