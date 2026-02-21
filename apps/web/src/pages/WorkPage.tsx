@@ -576,14 +576,43 @@ export function WorkPage(): JSX.Element {
     }
   }
 
-  function selectDownstreamStepForRun(targetRunId: string, stepId: string): void {
+  function selectDownstreamStepForRun(
+    targetRunId: string,
+    stepId: string,
+    options?: { anchorToolCallsStepId?: string; anchorArtifactsStepId?: string },
+  ): void {
     const run = targetRunId.trim();
     const step = stepId.trim();
     if (!run || !step) return;
-    saveToolCallsStepId(run, step);
-    saveArtifactsStepId(run, step);
-    if (stepsRunIdRef.current === run) {
+    const isCurrentRun = stepsRunIdRef.current === run;
+    const anchorToolCallsStepId = options?.anchorToolCallsStepId?.trim() ?? "";
+    const anchorArtifactsStepId = options?.anchorArtifactsStepId?.trim() ?? "";
+    const currentToolCallsStepId = toolCallsStepIdRef.current.trim();
+    const currentArtifactsStepId = artifactsStepIdRef.current.trim();
+
+    const toolCallsAnchorStillActive =
+      !isCurrentRun ||
+      !anchorToolCallsStepId ||
+      currentToolCallsStepId === anchorToolCallsStepId ||
+      currentToolCallsStepId === "" ||
+      currentToolCallsStepId === step;
+    const artifactsAnchorStillActive =
+      !isCurrentRun ||
+      !anchorArtifactsStepId ||
+      currentArtifactsStepId === anchorArtifactsStepId ||
+      currentArtifactsStepId === "" ||
+      currentArtifactsStepId === step;
+
+    if (toolCallsAnchorStillActive) {
+      saveToolCallsStepId(run, step);
+    }
+    if (artifactsAnchorStillActive) {
+      saveArtifactsStepId(run, step);
+    }
+    if (isCurrentRun && toolCallsAnchorStillActive) {
       setToolCallsStepId(step);
+    }
+    if (isCurrentRun && artifactsAnchorStillActive) {
       setArtifactsStepId(step);
     }
   }
@@ -1896,6 +1925,8 @@ export function WorkPage(): JSX.Element {
                     const run_id = stepsRunId.trim();
                     const kind = createStepKind.trim();
                     if (!run_id || !kind) return;
+                    const toolCallsSelectionAnchor = toolCallsStepIdRef.current.trim();
+                    const artifactsSelectionAnchor = artifactsStepIdRef.current.trim();
                     const requestId = createStepRequestRef.current + 1;
                     createStepRequestRef.current = requestId;
 
@@ -1930,7 +1961,10 @@ export function WorkPage(): JSX.Element {
                       }
                       await reloadSteps(run_id);
                       // Ensure the next actions (tool calls / artifacts) default to the newly created step.
-                      selectDownstreamStepForRun(run_id, res.step_id);
+                      selectDownstreamStepForRun(run_id, res.step_id, {
+                        anchorToolCallsStepId: toolCallsSelectionAnchor,
+                        anchorArtifactsStepId: artifactsSelectionAnchor,
+                      });
                       if (createStepRequestRef.current === requestId) {
                         setCreateStepState("idle");
                       }
