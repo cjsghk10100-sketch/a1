@@ -340,6 +340,16 @@ function readStoredBool(key: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function normalizeAgentFilterQuery(value: string): string | undefined {
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  return normalized.slice(0, 128);
+}
+
+function agentFilterQueryKey(value: string | undefined): string {
+  return (value ?? "").toLowerCase();
+}
+
 const agentChangeEventTypes = [
   "agent.capability.granted",
   "agent.capability.revoked",
@@ -456,6 +466,7 @@ export function AgentProfilePage(): JSX.Element {
   const [agentsError, setAgentsError] = useState<string | null>(null);
   const [agentsNextCursor, setAgentsNextCursor] = useState<string | null>(null);
   const [agentsHasMore, setAgentsHasMore] = useState<boolean>(false);
+  const [agentsCursorQueryKey, setAgentsCursorQueryKey] = useState<string>("");
   const agentListRequestSeqRef = useRef<number>(0);
   const agentFilterMountedRef = useRef<boolean>(false);
   const [agentOnboardingWorkById, setAgentOnboardingWorkById] = useState<Record<string, number>>({});
@@ -515,9 +526,7 @@ export function AgentProfilePage(): JSX.Element {
   }
 
   function normalizedAgentFilterQuery(): string | undefined {
-    const value = agentFilterQuery.trim();
-    if (!value) return undefined;
-    return value.slice(0, 128);
+    return normalizeAgentFilterQuery(agentFilterQuery);
   }
 
   async function reloadAgentList(options?: {
@@ -525,6 +534,8 @@ export function AgentProfilePage(): JSX.Element {
     ensureInitialSelection?: boolean;
   }): Promise<void> {
     const requestSeq = beginAgentListRequest();
+    const query = normalizedAgentFilterQuery();
+    const queryKey = agentFilterQueryKey(query);
     setAgentsLoading(true);
     setAgentsLoadMoreLoading(false);
     setAgentsError(null);
@@ -535,12 +546,13 @@ export function AgentProfilePage(): JSX.Element {
     try {
       const res = await listRegisteredAgentsPage({
         limit: AGENT_LIST_PAGE_LIMIT,
-        q: normalizedAgentFilterQuery(),
+        q: query,
       });
       if (!isLatestAgentListRequest(requestSeq)) return;
       setAgents(res.agents);
       setAgentsNextCursor(res.next_cursor ?? null);
       setAgentsHasMore(res.has_more);
+      setAgentsCursorQueryKey(queryKey);
 
       if (options?.ensureInitialSelection) {
         const stored = localStorage.getItem(agentStorageKey) ?? "";
@@ -553,6 +565,7 @@ export function AgentProfilePage(): JSX.Element {
       setAgentsError(toErrorCode(e));
       setAgentsNextCursor(null);
       setAgentsHasMore(false);
+      setAgentsCursorQueryKey("");
     } finally {
       if (isLatestAgentListRequest(requestSeq)) {
         setAgentsLoading(false);
@@ -1144,6 +1157,9 @@ export function AgentProfilePage(): JSX.Element {
       agentFilterMountedRef.current = true;
       return;
     }
+    setAgentsNextCursor(null);
+    setAgentsHasMore(false);
+    setAgentsCursorQueryKey("");
     const timer = window.setTimeout(() => {
       void reloadAgentList({ resetOnboardingWork: true });
     }, 250);
@@ -1865,6 +1881,9 @@ export function AgentProfilePage(): JSX.Element {
             onClick={() => {
               void (async () => {
                 if (!agentsHasMore || !agentsNextCursor) return;
+                const query = normalizedAgentFilterQuery();
+                const queryKey = agentFilterQueryKey(query);
+                if (queryKey !== agentsCursorQueryKey) return;
                 const requestSeq = beginAgentListRequest();
                 const requestCursor = agentsNextCursor;
                 setAgentsLoadMoreLoading(true);
@@ -1873,7 +1892,7 @@ export function AgentProfilePage(): JSX.Element {
                   const res = await listRegisteredAgentsPage({
                     limit: AGENT_LIST_PAGE_LIMIT,
                     cursor: requestCursor,
-                    q: normalizedAgentFilterQuery(),
+                    q: query,
                   });
                   if (!isLatestAgentListRequest(requestSeq)) return;
                   setAgents((prev) => {
@@ -1888,6 +1907,7 @@ export function AgentProfilePage(): JSX.Element {
                   });
                   setAgentsNextCursor(res.next_cursor ?? null);
                   setAgentsHasMore(res.has_more);
+                  setAgentsCursorQueryKey(queryKey);
                 } catch (e) {
                   if (!isLatestAgentListRequest(requestSeq)) return;
                   setAgentsError(toErrorCode(e));
@@ -1896,7 +1916,13 @@ export function AgentProfilePage(): JSX.Element {
                 }
               })();
             }}
-            disabled={agentsLoading || agentsLoadMoreLoading || !agentsHasMore || !agentsNextCursor}
+            disabled={
+              agentsLoading ||
+              agentsLoadMoreLoading ||
+              !agentsHasMore ||
+              !agentsNextCursor ||
+              agentFilterQueryKey(normalizedAgentFilterQuery()) !== agentsCursorQueryKey
+            }
           >
             {agentsLoadMoreLoading ? t("common.loading") : t("common.load_more")}
           </button>
