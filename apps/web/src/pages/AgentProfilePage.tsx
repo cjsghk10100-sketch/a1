@@ -2471,6 +2471,19 @@ export function AgentProfilePage(): JSX.Element {
                         type="button"
                         className="ghostButton"
                         disabled={
+                          skillImportVerifyLoading ||
+                          skillImportAssessLoading ||
+                          !skillImportResult ||
+                          skillImportResult.summary.total === 0
+                        }
+                        onClick={() => void certifyImportedSkillsFromImport(skillImportResult)}
+                      >
+                        {t("agent_profile.onboarding.button_certify_imported")}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghostButton"
+                        disabled={
                           skillImportAssessLoading || skillImportVerifyLoading || skillImportResult.summary.verified === 0
                         }
                         onClick={() => void assessImportedSkillsFromImport()}
