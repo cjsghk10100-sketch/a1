@@ -457,6 +457,7 @@ export function AgentProfilePage(): JSX.Element {
   const [skillImportAssessResult, setSkillImportAssessResult] =
     useState<AgentSkillAssessImportedResponseV1 | null>(null);
   const [autoVerifyPendingOnImport, setAutoVerifyPendingOnImport] = useState<boolean>(true);
+  const [autoAssessVerifiedOnImport, setAutoAssessVerifiedOnImport] = useState<boolean>(true);
 
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
 
@@ -1397,6 +1398,9 @@ export function AgentProfilePage(): JSX.Element {
       }
 
       await reloadSkillPackages();
+      if (autoAssessVerifiedOnImport) {
+        await assessImportedSkillsFromImport(baseResult, { clearPrevious: true });
+      }
     } finally {
       setSkillImportVerifyLoading(false);
     }
@@ -1408,13 +1412,18 @@ export function AgentProfilePage(): JSX.Element {
     await verifyPendingSkillPackageIds(pendingIds);
   }
 
-  async function assessImportedSkillsFromImport(): Promise<void> {
+  async function assessImportedSkillsFromImport(
+    baseResult?: AgentSkillImportResponseV1,
+    opts?: { clearPrevious?: boolean },
+  ): Promise<void> {
     const agent_id = agentId.trim();
-    if (!agent_id || !skillImportResult) return;
+    const importResult = baseResult ?? skillImportResult;
+    if (!agent_id || !importResult) return;
+    const clearPrevious = opts?.clearPrevious ?? true;
 
     setSkillImportAssessLoading(true);
     setSkillImportAssessError(null);
-    setSkillImportAssessResult(null);
+    if (clearPrevious) setSkillImportAssessResult(null);
     try {
       const actor_id = operatorActorId.trim() || "anon";
       const actor_principal_id = await ensureOperatorPrincipalId();
@@ -2213,7 +2222,13 @@ export function AgentProfilePage(): JSX.Element {
                           const pendingIds = res.items
                             .filter((it) => it.status === "pending")
                             .map((it) => it.skill_package_id);
-                          await verifyPendingSkillPackageIds(pendingIds, res);
+                          if (pendingIds.length > 0) {
+                            await verifyPendingSkillPackageIds(pendingIds, res);
+                          } else if (autoAssessVerifiedOnImport && res.summary.verified > 0) {
+                            await assessImportedSkillsFromImport(res, { clearPrevious: true });
+                          }
+                        } else if (autoAssessVerifiedOnImport && res.summary.verified > 0) {
+                          await assessImportedSkillsFromImport(res, { clearPrevious: true });
                         }
                       } catch (e) {
                         setSkillImportError(toErrorCode(e));
@@ -2223,7 +2238,7 @@ export function AgentProfilePage(): JSX.Element {
                     })();
                   }}
                 >
-                {t("agent_profile.onboarding.button_import")}
+                  {t("agent_profile.onboarding.button_import")}
                 </button>
                 <button
                   type="button"
@@ -2250,9 +2265,19 @@ export function AgentProfilePage(): JSX.Element {
                   type="checkbox"
                   checked={autoVerifyPendingOnImport}
                   onChange={(e) => setAutoVerifyPendingOnImport(e.target.checked)}
-                  disabled={skillImportLoading || skillImportVerifyLoading}
+                  disabled={skillImportLoading || skillImportVerifyLoading || skillImportAssessLoading}
                 />
                 <span>{t("agent_profile.onboarding.auto_verify_pending")}</span>
+              </label>
+
+              <label className="checkRow" style={{ marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={autoAssessVerifiedOnImport}
+                  onChange={(e) => setAutoAssessVerifiedOnImport(e.target.checked)}
+                  disabled={skillImportLoading || skillImportVerifyLoading || skillImportAssessLoading}
+                />
+                <span>{t("agent_profile.onboarding.auto_assess_verified")}</span>
               </label>
 
               {skillImportError ? (
