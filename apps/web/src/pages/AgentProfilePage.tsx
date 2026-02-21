@@ -29,6 +29,7 @@ import type {
 import {
   assessImportedAgentSkills,
   approveAutonomyUpgrade,
+  certifyImportedAgentSkills,
   getAgent,
   getAgentApprovalRecommendation,
   getAgentTrust,
@@ -1435,6 +1436,18 @@ export function AgentProfilePage(): JSX.Element {
     await verifyPendingSkillPackageIds(pendingIds);
   }
 
+  async function refreshAgentGrowthViews(agent_id: string): Promise<void> {
+    const [trustRes, skillsRes, assessmentsRes] = await Promise.all([
+      getAgentTrust(agent_id),
+      listAgentSkills({ agent_id, limit: 50 }),
+      listAgentSkillAssessments({ agent_id, limit: 100 }),
+    ]);
+    setTrust(trustRes);
+    setSkills(skillsRes);
+    setAssessments(assessmentsRes);
+    await reloadApprovalRecommendation(agent_id);
+  }
+
   async function assessImportedSkillsFromImport(
     baseResult?: AgentSkillImportResponseV1,
     opts?: { clearPrevious?: boolean },
@@ -1458,19 +1471,76 @@ export function AgentProfilePage(): JSX.Element {
         limit: 200,
       });
       setSkillImportAssessResult(assessed);
-
-      const [trustRes, skillsRes, assessmentsRes] = await Promise.all([
-        getAgentTrust(agent_id),
-        listAgentSkills({ agent_id, limit: 50 }),
-        listAgentSkillAssessments({ agent_id, limit: 100 }),
-      ]);
-      setTrust(trustRes);
-      setSkills(skillsRes);
-      setAssessments(assessmentsRes);
-      await reloadApprovalRecommendation(agent_id);
+      await refreshAgentGrowthViews(agent_id);
     } catch (e) {
       setSkillImportAssessError(toErrorCode(e));
     } finally {
+      setSkillImportAssessLoading(false);
+    }
+  }
+
+  async function certifyImportedSkillsFromImport(baseResult?: AgentSkillImportResponseV1): Promise<void> {
+    const agent_id = agentId.trim();
+    const importResult = baseResult ?? skillImportResult;
+    if (!agent_id || !importResult) return;
+
+    setSkillImportError(null);
+    setSkillImportVerifyLoading(true);
+    setSkillImportVerifyErrors([]);
+    setSkillImportVerifyProgress(null);
+    setSkillImportAssessLoading(true);
+    setSkillImportAssessError(null);
+    setSkillImportAssessResult(null);
+
+    try {
+      const actor_id = operatorActorId.trim() || "anon";
+      const principal_id = await ensureOperatorPrincipalId();
+      const certified = await certifyImportedAgentSkills(agent_id, {
+        actor_type: "user",
+        actor_id,
+        principal_id,
+        actor_principal_id: principal_id,
+        only_unassessed: true,
+        limit: 200,
+      });
+
+      const statusById = new Map(certified.review.items.map((item) => [item.skill_package_id, item.status] as const));
+      setSkillImportResult((prev) => {
+        const current = prev ?? importResult;
+        const items = current.items.map((it) => {
+          const nextStatus = statusById.get(it.skill_package_id);
+          return nextStatus ? { ...it, status: nextStatus } : it;
+        });
+        const summary = {
+          total: items.length,
+          verified: items.filter((it) => it.status === "verified").length,
+          pending: items.filter((it) => it.status === "pending").length,
+          quarantined: items.filter((it) => it.status === "quarantined").length,
+        };
+        return { summary, items };
+      });
+
+      setSkillImportVerifyProgress({
+        done: certified.review.summary.total,
+        total: certified.review.summary.total,
+      });
+      setSkillImportVerifyErrors(
+        certified.review.items
+          .filter((item) => item.status === "quarantined")
+          .map((item) => ({
+            skill_package_id: item.skill_package_id,
+            error_code: item.reason ?? "quarantined",
+          })),
+      );
+      setSkillImportAssessResult(certified.assess);
+
+      await reloadSkillPackages();
+      await refreshAgentGrowthViews(agent_id);
+    } catch (e) {
+      setSkillImportError(toErrorCode(e));
+      setSkillImportAssessError(toErrorCode(e));
+    } finally {
+      setSkillImportVerifyLoading(false);
       setSkillImportAssessLoading(false);
     }
   }
@@ -2241,7 +2311,9 @@ export function AgentProfilePage(): JSX.Element {
                         setSkillImportResult(res);
                         await reloadSkillPackages();
 
-                        if (autoVerifyPendingOnImport) {
+                        if (autoVerifyPendingOnImport && autoAssessVerifiedOnImport) {
+                          await certifyImportedSkillsFromImport(res);
+                        } else if (autoVerifyPendingOnImport) {
                           const pendingIds = res.items
                             .filter((it) => it.status === "pending")
                             .map((it) => it.skill_package_id);
