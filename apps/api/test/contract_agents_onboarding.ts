@@ -426,6 +426,47 @@ async function main(): Promise<void> {
       items: Array<{ agent_id: string }>;
     }>(baseUrl, "/v1/agents/skills/onboarding-statuses?limit=20&only_with_work=1", workspaceHeader);
     assert.ok(onboardingListOnlyWork.items.some((item) => item.agent_id === registered2.agent_id));
+    const onboardingListByIds = await getJson<{
+      items: Array<{
+        agent_id: string;
+        summary: {
+          total_linked: number;
+          verified: number;
+          verified_skills: number;
+          pending: number;
+          quarantined: number;
+          verified_assessed: number;
+          verified_unassessed: number;
+        };
+      }>;
+    }>(
+      baseUrl,
+      `/v1/agents/skills/onboarding-statuses?agent_ids=${encodeURIComponent(
+        `${registered.agent_id},${registered2.agent_id}`,
+      )}`,
+      workspaceHeader,
+    );
+    assert.equal(onboardingListByIds.items.length, 2);
+    const onboardingListByIdsRegistered1 = onboardingListByIds.items.find((item) => item.agent_id === registered.agent_id);
+    assert.ok(onboardingListByIdsRegistered1);
+    assert.equal(onboardingListByIdsRegistered1?.summary.total_linked, 3);
+    assert.equal(onboardingListByIdsRegistered1?.summary.pending, 0);
+    const onboardingListByIdsRegistered2 = onboardingListByIds.items.find((item) => item.agent_id === registered2.agent_id);
+    assert.ok(onboardingListByIdsRegistered2);
+    assert.equal(onboardingListByIdsRegistered2?.summary.total_linked, 2);
+    assert.equal(onboardingListByIdsRegistered2?.summary.pending, 1);
+
+    const onboardingListByIdsOnlyWork = await getJson<{
+      items: Array<{ agent_id: string }>;
+    }>(
+      baseUrl,
+      `/v1/agents/skills/onboarding-statuses?agent_ids=${encodeURIComponent(
+        `${registered.agent_id},${registered2.agent_id}`,
+      )}&only_with_work=1`,
+      workspaceHeader,
+    );
+    assert.equal(onboardingListByIdsOnlyWork.items.length, 1);
+    assert.equal(onboardingListByIdsOnlyWork.items[0]?.agent_id, registered2.agent_id);
 
     const certify = await postJson<{
       review: {

@@ -128,6 +128,7 @@ export async function getAgentSkillOnboardingStatus(
 export async function listAgentSkillOnboardingStatuses(params?: {
   limit?: number;
   only_with_work?: boolean;
+  agent_ids?: string[];
 }): Promise<AgentSkillOnboardingStatusItemV1[]> {
   const query = new URLSearchParams();
   const limit = params?.limit;
@@ -135,6 +136,18 @@ export async function listAgentSkillOnboardingStatuses(params?: {
     query.set("limit", String(Math.max(1, Math.min(500, Math.floor(limit)))));
   }
   if (params?.only_with_work) query.set("only_with_work", "1");
+  if (Array.isArray(params?.agent_ids)) {
+    const unique = new Set<string>();
+    for (const agent_id of params.agent_ids) {
+      if (typeof agent_id !== "string") continue;
+      const normalized = agent_id.trim();
+      if (!normalized) continue;
+      if (unique.has(normalized)) continue;
+      unique.add(normalized);
+      query.append("agent_ids", normalized);
+      if (unique.size >= 500) break;
+    }
+  }
   const path = query.toString().length
     ? `/v1/agents/skills/onboarding-statuses?${query.toString()}`
     : "/v1/agents/skills/onboarding-statuses";

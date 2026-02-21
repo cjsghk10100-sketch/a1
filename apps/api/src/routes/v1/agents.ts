@@ -60,6 +60,28 @@ function parseBooleanFlag(raw: unknown): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function parseAgentIds(raw: unknown): string[] {
+  const values: string[] = [];
+  if (typeof raw === "string") values.push(raw);
+  else if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === "string") values.push(item);
+    }
+  }
+
+  const unique = new Set<string>();
+  for (const value of values) {
+    for (const part of value.split(",")) {
+      const normalized = part.trim();
+      if (!normalized) continue;
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(normalized)) continue;
+      unique.add(normalized);
+      if (unique.size >= 500) return [...unique];
+    }
+  }
+  return [...unique];
+}
+
 function normalizeHash(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const input = raw.trim().toLowerCase();
@@ -201,11 +223,26 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
   });
 
   app.get<{
-    Querystring: { limit?: string; only_with_work?: string };
+    Querystring: { limit?: string; only_with_work?: string; agent_ids?: string | string[] };
   }>("/v1/agents/skills/onboarding-statuses", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
     const limit = parseListLimit(req.query.limit);
     const only_with_work = parseBooleanFlag(req.query.only_with_work);
+    const agent_ids = parseAgentIds(req.query.agent_ids);
+
+    const scopedAgentsSql =
+      agent_ids.length > 0
+        ? `SELECT agent_id, created_at
+           FROM sec_agents
+           WHERE agent_id = ANY($2::text[])
+           ORDER BY created_at DESC
+           LIMIT $3`
+        : `SELECT agent_id, created_at
+           FROM sec_agents
+           ORDER BY created_at DESC
+           LIMIT $2`;
+    const queryParams: unknown[] =
+      agent_ids.length > 0 ? [workspace_id, agent_ids, limit] : [workspace_id, limit];
 
     const rows = await pool.query<{
       agent_id: string;
@@ -217,10 +254,7 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
       verified_assessed: number;
     }>(
       `WITH scoped_agents AS (
-         SELECT agent_id, created_at
-         FROM sec_agents
-         ORDER BY created_at DESC
-         LIMIT $2
+         ${scopedAgentsSql}
        ),
        package_counts AS (
          SELECT
@@ -279,7 +313,7 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
        LEFT JOIN assessed_counts ac
          ON ac.agent_id = sa.agent_id
        ORDER BY sa.created_at DESC`,
-      [workspace_id, limit],
+      queryParams,
     );
 
     const items = rows.rows

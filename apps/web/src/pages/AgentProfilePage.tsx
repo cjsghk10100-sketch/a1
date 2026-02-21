@@ -1278,11 +1278,19 @@ export function AgentProfilePage(): JSX.Element {
 
     void (async () => {
       try {
-        const rows = await listAgentSkillOnboardingStatuses({ limit: Math.max(agents.length, 1) });
+        const agentIds = [...new Set(agents.map((agent) => agent.agent_id.trim()).filter((id) => id.length > 0))];
+        const chunkSize = 120;
         if (cancelled) return;
         const next: Record<string, number> = {};
-        for (const row of rows) {
-          next[row.agent_id] = onboardingWorkCount(row.summary);
+
+        for (let idx = 0; idx < agentIds.length; idx += chunkSize) {
+          const chunk = agentIds.slice(idx, idx + chunkSize);
+          if (!chunk.length) continue;
+          const rows = await listAgentSkillOnboardingStatuses({ agent_ids: chunk });
+          if (cancelled) return;
+          for (const row of rows) {
+            next[row.agent_id] = onboardingWorkCount(row.summary);
+          }
         }
         setAgentOnboardingWorkById(next);
       } catch (e) {
