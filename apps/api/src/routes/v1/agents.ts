@@ -276,6 +276,7 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
       [agent_id, workspace_id],
     );
     const verifiedSkillIds = verifiedSkillIdsRes.rows.map((row) => row.skill_id);
+    const verified_skills = verifiedSkillIds.length;
 
     let verified_assessed = 0;
     if (verifiedSkillIds.length > 0) {
@@ -295,10 +296,11 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
       summary: {
         total_linked,
         verified,
+        verified_skills,
         pending,
         quarantined,
         verified_assessed,
-        verified_unassessed: Math.max(verified - verified_assessed, 0),
+        verified_unassessed: Math.max(verified_skills - verified_assessed, 0),
       },
     };
     return reply.code(200).send(response);

@@ -253,6 +253,7 @@ async function main(): Promise<void> {
       summary: {
         total_linked: number;
         verified: number;
+        verified_skills: number;
         pending: number;
         quarantined: number;
         verified_assessed: number;
@@ -265,6 +266,7 @@ async function main(): Promise<void> {
     );
     assert.equal(onboardingStatus.summary.total_linked, 3);
     assert.equal(onboardingStatus.summary.verified, 1);
+    assert.equal(onboardingStatus.summary.verified_skills, 1);
     assert.equal(onboardingStatus.summary.pending, 0);
     assert.equal(onboardingStatus.summary.quarantined, 2);
     assert.equal(onboardingStatus.summary.verified_assessed, 1);
@@ -380,6 +382,7 @@ async function main(): Promise<void> {
       summary: {
         total_linked: number;
         verified: number;
+        verified_skills: number;
         pending: number;
         quarantined: number;
         verified_assessed: number;
@@ -392,6 +395,7 @@ async function main(): Promise<void> {
     );
     assert.equal(onboardingStatus2Before.summary.total_linked, 2);
     assert.equal(onboardingStatus2Before.summary.verified, 1);
+    assert.equal(onboardingStatus2Before.summary.verified_skills, 1);
     assert.equal(onboardingStatus2Before.summary.pending, 1);
     assert.equal(onboardingStatus2Before.summary.quarantined, 0);
     assert.equal(onboardingStatus2Before.summary.verified_assessed, 0);
@@ -420,6 +424,7 @@ async function main(): Promise<void> {
       summary: {
         total_linked: number;
         verified: number;
+        verified_skills: number;
         pending: number;
         quarantined: number;
         verified_assessed: number;
@@ -432,6 +437,7 @@ async function main(): Promise<void> {
     );
     assert.equal(onboardingStatus2After.summary.total_linked, 2);
     assert.equal(onboardingStatus2After.summary.verified, 1);
+    assert.equal(onboardingStatus2After.summary.verified_skills, 1);
     assert.equal(onboardingStatus2After.summary.pending, 0);
     assert.equal(onboardingStatus2After.summary.quarantined, 1);
     assert.equal(onboardingStatus2After.summary.verified_assessed, 1);
@@ -538,6 +544,92 @@ async function main(): Promise<void> {
     assert.equal(importCertifyAgain.certify.assess.summary.total_candidates, 1);
     assert.equal(importCertifyAgain.certify.assess.summary.assessed, 0);
     assert.equal(importCertifyAgain.certify.assess.summary.skipped, 1);
+
+    const registered4 = await postJson<{ agent_id: string; principal_id: string }>(
+      baseUrl,
+      "/v1/agents",
+      { display_name: "Imported Agent 4" },
+      workspaceHeader,
+    );
+    assert.ok(registered4.agent_id.startsWith("agt_"));
+
+    const duplicateSkillId = `skill.dup.verified.${runSuffix}`;
+    const inventory4 = {
+      packages: [
+        {
+          skill_id: duplicateSkillId,
+          version: "1.0.0",
+          hash_sha256: "sha256:1010101010101010101010101010101010101010101010101010101010101010",
+          signature: "sig_dup_1",
+          manifest: {
+            required_tools: ["http_client"],
+            data_access: { read: ["web"] },
+            egress_domains: ["example.dup"],
+            sandbox_required: true,
+          },
+        },
+        {
+          skill_id: duplicateSkillId,
+          version: "1.1.0",
+          hash_sha256: "sha256:2020202020202020202020202020202020202020202020202020202020202020",
+          signature: "sig_dup_2",
+          manifest: {
+            required_tools: ["http_client"],
+            data_access: { read: ["web"] },
+            egress_domains: ["example.dup"],
+            sandbox_required: true,
+          },
+        },
+      ],
+    };
+    const imported4 = await postJson<{
+      summary: { total: number; verified: number; pending: number; quarantined: number };
+      items: Array<{ skill_id: string; status: string; skill_package_id: string }>;
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered4.agent_id)}/skills/import`,
+      inventory4,
+      workspaceHeader,
+    );
+    assert.equal(imported4.summary.total, 2);
+    assert.equal(imported4.summary.verified, 2);
+    assert.equal(imported4.summary.pending, 0);
+    assert.equal(imported4.summary.quarantined, 0);
+
+    const assessedImported4 = await postJson<{
+      summary: { total_candidates: number; assessed: number; skipped: number };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered4.agent_id)}/skills/assess-imported`,
+      {},
+      workspaceHeader,
+    );
+    assert.equal(assessedImported4.summary.total_candidates, 1);
+    assert.equal(assessedImported4.summary.assessed, 1);
+    assert.equal(assessedImported4.summary.skipped, 0);
+
+    const onboardingStatus4 = await getJson<{
+      summary: {
+        total_linked: number;
+        verified: number;
+        verified_skills: number;
+        pending: number;
+        quarantined: number;
+        verified_assessed: number;
+        verified_unassessed: number;
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered4.agent_id)}/skills/onboarding-status`,
+      workspaceHeader,
+    );
+    assert.equal(onboardingStatus4.summary.total_linked, 2);
+    assert.equal(onboardingStatus4.summary.verified, 2);
+    assert.equal(onboardingStatus4.summary.verified_skills, 1);
+    assert.equal(onboardingStatus4.summary.pending, 0);
+    assert.equal(onboardingStatus4.summary.quarantined, 0);
+    assert.equal(onboardingStatus4.summary.verified_assessed, 1);
+    assert.equal(onboardingStatus4.summary.verified_unassessed, 0);
 
     const registeredEvent = await db.query<{ event_type: string }>(
       `SELECT event_type

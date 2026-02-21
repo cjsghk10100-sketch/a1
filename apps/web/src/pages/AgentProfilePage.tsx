@@ -2369,6 +2369,9 @@ export function AgentProfilePage(): JSX.Element {
                   <div className="kvKey">{t("agent_profile.onboarding.status.verified")}</div>
                   <div className="kvVal mono">{onboardingStatus.summary.verified}</div>
 
+                  <div className="kvKey">{t("agent_profile.onboarding.status.verified_skills")}</div>
+                  <div className="kvVal mono">{onboardingStatus.summary.verified_skills}</div>
+
                   <div className="kvKey">{t("agent_profile.onboarding.status.pending")}</div>
                   <div className="kvVal mono">{onboardingStatus.summary.pending}</div>
 

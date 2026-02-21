@@ -151,6 +151,7 @@ export interface AgentSkillOnboardingStatusResponseV1 {
   summary: {
     total_linked: number;
     verified: number;
+    verified_skills: number;
     pending: number;
     quarantined: number;
     verified_assessed: number;
