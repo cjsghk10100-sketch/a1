@@ -1432,8 +1432,11 @@ export function AgentProfilePage(): JSX.Element {
 
   async function verifyPendingPackagesFromImport(): Promise<void> {
     if (!skillImportResult) return;
-    const pendingIds = pendingImportPackageIds;
-    await verifyPendingSkillPackageIds(pendingIds);
+    if (autoAssessVerifiedOnImport) {
+      await certifyImportedSkillsFromImport(skillImportResult);
+      return;
+    }
+    await verifyPendingSkillPackageIds(pendingImportPackageIds);
   }
 
   async function refreshAgentGrowthViews(agent_id: string): Promise<void> {
