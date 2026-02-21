@@ -498,8 +498,10 @@ export function WorkPage(): JSX.Element {
     const room = targetRoomId.trim();
     const run = runId.trim();
     if (!room || !run) return;
+    // Always persist by room so async completions update the right room slot.
+    // In-memory state is still guarded to the currently visible room.
+    saveStepsRunId(room, run);
     if (roomIdRef.current === room) {
-      saveStepsRunId(room, run);
       setStepsRunId(run);
     }
   }
