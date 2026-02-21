@@ -142,6 +142,7 @@ export function WorkPage(): JSX.Element {
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [threadsState, setThreadsState] = useState<ConnState>("idle");
   const [threadsError, setThreadsError] = useState<string | null>(null);
+  const threadsRequestRef = useRef<number>(0);
 
   const [threadId, setThreadId] = useState<string>(() => (roomId ? loadThreadId(roomId) : ""));
   const threadIdRef = useRef<string>(threadId);
@@ -153,6 +154,7 @@ export function WorkPage(): JSX.Element {
   const [messages, setMessages] = useState<MessageRow[]>([]);
   const [messagesState, setMessagesState] = useState<ConnState>("idle");
   const [messagesError, setMessagesError] = useState<string | null>(null);
+  const messagesRequestRef = useRef<number>(0);
 
   const [composeContent, setComposeContent] = useState<string>("");
   const [senderType, setSenderType] = useState<SenderType>(() => loadSenderType());
@@ -171,9 +173,11 @@ export function WorkPage(): JSX.Element {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [runsState, setRunsState] = useState<ConnState>("idle");
   const [runsError, setRunsError] = useState<string | null>(null);
+  const runsRequestRef = useRef<number>(0);
   const [egressRequests, setEgressRequests] = useState<EgressRequestRow[]>([]);
   const [egressState, setEgressState] = useState<ConnState>("idle");
   const [egressError, setEgressError] = useState<string | null>(null);
+  const egressRequestRef = useRef<number>(0);
 
   const [createRunTitle, setCreateRunTitle] = useState<string>("");
   const [createRunGoal, setCreateRunGoal] = useState<string>("");
@@ -197,6 +201,7 @@ export function WorkPage(): JSX.Element {
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [stepsState, setStepsState] = useState<ConnState>("idle");
   const [stepsError, setStepsError] = useState<string | null>(null);
+  const stepsRequestRef = useRef<number>(0);
 
   const [createStepKind, setCreateStepKind] = useState<string>("tool");
   const [createStepTitle, setCreateStepTitle] = useState<string>("");
@@ -211,6 +216,7 @@ export function WorkPage(): JSX.Element {
   const [toolCalls, setToolCalls] = useState<ToolCallRow[]>([]);
   const [toolCallsState, setToolCallsState] = useState<ConnState>("idle");
   const [toolCallsError, setToolCallsError] = useState<string | null>(null);
+  const toolCallsRequestRef = useRef<number>(0);
 
   const [createToolCallName, setCreateToolCallName] = useState<string>("");
   const [createToolCallTitle, setCreateToolCallTitle] = useState<string>("");
@@ -232,6 +238,7 @@ export function WorkPage(): JSX.Element {
   const [artifacts, setArtifacts] = useState<ArtifactRow[]>([]);
   const [artifactsState, setArtifactsState] = useState<ConnState>("idle");
   const [artifactsError, setArtifactsError] = useState<string | null>(null);
+  const artifactsRequestRef = useRef<number>(0);
 
   const [createArtifactKind, setCreateArtifactKind] = useState<string>("note");
   const [createArtifactTitle, setCreateArtifactTitle] = useState<string>("");
@@ -314,18 +321,25 @@ export function WorkPage(): JSX.Element {
   }
 
   async function reloadThreads(nextRoomId: string, forcePickFirst?: boolean): Promise<void> {
+    const requestId = threadsRequestRef.current + 1;
+    threadsRequestRef.current = requestId;
     const id = nextRoomId.trim();
     if (!id) {
-      setThreads([]);
-      setThreadsState("idle");
-      setThreadsError(null);
+      if (threadsRequestRef.current === requestId) {
+        setThreads([]);
+        setThreadsState("idle");
+        setThreadsError(null);
+      }
       return;
     }
 
-    setThreadsState("loading");
-    setThreadsError(null);
+    if (threadsRequestRef.current === requestId) {
+      setThreadsState("loading");
+      setThreadsError(null);
+    }
     try {
       const res = await listRoomThreads(id, { limit: 200 });
+      if (threadsRequestRef.current !== requestId) return;
       if (roomIdRef.current !== id) return;
       setThreads(res);
       setThreadsState("idle");
@@ -340,6 +354,7 @@ export function WorkPage(): JSX.Element {
       const first = res[0]?.thread_id ?? "";
       selectThreadForRoom(id, first);
     } catch (e) {
+      if (threadsRequestRef.current !== requestId) return;
       if (roomIdRef.current !== id) return;
       setThreadsError(toErrorCode(e));
       setThreadsState("error");
@@ -347,22 +362,30 @@ export function WorkPage(): JSX.Element {
   }
 
   async function reloadMessages(nextThreadId: string): Promise<void> {
+    const requestId = messagesRequestRef.current + 1;
+    messagesRequestRef.current = requestId;
     const id = nextThreadId.trim();
     if (!id) {
-      setMessages([]);
-      setMessagesState("idle");
-      setMessagesError(null);
+      if (messagesRequestRef.current === requestId) {
+        setMessages([]);
+        setMessagesState("idle");
+        setMessagesError(null);
+      }
       return;
     }
 
-    setMessagesState("loading");
-    setMessagesError(null);
+    if (messagesRequestRef.current === requestId) {
+      setMessagesState("loading");
+      setMessagesError(null);
+    }
     try {
       const res = await listThreadMessages(id, { limit: 80 });
+      if (messagesRequestRef.current !== requestId) return;
       if (threadIdRef.current !== id) return;
       setMessages(res);
       setMessagesState("idle");
     } catch (e) {
+      if (messagesRequestRef.current !== requestId) return;
       if (threadIdRef.current !== id) return;
       setMessagesError(toErrorCode(e));
       setMessagesState("error");
@@ -370,22 +393,30 @@ export function WorkPage(): JSX.Element {
   }
 
   async function reloadRuns(nextRoomId: string): Promise<void> {
+    const requestId = runsRequestRef.current + 1;
+    runsRequestRef.current = requestId;
     const id = nextRoomId.trim();
     if (!id) {
-      setRuns([]);
-      setRunsState("idle");
-      setRunsError(null);
+      if (runsRequestRef.current === requestId) {
+        setRuns([]);
+        setRunsState("idle");
+        setRunsError(null);
+      }
       return;
     }
 
-    setRunsState("loading");
-    setRunsError(null);
+    if (runsRequestRef.current === requestId) {
+      setRunsState("loading");
+      setRunsError(null);
+    }
     try {
       const res = await listRuns({ room_id: id, limit: 20 });
+      if (runsRequestRef.current !== requestId) return;
       if (roomIdRef.current !== id) return;
       setRuns(res);
       setRunsState("idle");
     } catch (e) {
+      if (runsRequestRef.current !== requestId) return;
       if (roomIdRef.current !== id) return;
       setRunsError(toErrorCode(e));
       setRunsState("error");
@@ -393,22 +424,30 @@ export function WorkPage(): JSX.Element {
   }
 
   async function reloadEgress(nextRoomId: string): Promise<void> {
+    const requestId = egressRequestRef.current + 1;
+    egressRequestRef.current = requestId;
     const id = nextRoomId.trim();
     if (!id) {
-      setEgressRequests([]);
-      setEgressState("idle");
-      setEgressError(null);
+      if (egressRequestRef.current === requestId) {
+        setEgressRequests([]);
+        setEgressState("idle");
+        setEgressError(null);
+      }
       return;
     }
 
-    setEgressState("loading");
-    setEgressError(null);
+    if (egressRequestRef.current === requestId) {
+      setEgressState("loading");
+      setEgressError(null);
+    }
     try {
       const res = await listEgressRequests({ room_id: id, limit: 30 });
+      if (egressRequestRef.current !== requestId) return;
       if (roomIdRef.current !== id) return;
       setEgressRequests(res);
       setEgressState("idle");
     } catch (e) {
+      if (egressRequestRef.current !== requestId) return;
       if (roomIdRef.current !== id) return;
       setEgressError(toErrorCode(e));
       setEgressState("error");
@@ -416,22 +455,30 @@ export function WorkPage(): JSX.Element {
   }
 
   async function reloadSteps(nextRunId: string): Promise<void> {
+    const requestId = stepsRequestRef.current + 1;
+    stepsRequestRef.current = requestId;
     const id = nextRunId.trim();
     if (!id) {
-      setSteps([]);
-      setStepsState("idle");
-      setStepsError(null);
+      if (stepsRequestRef.current === requestId) {
+        setSteps([]);
+        setStepsState("idle");
+        setStepsError(null);
+      }
       return;
     }
 
-    setStepsState("loading");
-    setStepsError(null);
+    if (stepsRequestRef.current === requestId) {
+      setStepsState("loading");
+      setStepsError(null);
+    }
     try {
       const res = await listRunSteps(id);
+      if (stepsRequestRef.current !== requestId) return;
       if (stepsRunIdRef.current !== id) return;
       setSteps(res);
       setStepsState("idle");
     } catch (e) {
+      if (stepsRequestRef.current !== requestId) return;
       if (stepsRunIdRef.current !== id) return;
       setStepsError(toErrorCode(e));
       setStepsState("error");
@@ -439,22 +486,30 @@ export function WorkPage(): JSX.Element {
   }
 
   async function reloadToolCalls(nextStepId: string): Promise<void> {
+    const requestId = toolCallsRequestRef.current + 1;
+    toolCallsRequestRef.current = requestId;
     const id = nextStepId.trim();
     if (!id) {
-      setToolCalls([]);
-      setToolCallsState("idle");
-      setToolCallsError(null);
+      if (toolCallsRequestRef.current === requestId) {
+        setToolCalls([]);
+        setToolCallsState("idle");
+        setToolCallsError(null);
+      }
       return;
     }
 
-    setToolCallsState("loading");
-    setToolCallsError(null);
+    if (toolCallsRequestRef.current === requestId) {
+      setToolCallsState("loading");
+      setToolCallsError(null);
+    }
     try {
       const res = await listToolCalls({ step_id: id, limit: 50 });
+      if (toolCallsRequestRef.current !== requestId) return;
       if (toolCallsStepIdRef.current !== id) return;
       setToolCalls(res);
       setToolCallsState("idle");
     } catch (e) {
+      if (toolCallsRequestRef.current !== requestId) return;
       if (toolCallsStepIdRef.current !== id) return;
       setToolCallsError(toErrorCode(e));
       setToolCallsState("error");
@@ -462,22 +517,30 @@ export function WorkPage(): JSX.Element {
   }
 
   async function reloadArtifacts(nextStepId: string): Promise<void> {
+    const requestId = artifactsRequestRef.current + 1;
+    artifactsRequestRef.current = requestId;
     const id = nextStepId.trim();
     if (!id) {
-      setArtifacts([]);
-      setArtifactsState("idle");
-      setArtifactsError(null);
+      if (artifactsRequestRef.current === requestId) {
+        setArtifacts([]);
+        setArtifactsState("idle");
+        setArtifactsError(null);
+      }
       return;
     }
 
-    setArtifactsState("loading");
-    setArtifactsError(null);
+    if (artifactsRequestRef.current === requestId) {
+      setArtifactsState("loading");
+      setArtifactsError(null);
+    }
     try {
       const res = await listArtifacts({ step_id: id, limit: 50 });
+      if (artifactsRequestRef.current !== requestId) return;
       if (artifactsStepIdRef.current !== id) return;
       setArtifacts(res);
       setArtifactsState("idle");
     } catch (e) {
+      if (artifactsRequestRef.current !== requestId) return;
       if (artifactsStepIdRef.current !== id) return;
       setArtifactsError(toErrorCode(e));
       setArtifactsState("error");
