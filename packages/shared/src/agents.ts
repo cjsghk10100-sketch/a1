@@ -24,6 +24,10 @@ export interface AgentGetResponseV1 {
   agent: AgentRecordV1;
 }
 
+export interface AgentListResponseV1 {
+  agents: AgentRecordV1[];
+}
+
 export interface AgentQuarantineRequestV1 {
   quarantine_reason?: string;
 }

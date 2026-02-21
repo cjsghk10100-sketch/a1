@@ -1,5 +1,6 @@
 import type {
   AgentGetResponseV1,
+  AgentListResponseV1,
   AgentQuarantineRequestV1,
   AgentQuarantineResponseV1,
   AgentRecordV1,
@@ -30,54 +31,12 @@ import type { EventRow } from "./events";
 import { listEvents } from "./events";
 import { apiGet, apiPost } from "./http";
 
-export interface RegisteredAgent {
-  agent_id: string;
-  principal_id: string;
-  display_name: string;
-  occurred_at: string;
-  event_id: string;
-}
-
-type AgentRegisteredEventData = {
-  agent_id?: unknown;
-  principal_id?: unknown;
-  display_name?: unknown;
-};
-
-function parseRegisteredAgent(event: EventRow): RegisteredAgent | null {
-  if (event.event_type !== "agent.registered") return null;
-  const data = (event.data && typeof event.data === "object" ? (event.data as AgentRegisteredEventData) : {}) as AgentRegisteredEventData;
-
-  const agent_id = typeof data.agent_id === "string" ? data.agent_id : null;
-  const principal_id = typeof data.principal_id === "string" ? data.principal_id : null;
-  const display_name = typeof data.display_name === "string" ? data.display_name : null;
-
-  if (!agent_id || !principal_id || !display_name) return null;
-  return {
-    agent_id,
-    principal_id,
-    display_name,
-    occurred_at: event.occurred_at,
-    event_id: event.event_id,
-  };
-}
+export type RegisteredAgent = AgentRecordV1;
 
 export async function listRegisteredAgents(params?: { limit?: number }): Promise<RegisteredAgent[]> {
   const limit = Math.max(1, Math.min(500, Math.floor(Number(params?.limit ?? 200))));
-  const events = await listEvents({ event_type: "agent.registered", limit });
-
-  // Use the latest registration per agent_id (defensive against duplicates).
-  const byAgent = new Map<string, RegisteredAgent>();
-  for (const ev of events) {
-    const parsed = parseRegisteredAgent(ev);
-    if (!parsed) continue;
-    const existing = byAgent.get(parsed.agent_id);
-    if (!existing || parsed.occurred_at > existing.occurred_at) {
-      byAgent.set(parsed.agent_id, parsed);
-    }
-  }
-
-  return [...byAgent.values()].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+  const res = await apiGet<AgentListResponseV1>(`/v1/agents?limit=${limit}`);
+  return res.agents ?? [];
 }
 
 export async function getAgent(agent_id: string): Promise<AgentRecordV1> {

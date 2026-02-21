@@ -128,6 +128,17 @@ async function main(): Promise<void> {
     );
     assert.ok(registered.agent_id.startsWith("agt_"));
     assert.ok(registered.principal_id.length > 0);
+    const listedAgents = await getJson<{
+      agents: Array<{
+        agent_id: string;
+        principal_id: string;
+        display_name: string;
+        created_at: string;
+      }>;
+    }>(baseUrl, "/v1/agents?limit=20", workspaceHeader);
+    assert.ok(listedAgents.agents.some((agent) => agent.agent_id === registered.agent_id));
+    assert.ok(listedAgents.agents.some((agent) => agent.principal_id === registered.principal_id));
+    assert.ok(listedAgents.agents.every((agent) => typeof agent.created_at === "string" && agent.created_at.length > 0));
 
     const inventory = {
       packages: [

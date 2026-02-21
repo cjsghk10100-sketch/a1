@@ -175,6 +175,46 @@ function decideImportedStatus(input: {
 }
 
 export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
+  app.get<{
+    Querystring: { limit?: string };
+  }>("/v1/agents", async (req, reply) => {
+    const limit = parseListLimit(req.query.limit);
+    const res = await pool.query<{
+      agent_id: string;
+      principal_id: string;
+      display_name: string;
+      created_at: string;
+      revoked_at: string | null;
+      quarantined_at: string | null;
+      quarantine_reason: string | null;
+    }>(
+      `SELECT
+         agent_id,
+         principal_id,
+         display_name,
+         created_at::text AS created_at,
+         revoked_at::text AS revoked_at,
+         quarantined_at::text AS quarantined_at,
+         quarantine_reason
+       FROM sec_agents
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit],
+    );
+
+    return reply.code(200).send({
+      agents: res.rows.map((row) => ({
+        agent_id: row.agent_id,
+        principal_id: row.principal_id,
+        display_name: row.display_name,
+        created_at: row.created_at,
+        revoked_at: row.revoked_at ?? undefined,
+        quarantined_at: row.quarantined_at ?? undefined,
+        quarantine_reason: row.quarantine_reason ?? undefined,
+      })),
+    });
+  });
+
   app.post<{
     Body: { display_name: string; actor_type?: ActorType; actor_id?: string };
   }>("/v1/agents", async (req, reply) => {
