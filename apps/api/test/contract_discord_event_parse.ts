@@ -90,6 +90,10 @@ async function main(): Promise<void> {
 
   try {
     const headers = { "x-workspace-id": "ws_contract_discord_parse" };
+    const runSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const guildId = `guild_parse_${runSuffix}`;
+    const channelId = `chan_parse_${runSuffix}`;
+    const messageId = `msg_parse_${runSuffix}`;
 
     const roomRes = await requestJson(
       baseUrl,
@@ -111,8 +115,8 @@ async function main(): Promise<void> {
       "/v1/integrations/discord/channel-mappings",
       {
         room_id: room.room_id,
-        discord_guild_id: "guild_parse",
-        discord_channel_id: "chan_parse",
+        discord_guild_id: guildId,
+        discord_channel_id: channelId,
       },
       headers,
     );
@@ -123,8 +127,8 @@ async function main(): Promise<void> {
       "POST",
       "/v1/integrations/discord/messages/ingest",
       {
-        discord_message_id: "msg_parse_1",
-        discord_channel_id: "chan_parse",
+        discord_message_id: messageId,
+        discord_channel_id: channelId,
         content_raw: [
           "hello",
           "@event action=request_approval id=appr_parse_1",

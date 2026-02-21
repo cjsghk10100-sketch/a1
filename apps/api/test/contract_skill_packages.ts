@@ -137,6 +137,14 @@ async function main(): Promise<void> {
 
   try {
     const workspaceHeader = { "x-workspace-id": "ws_contract" };
+    const runSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const versionBase = Number(Date.now() % 100000);
+    const verifiedSkillId = `web_search_v2_${runSuffix}`;
+    const failingSkillId = `web_search_bad_${runSuffix}`;
+    const unsignedSkillId = `web_search_unsigned_${runSuffix}`;
+    const verifiedVersion = `1.2.${versionBase}`;
+    const failingVersion = `1.2.${versionBase + 1}`;
+    const unsignedVersion = `1.2.${versionBase + 2}`;
 
     const installed = await postJson<{
       skill_package_id: string;
@@ -145,8 +153,8 @@ async function main(): Promise<void> {
       baseUrl,
       "/v1/skills/packages/install",
       {
-        skill_id: "web_search_v2",
-        version: "1.2.0",
+        skill_id: verifiedSkillId,
+        version: verifiedVersion,
         hash_sha256: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         signature: "sig_example",
         manifest: {
@@ -183,8 +191,8 @@ async function main(): Promise<void> {
       baseUrl,
       "/v1/skills/packages/install",
       {
-        skill_id: "web_search_bad",
-        version: "1.2.1",
+        skill_id: failingSkillId,
+        version: failingVersion,
         hash_sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         signature: "sig_bad",
         manifest: {
@@ -238,8 +246,8 @@ async function main(): Promise<void> {
       baseUrl,
       "/v1/skills/packages/install",
       {
-        skill_id: "web_search_unsigned",
-        version: "1.2.2",
+        skill_id: unsignedSkillId,
+        version: unsignedVersion,
         hash_sha256: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         manifest: {
           required_tools: ["http_client"],

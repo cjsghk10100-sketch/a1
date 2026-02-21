@@ -168,7 +168,9 @@ async function main(): Promise<void> {
   await db.connect();
 
   try {
-    const workspaceHeader = { "x-workspace-id": "ws_contract_lifecycle" };
+    const runSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const workspaceId = `ws_contract_lifecycle_${runSuffix}`;
+    const workspaceHeader = { "x-workspace-id": workspaceId };
 
     const registered = await requestJson(
       baseUrl,
@@ -185,7 +187,7 @@ async function main(): Promise<void> {
     const day1 = addIsoDays(day3, -2);
 
     await insertSurvivalRow(db, {
-      workspace_id: "ws_contract_lifecycle",
+      workspace_id: workspaceId,
       target_id: agent.agent_id,
       snapshot_date: day1,
       success_count: 8,
@@ -196,7 +198,7 @@ async function main(): Promise<void> {
       learning_count: 2,
     });
     await insertSurvivalRow(db, {
-      workspace_id: "ws_contract_lifecycle",
+      workspace_id: workspaceId,
       target_id: agent.agent_id,
       snapshot_date: day2,
       success_count: 3,
@@ -207,7 +209,7 @@ async function main(): Promise<void> {
       learning_count: 1,
     });
     await insertSurvivalRow(db, {
-      workspace_id: "ws_contract_lifecycle",
+      workspace_id: workspaceId,
       target_id: agent.agent_id,
       snapshot_date: day3,
       success_count: 1,
@@ -219,21 +221,21 @@ async function main(): Promise<void> {
     });
 
     const r1 = await runLifecycleAutomation(pool, {
-      workspace_id: "ws_contract_lifecycle",
+      workspace_id: workspaceId,
       snapshot_date: day1,
     });
     assert.equal(r1.evaluated_targets, 1);
     assert.equal(r1.state_changes, 1);
 
     const r2 = await runLifecycleAutomation(pool, {
-      workspace_id: "ws_contract_lifecycle",
+      workspace_id: workspaceId,
       snapshot_date: day2,
     });
     assert.equal(r2.evaluated_targets, 1);
     assert.equal(r2.state_changes, 1);
 
     const r3 = await runLifecycleAutomation(pool, {
-      workspace_id: "ws_contract_lifecycle",
+      workspace_id: workspaceId,
       snapshot_date: day3,
     });
     assert.equal(r3.evaluated_targets, 1);
@@ -275,7 +277,7 @@ async function main(): Promise<void> {
     );
 
     const rerun = await runLifecycleAutomation(pool, {
-      workspace_id: "ws_contract_lifecycle",
+      workspace_id: workspaceId,
       snapshot_date: day3,
     });
     assert.equal(rerun.state_changes, 0);
@@ -286,7 +288,7 @@ async function main(): Promise<void> {
        WHERE workspace_id = $1
          AND event_type = 'lifecycle.state.changed'
          AND data->>'target_id' = $2`,
-      ["ws_contract_lifecycle", agent.agent_id],
+      [workspaceId, agent.agent_id],
     );
     assert.ok(Number.parseInt(lifecycleEvents.rows[0].count, 10) >= 3);
   } finally {

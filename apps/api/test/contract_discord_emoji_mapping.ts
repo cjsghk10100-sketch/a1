@@ -93,6 +93,10 @@ async function main(): Promise<void> {
 
   try {
     const headers = { "x-workspace-id": "ws_contract_discord_emoji" };
+    const runSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const channelId = `chan_emoji_${runSuffix}`;
+    const sourceMessageId = `discord_msg_src_${runSuffix}`;
+    const reactionMessageId = `discord_msg_react_${runSuffix}`;
 
     const roomRes = await requestJson(
       baseUrl,
@@ -128,20 +132,19 @@ async function main(): Promise<void> {
       "/v1/integrations/discord/channel-mappings",
       {
         room_id: room.room_id,
-        discord_channel_id: "chan_emoji",
+        discord_channel_id: channelId,
       },
       headers,
     );
     assert.equal(mapRes.status, 201);
 
-    const sourceMessageId = "discord_msg_src_1";
     const ingestRes = await requestJson(
       baseUrl,
       "POST",
       "/v1/integrations/discord/messages/ingest",
       {
         discord_message_id: sourceMessageId,
-        discord_channel_id: "chan_emoji",
+        discord_channel_id: channelId,
         content_raw: `@event action=request_approval approval_id=${approval.approval_id}`,
       },
       headers,
@@ -153,7 +156,7 @@ async function main(): Promise<void> {
       "POST",
       "/v1/integrations/discord/emoji-decisions",
       {
-        discord_message_id: "discord_msg_react_1",
+        discord_message_id: reactionMessageId,
         reply_to_discord_message_id: sourceMessageId,
         emoji: "✅",
         actor_discord_id: "ceo_user_1",
@@ -197,7 +200,7 @@ async function main(): Promise<void> {
       "POST",
       "/v1/integrations/discord/emoji-decisions",
       {
-        discord_message_id: "discord_msg_react_1",
+        discord_message_id: reactionMessageId,
         reply_to_discord_message_id: sourceMessageId,
         emoji: "✅",
       },

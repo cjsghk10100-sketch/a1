@@ -100,6 +100,7 @@ async function main(): Promise<void> {
 
   try {
     const workspaceHeader = { "x-workspace-id": "ws_contract" };
+    const runSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
     const registered = await postJson<{ agent_id: string; principal_id: string }>(
       baseUrl,
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
     const inventory = {
       packages: [
         {
-          skill_id: "skill.good.verified",
+          skill_id: `skill.good.verified.${runSuffix}`,
           version: "1.0.0",
           hash_sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           signature: "sig_v1",
@@ -125,12 +126,12 @@ async function main(): Promise<void> {
           },
         },
         {
-          skill_id: "skill.bad.missing_manifest",
+          skill_id: `skill.bad.missing_manifest.${runSuffix}`,
           version: "1.0.0",
           hash_sha256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         },
         {
-          skill_id: "skill.pending.no_signature",
+          skill_id: `skill.pending.no_signature.${runSuffix}`,
           version: "1.0.0",
           hash_sha256: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
           manifest: {

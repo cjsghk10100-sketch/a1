@@ -103,9 +103,11 @@ async function main(): Promise<void> {
     await db.connect();
 
     try {
-      // Use a workspace id unique to this contract test to avoid cross-test interference
-      // when the full contract suite runs against a shared DATABASE_URL.
-      const workspaceHeader = { "x-workspace-id": "ws_contract_learning" };
+      // Keep the contract re-runnable against shared local DBs without cleanup.
+      const workspaceId = `ws_contract_learning_${Date.now().toString(36)}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      const workspaceHeader = { "x-workspace-id": workspaceId };
 
     const room = await postJson<{ room_id: string }>(
       baseUrl,
@@ -153,11 +155,11 @@ async function main(): Promise<void> {
       guidance: string;
     }>(
       `SELECT constraint_id, seen_count, reason_code, category, pattern, guidance
-       FROM sec_constraints
+      FROM sec_constraints
        WHERE workspace_id = $1
        ORDER BY updated_at DESC
        LIMIT 1`,
-      ["ws_contract_learning"],
+      [workspaceId],
     );
     assert.equal(constraint.rowCount, 1);
     assert.equal(constraint.rows[0].seen_count, 2);
@@ -173,7 +175,7 @@ async function main(): Promise<void> {
        WHERE event_type = 'learning.from_failure'
          AND workspace_id = $1
          AND room_id = $2`,
-      ["ws_contract_learning", room.room_id],
+      [workspaceId, room.room_id],
     );
     assert.equal(Number.parseInt(learningCount.rows[0].count, 10), 2);
 
@@ -183,7 +185,7 @@ async function main(): Promise<void> {
        WHERE event_type = 'constraint.learned'
          AND workspace_id = $1
          AND room_id = $2`,
-      ["ws_contract_learning", room.room_id],
+      [workspaceId, room.room_id],
     );
     assert.equal(Number.parseInt(learnedCount.rows[0].count, 10), 2);
 
@@ -200,7 +202,7 @@ async function main(): Promise<void> {
          AND room_id = $2
        ORDER BY recorded_at DESC
        LIMIT 1`,
-      ["ws_contract_learning", room.room_id],
+      [workspaceId, room.room_id],
     );
     assert.equal(repeated.rowCount, 1);
     assert.equal(repeated.rows[0].repeat_count, "2");
@@ -212,7 +214,7 @@ async function main(): Promise<void> {
        WHERE workspace_id = $1
        ORDER BY last_seen_at DESC
        LIMIT 1`,
-      ["ws_contract_learning"],
+      [workspaceId],
     );
     assert.equal(counters.rowCount, 1);
     assert.equal(counters.rows[0].seen_count, 2);
@@ -277,7 +279,7 @@ async function main(): Promise<void> {
          AND data->>'agent_id' = $2
        ORDER BY recorded_at DESC
        LIMIT 1`,
-      ["ws_contract_learning", agent.agent_id],
+      [workspaceId, agent.agent_id],
     );
     assert.equal(quarantineEvent.rowCount, 1);
     assert.equal(quarantineEvent.rows[0].mode, "auto");

@@ -107,7 +107,9 @@ async function main(): Promise<void> {
   await db.connect();
 
   try {
-    const workspaceHeader = { "x-workspace-id": "ws_contract" };
+    const runSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const workspaceHeader = { "x-workspace-id": `ws_contract_secrets_${runSuffix}` };
+    const secretName = `github_token_${runSuffix}`;
 
     const roomRes = await requestJson(
       baseUrl,
@@ -142,7 +144,7 @@ async function main(): Promise<void> {
       "POST",
       "/v1/secrets",
       {
-        secret_name: "github_token",
+        secret_name: secretName,
         secret_value: secretValue,
         description: "token for local tests",
       },
@@ -156,7 +158,7 @@ async function main(): Promise<void> {
       created_at: string;
       updated_at: string;
     };
-    assert.equal(created.secret_name, "github_token");
+    assert.equal(created.secret_name, secretName);
     assert.equal(created.created, true);
     assert.ok(created.secret_id.startsWith("sec_"));
     assert.ok(typeof created.created_at === "string");
@@ -174,7 +176,7 @@ async function main(): Promise<void> {
     };
     assert.equal(listed.secrets.length, 1);
     assert.equal(listed.secrets[0].secret_id, created.secret_id);
-    assert.equal(listed.secrets[0].secret_name, "github_token");
+    assert.equal(listed.secrets[0].secret_name, secretName);
     assert.equal(listed.secrets[0].algorithm, "aes-256-gcm");
     assert.equal("secret_value" in (listed.secrets[0] as Record<string, unknown>), false);
 
@@ -219,7 +221,7 @@ async function main(): Promise<void> {
       secret_value: string;
     };
     assert.equal(accessed.secret_id, created.secret_id);
-    assert.equal(accessed.secret_name, "github_token");
+    assert.equal(accessed.secret_name, secretName);
     assert.equal(accessed.secret_value, secretValue);
 
     const storedSecret = await db.query<{

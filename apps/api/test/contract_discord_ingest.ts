@@ -91,6 +91,10 @@ async function main(): Promise<void> {
 
   try {
     const headers = { "x-workspace-id": "ws_contract_discord_ingest" };
+    const runSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const guildId = `guild_${runSuffix}`;
+    const channelId = `chan_${runSuffix}`;
+    const messageId = `msg_${runSuffix}`;
 
     const roomRes = await requestJson(
       baseUrl,
@@ -112,8 +116,8 @@ async function main(): Promise<void> {
       "/v1/integrations/discord/channel-mappings",
       {
         room_id: room.room_id,
-        discord_guild_id: "guild_1",
-        discord_channel_id: "chan_1",
+        discord_guild_id: guildId,
+        discord_channel_id: channelId,
         is_active: true,
       },
       headers,
@@ -123,13 +127,13 @@ async function main(): Promise<void> {
       mapping: { room_id: string; discord_channel_id: string; is_active: boolean };
     };
     assert.equal(mapping.mapping.room_id, room.room_id);
-    assert.equal(mapping.mapping.discord_channel_id, "chan_1");
+    assert.equal(mapping.mapping.discord_channel_id, channelId);
     assert.equal(mapping.mapping.is_active, true);
 
     const listMap = await requestJson(
       baseUrl,
       "GET",
-      "/v1/integrations/discord/channel-mappings?discord_channel_id=chan_1&limit=10",
+      `/v1/integrations/discord/channel-mappings?discord_channel_id=${encodeURIComponent(channelId)}&limit=10`,
       undefined,
       headers,
     );
@@ -145,9 +149,9 @@ async function main(): Promise<void> {
       "POST",
       "/v1/integrations/discord/messages/ingest",
       {
-        discord_message_id: "msg_100",
-        discord_channel_id: "chan_1",
-        discord_guild_id: "guild_1",
+        discord_message_id: messageId,
+        discord_channel_id: channelId,
+        discord_guild_id: guildId,
         author_discord_id: "user_100",
         author_name: "ceo",
         content_raw: "@event action=request_approval id=appr_1",
@@ -167,7 +171,7 @@ async function main(): Promise<void> {
     };
     assert.equal(typeof ingestBody.ingest_id, "string");
     assert.equal(ingestBody.room_id, room.room_id);
-    assert.equal(ingestBody.discord_message_id, "msg_100");
+    assert.equal(ingestBody.discord_message_id, messageId);
     assert.equal(ingestBody.deduped, false);
 
     const ingestDup = await requestJson(
@@ -175,8 +179,8 @@ async function main(): Promise<void> {
       "POST",
       "/v1/integrations/discord/messages/ingest",
       {
-        discord_message_id: "msg_100",
-        discord_channel_id: "chan_1",
+        discord_message_id: messageId,
+        discord_channel_id: channelId,
         content_raw: "duplicate",
       },
       headers,
@@ -190,13 +194,13 @@ async function main(): Promise<void> {
     };
     assert.equal(ingestDupBody.ingest_id, ingestBody.ingest_id);
     assert.equal(ingestDupBody.room_id, room.room_id);
-    assert.equal(ingestDupBody.discord_message_id, "msg_100");
+    assert.equal(ingestDupBody.discord_message_id, messageId);
     assert.equal(ingestDupBody.deduped, true);
 
     const listMessages = await requestJson(
       baseUrl,
       "GET",
-      "/v1/integrations/discord/messages?discord_channel_id=chan_1&limit=10",
+      `/v1/integrations/discord/messages?discord_channel_id=${encodeURIComponent(channelId)}&limit=10`,
       undefined,
       headers,
     );
@@ -212,8 +216,8 @@ async function main(): Promise<void> {
     assert.equal(messagesPayload.messages.length, 1);
     assert.equal(messagesPayload.messages[0].ingest_id, ingestBody.ingest_id);
     assert.equal(messagesPayload.messages[0].room_id, room.room_id);
-    assert.equal(messagesPayload.messages[0].discord_message_id, "msg_100");
-    assert.equal(messagesPayload.messages[0].discord_channel_id, "chan_1");
+    assert.equal(messagesPayload.messages[0].discord_message_id, messageId);
+    assert.equal(messagesPayload.messages[0].discord_channel_id, channelId);
   } finally {
     await app.close();
   }
