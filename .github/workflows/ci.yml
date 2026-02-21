@@ -59,3 +59,8 @@ jobs:
         env:
           DATABASE_URL: postgres://agentapp:agentapp@localhost:5432/agentapp_test
         run: pnpm -C apps/api test
+
+      - name: Contract re-run safety
+        env:
+          DATABASE_URL: postgres://agentapp:agentapp@localhost:5432/agentapp_test
+        run: pnpm -C apps/api run test:rerun-safety && pnpm -C apps/api run test:rerun-safety
