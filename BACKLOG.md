@@ -26,7 +26,7 @@
 ## MVP-3: Discord ingest normalization (optional if OpenClaw does gateway)
 - [x] TASK-030 integ_discord_messages + channel mapping table
 - [x] TASK-031 Parse @event line + schema validation + dedupe
-- [ ] TASK-032 CEO emoji reply mapping to approval.decided
+- [x] TASK-032 CEO emoji reply mapping to approval.decided
 
 ## MVP-4: Web UI skeleton (CEO mode first)
 - [x] TASK-040 Web scaffold + i18n (en/ko) wiring

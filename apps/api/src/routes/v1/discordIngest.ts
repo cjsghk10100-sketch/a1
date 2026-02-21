@@ -5,6 +5,8 @@ import type { FastifyInstance } from "fastify";
 import type {
   DiscordChannelMappingRowV1,
   DiscordChannelMappingUpsertV1,
+  DiscordEmojiDecisionMapResultV1,
+  DiscordEmojiDecisionMapV1,
   DiscordParseEventLinesResultV1,
   DiscordParsedEventRowV1,
   DiscordParsedEventStatus,
@@ -12,9 +14,11 @@ import type {
   DiscordMessageIngestV1,
   DiscordIngestedMessageRowV1,
 } from "@agentapp/shared";
+import { ApprovalDecision, type ApprovalEventV1 } from "@agentapp/shared";
 
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
+import { applyApprovalEvent } from "../../projectors/approvalProjector.js";
 
 type MappingDbRow = {
   mapping_id: string;
@@ -67,6 +71,32 @@ type ParsedEventLineCandidate = {
   payload: Record<string, unknown>;
   status: DiscordParsedEventStatus;
   parse_error?: string;
+};
+
+type ApprovalLookupRow = {
+  workspace_id: string;
+  room_id: string | null;
+  thread_id: string | null;
+  run_id: string | null;
+  step_id: string | null;
+  correlation_id: string;
+  last_event_id: string | null;
+};
+
+type EmojiDecisionDbRow = {
+  decision_map_id: string;
+  workspace_id: string;
+  discord_message_id: string;
+  reply_to_discord_message_id: string;
+  approval_id: string;
+  emoji: string;
+  mapped_decision: ApprovalDecision;
+  actor_discord_id: string | null;
+  actor_name: string | null;
+  reason: string | null;
+  correlation_id: string;
+  event_id: string | null;
+  created_at: string;
 };
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
@@ -209,6 +239,22 @@ function normalizeDecision(raw: string | undefined): "approve" | "deny" | "hold"
     return "deny";
   }
   if (v === "hold" || v === "pending") return "hold";
+  return undefined;
+}
+
+function normalizeEmojiDecision(raw: string | undefined): ApprovalDecision | undefined {
+  if (!raw) return undefined;
+  const v = raw.trim().toLowerCase();
+  if (!v) return undefined;
+  if (v === "✅" || v === "✔️" || v === "☑️" || v === ":white_check_mark:" || v === "white_check_mark") {
+    return ApprovalDecision.Approve;
+  }
+  if (v === "❌" || v === "✖️" || v === "🚫" || v === "⛔" || v === ":x:" || v === "x") {
+    return ApprovalDecision.Deny;
+  }
+  if (v === "🟨" || v === "🟡" || v === "⏸️" || v === ":yellow_square:" || v === "yellow_square") {
+    return ApprovalDecision.Hold;
+  }
   return undefined;
 }
 
@@ -363,6 +409,10 @@ function newParsedEventId(): string {
   return `devt_${randomUUID().replaceAll("-", "")}`;
 }
 
+function newDecisionMapId(): string {
+  return `demj_${randomUUID().replaceAll("-", "")}`;
+}
+
 async function loadMappingByChannel(
   pool: DbPool,
   workspace_id: string,
@@ -477,6 +527,54 @@ async function parseAndPersistEventLines(
     valid_count,
     invalid_count,
   };
+}
+
+async function resolveApprovalIdFromReplyMessage(
+  pool: DbPool,
+  input: { workspace_id: string; reply_to_discord_message_id: string },
+): Promise<string | null> {
+  const rows = await pool.query<{ payload: unknown }>(
+    `SELECT p.payload
+     FROM integ_discord_messages m
+     JOIN integ_discord_event_lines p
+       ON p.workspace_id = m.workspace_id
+      AND p.ingest_id = m.ingest_id
+     WHERE m.workspace_id = $1
+       AND m.discord_message_id = $2
+       AND p.status = 'valid'
+       AND p.action = 'approval.requested'
+     ORDER BY p.line_index DESC
+     LIMIT 1`,
+    [input.workspace_id, input.reply_to_discord_message_id],
+  );
+
+  if (rows.rowCount !== 1) return null;
+  const payload = rows.rows[0].payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  return normalizeOptionalString((payload as Record<string, unknown>).approval_id) ?? null;
+}
+
+async function loadApprovalForDecision(
+  pool: DbPool,
+  workspace_id: string,
+  approval_id: string,
+): Promise<ApprovalLookupRow | null> {
+  const res = await pool.query<ApprovalLookupRow>(
+    `SELECT
+       workspace_id,
+       room_id,
+       thread_id,
+       run_id,
+       step_id,
+       correlation_id,
+       last_event_id
+     FROM proj_approvals
+     WHERE workspace_id = $1
+       AND approval_id = $2`,
+    [workspace_id, approval_id],
+  );
+  if (res.rowCount !== 1) return null;
+  return res.rows[0];
 }
 
 export async function registerDiscordIngestRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -830,6 +928,178 @@ export async function registerDiscordIngestRoutes(app: FastifyInstance, pool: Db
     );
 
     return reply.code(200).send({ events: rows.rows.map(toParsedEventRow) });
+  });
+
+  app.post<{
+    Body: DiscordEmojiDecisionMapV1;
+  }>("/v1/integrations/discord/emoji-decisions", async (req, reply): Promise<DiscordEmojiDecisionMapResultV1> => {
+    const workspace_id = workspaceIdFromReq(req);
+    const discord_message_id = normalizeRequiredString(req.body.discord_message_id);
+    const reply_to_discord_message_id = normalizeRequiredString(req.body.reply_to_discord_message_id);
+    const emoji = normalizeRequiredString(req.body.emoji);
+    const reason = normalizeOptionalString(req.body.reason);
+    const decision = normalizeEmojiDecision(emoji ?? undefined);
+
+    if (!discord_message_id) return reply.code(400).send({ error: "invalid_discord_message_id" });
+    if (!reply_to_discord_message_id) {
+      return reply.code(400).send({ error: "invalid_reply_to_discord_message_id" });
+    }
+    if (!emoji || !decision) return reply.code(400).send({ error: "invalid_emoji_decision" });
+
+    const approval_id = await resolveApprovalIdFromReplyMessage(pool, {
+      workspace_id,
+      reply_to_discord_message_id,
+    });
+    if (!approval_id) {
+      return reply.code(404).send({ error: "approval_request_not_found_from_reply_message" });
+    }
+
+    const approval = await loadApprovalForDecision(pool, workspace_id, approval_id);
+    if (!approval) return reply.code(404).send({ error: "approval_not_found" });
+
+    const actor_id =
+      normalizeOptionalString(req.body.actor_discord_id) ||
+      normalizeOptionalString(req.body.actor_name) ||
+      "discord_ceo";
+    const actor_name = normalizeOptionalString(req.body.actor_name);
+    const correlation_id = approval.correlation_id || randomUUID();
+    const now = new Date().toISOString();
+
+    const inserted = await pool.query<EmojiDecisionDbRow>(
+      `INSERT INTO integ_discord_emoji_decisions (
+         decision_map_id,
+         workspace_id,
+         discord_message_id,
+         reply_to_discord_message_id,
+         approval_id,
+         emoji,
+         mapped_decision,
+         actor_discord_id,
+         actor_name,
+         reason,
+         correlation_id,
+         event_id,
+         created_at
+       ) VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12
+       )
+       ON CONFLICT (workspace_id, discord_message_id)
+       DO NOTHING
+       RETURNING
+         decision_map_id,
+         workspace_id,
+         discord_message_id,
+         reply_to_discord_message_id,
+         approval_id,
+         emoji,
+         mapped_decision,
+         actor_discord_id,
+         actor_name,
+         reason,
+         correlation_id,
+         event_id,
+         created_at::text AS created_at`,
+      [
+        newDecisionMapId(),
+        workspace_id,
+        discord_message_id,
+        reply_to_discord_message_id,
+        approval_id,
+        emoji,
+        decision,
+        normalizeOptionalString(req.body.actor_discord_id) ?? null,
+        actor_name ?? null,
+        reason ?? null,
+        correlation_id,
+        now,
+      ],
+    );
+
+    if (inserted.rowCount !== 1) {
+      const existing = await pool.query<EmojiDecisionDbRow>(
+        `SELECT
+           decision_map_id,
+           workspace_id,
+           discord_message_id,
+           reply_to_discord_message_id,
+           approval_id,
+           emoji,
+           mapped_decision,
+           actor_discord_id,
+           actor_name,
+           reason,
+           correlation_id,
+           event_id,
+           created_at::text AS created_at
+         FROM integ_discord_emoji_decisions
+         WHERE workspace_id = $1
+           AND discord_message_id = $2`,
+        [workspace_id, discord_message_id],
+      );
+      if (existing.rowCount !== 1) {
+        return reply.code(500).send({ error: "discord_emoji_dedupe_lookup_failed" });
+      }
+      const row = existing.rows[0];
+      return reply.code(200).send({
+        ok: true,
+        deduped: true,
+        approval_id: row.approval_id,
+        decision: row.mapped_decision,
+      });
+    }
+
+    const stream =
+      approval.room_id != null
+        ? { stream_type: "room" as const, stream_id: approval.room_id }
+        : { stream_type: "workspace" as const, stream_id: workspace_id };
+
+    const event = await appendToStream(pool, {
+      event_id: randomUUID(),
+      event_type: "approval.decided",
+      event_version: 1,
+      occurred_at: now,
+      workspace_id,
+      room_id: approval.room_id ?? undefined,
+      thread_id: approval.thread_id ?? undefined,
+      run_id: approval.run_id ?? undefined,
+      step_id: approval.step_id ?? undefined,
+      actor: { actor_type: "user", actor_id },
+      stream,
+      correlation_id,
+      causation_id: approval.last_event_id ?? undefined,
+      data: {
+        approval_id,
+        decision,
+        reason:
+          reason ??
+          `discord_emoji:${emoji}`,
+        source: {
+          transport: "discord",
+          discord_message_id,
+          reply_to_discord_message_id,
+          emoji,
+        },
+      },
+      policy_context: {},
+      model_context: {},
+      display: {},
+    });
+
+    await applyApprovalEvent(pool, event as ApprovalEventV1);
+    await pool.query(
+      `UPDATE integ_discord_emoji_decisions
+       SET event_id = $3
+       WHERE workspace_id = $1
+         AND discord_message_id = $2`,
+      [workspace_id, discord_message_id, event.event_id],
+    );
+
+    return reply.code(200).send({
+      ok: true,
+      deduped: false,
+      approval_id,
+      decision,
+    });
   });
 
   app.get<{

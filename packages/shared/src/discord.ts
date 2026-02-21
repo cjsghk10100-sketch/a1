@@ -90,6 +90,22 @@ export interface DiscordParseEventLinesResultV1 {
   invalid_count: number;
 }
 
+export interface DiscordEmojiDecisionMapV1 {
+  discord_message_id: string;
+  reply_to_discord_message_id: string;
+  emoji: string;
+  actor_discord_id?: string;
+  actor_name?: string;
+  reason?: string;
+}
+
+export interface DiscordEmojiDecisionMapResultV1 {
+  ok: boolean;
+  deduped: boolean;
+  approval_id: string;
+  decision: "approve" | "deny" | "hold";
+}
+
 export interface DiscordChannelMappedDataV1 {
   mapping_id: string;
   room_id: string;
