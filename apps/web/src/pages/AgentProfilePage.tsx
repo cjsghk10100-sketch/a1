@@ -475,6 +475,7 @@ export function AgentProfilePage(): JSX.Element {
   const agentOnboardingWorkByIdRef = useRef<Record<string, number>>({});
 
   const [agentId, setAgentId] = useState<string>(() => localStorage.getItem(agentStorageKey) ?? "");
+  const activeAgentIdRef = useRef<string>(agentId);
   const [manualAgentId, setManualAgentId] = useState<string>("");
   const [agentFilterQuery, setAgentFilterQuery] = useState<string>("");
   const [operatorActorId, setOperatorActorId] = useState<string>(
@@ -645,6 +646,10 @@ export function AgentProfilePage(): JSX.Element {
   const [autonomyApproveLoading, setAutonomyApproveLoading] = useState<boolean>(false);
   const [autonomyApproveError, setAutonomyApproveError] = useState<string | null>(null);
   const [autonomyApproveResult, setAutonomyApproveResult] = useState<AutonomyApproveResponseV1 | null>(null);
+
+  function isStillActiveAgent(nextAgentId: string): boolean {
+    return activeAgentIdRef.current.trim() === nextAgentId.trim();
+  }
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
   const scopeUnion = useMemo(() => unionScopes(tokens), [tokens]);
@@ -1169,6 +1174,7 @@ export function AgentProfilePage(): JSX.Element {
 
   useEffect(() => {
     localStorage.setItem(agentStorageKey, agentId);
+    activeAgentIdRef.current = agentId;
 
     setAgentMeta(null);
     setAgentMetaError(null);
@@ -1470,10 +1476,13 @@ export function AgentProfilePage(): JSX.Element {
     setApprovalRecommendationError(null);
     try {
       const res = await getAgentApprovalRecommendation(agent_id);
+      if (!isStillActiveAgent(agent_id)) return;
       setApprovalRecommendationData(res);
     } catch (e) {
+      if (!isStillActiveAgent(agent_id)) return;
       setApprovalRecommendationError(toErrorCode(e));
     } finally {
+      if (!isStillActiveAgent(agent_id)) return;
       setApprovalRecommendationLoading(false);
     }
   }
@@ -1497,10 +1506,13 @@ export function AgentProfilePage(): JSX.Element {
         subject_principal_id,
         limit: 300,
       });
+      if (!isStillActiveAgent(agent_id)) return;
       setChangeEvents(rows);
     } catch (e) {
+      if (!isStillActiveAgent(agent_id)) return;
       setChangeEventsError(toErrorCode(e));
     } finally {
+      if (!isStillActiveAgent(agent_id)) return;
       setChangeEventsLoading(false);
     }
   }
@@ -1543,14 +1555,17 @@ export function AgentProfilePage(): JSX.Element {
     setOnboardingStatusError(null);
     try {
       const status = await getAgentSkillOnboardingStatus(nextAgentId);
-      setOnboardingStatus(status);
       setAgentOnboardingWorkById((prev) => ({
         ...prev,
         [nextAgentId]: onboardingWorkCount(status.summary),
       }));
+      if (!isStillActiveAgent(nextAgentId)) return;
+      setOnboardingStatus(status);
     } catch (e) {
+      if (!isStillActiveAgent(nextAgentId)) return;
       setOnboardingStatusError(toErrorCode(e));
     } finally {
+      if (!isStillActiveAgent(nextAgentId)) return;
       setOnboardingStatusLoading(false);
     }
   }
@@ -1682,6 +1697,7 @@ export function AgentProfilePage(): JSX.Element {
       listAgentSkills({ agent_id, limit: 50 }),
       listAgentSkillAssessments({ agent_id, limit: 100 }),
     ]);
+    if (!isStillActiveAgent(agent_id)) return;
     setTrust(trustRes);
     setSkills(skillsRes);
     setAssessments(assessmentsRes);
