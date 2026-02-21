@@ -1817,22 +1817,19 @@ export function AgentProfilePage(): JSX.Element {
   }, [agentId, principalId]);
 
   const filteredAgents = useMemo(() => {
-    const query = agentFilterQuery.trim().toLowerCase();
-    if (!query) return agents;
-
-    const filtered = agents.filter((agent) => {
-      const name = agent.display_name.toLowerCase();
-      const id = agent.agent_id.toLowerCase();
-      return name.includes(query) || id.includes(query);
-    });
-
     const selected = agentId.trim();
-    if (selected && !filtered.some((agent) => agent.agent_id === selected)) {
-      const selectedAgent = agents.find((agent) => agent.agent_id === selected);
-      if (selectedAgent) filtered.unshift(selectedAgent);
+    if (!selected) return agents;
+
+    if (agents.some((agent) => agent.agent_id === selected)) {
+      return agents;
     }
-    return filtered;
-  }, [agents, agentFilterQuery, agentId]);
+
+    if (agentMeta && agentMeta.agent_id === selected) {
+      return [agentMeta, ...agents];
+    }
+
+    return agents;
+  }, [agents, agentId, agentMeta]);
 
   const agentOptions = useMemo(() => {
     return filteredAgents.map((a) => ({
