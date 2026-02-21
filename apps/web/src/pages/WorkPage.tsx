@@ -494,14 +494,21 @@ export function WorkPage(): JSX.Element {
     }
   }
 
-  function selectStepsRunForRoom(targetRoomId: string, runId: string): void {
+  function selectStepsRunForRoom(targetRoomId: string, runId: string, options?: { anchorRunId?: string }): void {
     const room = targetRoomId.trim();
     const run = runId.trim();
     if (!room || !run) return;
-    // Always persist by room so async completions update the right room slot.
-    // In-memory state is still guarded to the currently visible room.
+    const isCurrentRoom = roomIdRef.current === room;
+    const anchorRunId = options?.anchorRunId?.trim() ?? "";
+    if (isCurrentRoom && anchorRunId) {
+      const currentRunId = stepsRunIdRef.current.trim();
+      const anchorStillActive = currentRunId === anchorRunId || currentRunId === "" || currentRunId === run;
+      if (!anchorStillActive) return;
+    }
+    // Persist by room to keep room-scoped defaults, but do not overwrite an explicitly changed
+    // in-memory selection when an async action resolves with a stale anchor.
     saveStepsRunId(room, run);
-    if (roomIdRef.current === room) {
+    if (isCurrentRoom) {
       setStepsRunId(run);
     }
   }
@@ -521,6 +528,7 @@ export function WorkPage(): JSX.Element {
   async function submitCreateRun(startImmediately: boolean): Promise<void> {
     const nextRoomId = roomId.trim();
     if (!nextRoomId) return;
+    const selectionAnchor = stepsRunIdRef.current.trim();
     const requestId = createRunRequestRef.current + 1;
     createRunRequestRef.current = requestId;
 
@@ -580,7 +588,7 @@ export function WorkPage(): JSX.Element {
 
       await reloadRuns(nextRoomId);
       // Ensure the next actions (steps/tool calls/artifacts) default to the newly created run.
-      selectStepsRunForRoom(nextRoomId, res.run_id);
+      selectStepsRunForRoom(nextRoomId, res.run_id, { anchorRunId: selectionAnchor });
       if (createRunRequestRef.current === requestId) {
         setCreateRunState("idle");
       }
@@ -591,7 +599,7 @@ export function WorkPage(): JSX.Element {
         } catch {
           // Ignore secondary reload errors and keep the primary failure code.
         }
-        selectStepsRunForRoom(nextRoomId, createdRun);
+        selectStepsRunForRoom(nextRoomId, createdRun, { anchorRunId: selectionAnchor });
       }
       if (createRunRequestRef.current === requestId) {
         setCreateRunError(toErrorCode(e));
@@ -1495,6 +1503,7 @@ export function WorkPage(): JSX.Element {
                                 void (async () => {
                                   const nextRoomId = roomId.trim();
                                   if (!nextRoomId) return;
+                                  const selectionAnchor = stepsRunIdRef.current.trim();
                                   const requestId = runActionRequestRef.current + 1;
                                   runActionRequestRef.current = requestId;
                                   if (roomIdRef.current === nextRoomId) {
@@ -1504,7 +1513,7 @@ export function WorkPage(): JSX.Element {
                                   try {
                                     await startRun(r.run_id);
                                     await reloadRuns(nextRoomId);
-                                    selectStepsRunForRoom(nextRoomId, r.run_id);
+                                    selectStepsRunForRoom(nextRoomId, r.run_id, { anchorRunId: selectionAnchor });
                                   } catch (e) {
                                     if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
                                       setRunActionError(toErrorCode(e));
@@ -1531,6 +1540,7 @@ export function WorkPage(): JSX.Element {
                                   void (async () => {
                                     const nextRoomId = roomId.trim();
                                     if (!nextRoomId) return;
+                                    const selectionAnchor = stepsRunIdRef.current.trim();
 
                                     if (roomIdRef.current === nextRoomId) {
                                       setRunActionError(null);
@@ -1544,7 +1554,9 @@ export function WorkPage(): JSX.Element {
                                       try {
                                         payload.output = JSON.parse(rawOutput) as unknown;
                                       } catch {
-                                        setRunActionError("invalid_json");
+                                        if (roomIdRef.current === nextRoomId) {
+                                          setRunActionError("invalid_json");
+                                        }
                                         return;
                                       }
                                     }
@@ -1557,7 +1569,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await completeRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
-                                      selectStepsRunForRoom(nextRoomId, r.run_id);
+                                      selectStepsRunForRoom(nextRoomId, r.run_id, { anchorRunId: selectionAnchor });
                                     } catch (e) {
                                       if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
                                         setRunActionError(toErrorCode(e));
@@ -1580,6 +1592,7 @@ export function WorkPage(): JSX.Element {
                                   void (async () => {
                                     const nextRoomId = roomId.trim();
                                     if (!nextRoomId) return;
+                                    const selectionAnchor = stepsRunIdRef.current.trim();
 
                                     if (roomIdRef.current === nextRoomId) {
                                       setRunActionError(null);
@@ -1593,7 +1606,9 @@ export function WorkPage(): JSX.Element {
                                       try {
                                         payload.error = JSON.parse(rawError) as unknown;
                                       } catch {
-                                        setRunActionError("invalid_json");
+                                        if (roomIdRef.current === nextRoomId) {
+                                          setRunActionError("invalid_json");
+                                        }
                                         return;
                                       }
                                     }
@@ -1606,7 +1621,7 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await failRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
-                                      selectStepsRunForRoom(nextRoomId, r.run_id);
+                                      selectStepsRunForRoom(nextRoomId, r.run_id, { anchorRunId: selectionAnchor });
                                     } catch (e) {
                                       if (runActionRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
                                         setRunActionError(toErrorCode(e));
