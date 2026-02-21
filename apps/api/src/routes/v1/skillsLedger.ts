@@ -587,6 +587,198 @@ export async function trackAgentSkillUsageFromTool(
   }
 }
 
+async function createSkillAssessment(
+  pool: ApiDbPool,
+  input: {
+    workspace_id: string;
+    agent_id: string;
+    skill_id: string;
+    status: "passed" | "failed";
+    suite?: Record<string, unknown>;
+    results?: Record<string, unknown>;
+    score?: number;
+    run_id?: string;
+    trigger_reason?: string;
+    source_skill_package_id?: string;
+    actor_type?: ActorType;
+    actor_id?: string;
+    actor_principal_id?: string;
+    correlation_id: string;
+  },
+): Promise<{
+  assessment_id: string;
+  status: "passed" | "failed";
+  score: number;
+  reliability_score: number;
+  assessment_total: number;
+  assessment_passed: number;
+}> {
+  const actor_type = input.actor_type ?? "service";
+  const actor_id = input.actor_id ?? (actor_type === "service" ? "api" : "anon");
+  const actor_principal_id = input.actor_principal_id;
+
+  const nowIso = new Date().toISOString();
+  await ensureCatalogSkill(pool, {
+    workspace_id: input.workspace_id,
+    skill_id: input.skill_id,
+    name: input.skill_id,
+    skill_type: "workflow",
+    risk_class: "low",
+    assessment_suite: input.suite ?? {},
+    nowIso,
+  });
+
+  await upsertAgentSkillLearn(pool, {
+    workspace_id: input.workspace_id,
+    agent_id: input.agent_id,
+    skill_id: input.skill_id,
+    level: 1,
+    source_skill_package_id: input.source_skill_package_id,
+    nowIso,
+  });
+
+  const assessment_id = `asmt_${randomUUID().replaceAll("-", "")}`;
+  await pool.query(
+    `INSERT INTO sec_skill_assessments (
+       assessment_id,
+       workspace_id,
+       agent_id,
+       skill_id,
+       status,
+       trigger_reason,
+       suite,
+       results,
+       score,
+       run_id,
+       started_at,
+       ended_at,
+       created_by_type,
+       created_by_id,
+       created_by_principal_id,
+       created_at,
+       updated_at
+     ) VALUES (
+       $1,$2,$3,$4,'started',$5,$6::jsonb,$7::jsonb,NULL,$8,$9,NULL,$10,$11,$12,$9,$9
+     )`,
+    [
+      assessment_id,
+      input.workspace_id,
+      input.agent_id,
+      input.skill_id,
+      normalizeOptionalString(input.trigger_reason) ?? null,
+      JSON.stringify(input.suite ?? {}),
+      JSON.stringify({}),
+      normalizeOptionalString(input.run_id) ?? null,
+      nowIso,
+      actor_type,
+      actor_id,
+      actor_principal_id ?? null,
+    ],
+  );
+
+  await appendToStream(pool, {
+    event_id: randomUUID(),
+    event_type: "skill.assessment.started",
+    event_version: 1,
+    occurred_at: nowIso,
+    workspace_id: input.workspace_id,
+    actor: { actor_type, actor_id },
+    actor_principal_id,
+    stream: { stream_type: "workspace", stream_id: input.workspace_id },
+    correlation_id: input.correlation_id,
+    data: {
+      assessment_id,
+      agent_id: input.agent_id,
+      skill_id: input.skill_id,
+      source_skill_package_id: input.source_skill_package_id ?? null,
+    },
+    policy_context: {},
+    model_context: {},
+    display: {},
+  });
+
+  const endedAt = new Date().toISOString();
+  const score = input.score == null ? undefined : normalizeScore01(input.score, 0);
+  const finalScore = score ?? (input.status === "passed" ? 1 : 0);
+
+  await pool.query(
+    `UPDATE sec_skill_assessments
+     SET status = $5,
+         results = $6::jsonb,
+         score = $7,
+         ended_at = $8,
+         updated_at = $8
+     WHERE assessment_id = $1
+       AND workspace_id = $2
+       AND agent_id = $3
+       AND skill_id = $4
+       AND status = 'started'`,
+    [
+      assessment_id,
+      input.workspace_id,
+      input.agent_id,
+      input.skill_id,
+      input.status,
+      JSON.stringify(input.results ?? {}),
+      finalScore,
+      endedAt,
+    ],
+  );
+
+  const passedInc = input.status === "passed" ? 1 : 0;
+  const skill = await pool.query<{
+    assessment_total: number;
+    assessment_passed: number;
+    reliability_score: number;
+  }>(
+    `UPDATE sec_agent_skills
+     SET assessment_total = assessment_total + 1,
+         assessment_passed = assessment_passed + $4,
+         reliability_score = CASE
+           WHEN (assessment_total + 1) > 0
+             THEN (assessment_passed + $4)::double precision / (assessment_total + 1)::double precision
+           ELSE 0
+         END,
+         updated_at = $5
+     WHERE workspace_id = $1
+       AND agent_id = $2
+       AND skill_id = $3
+     RETURNING assessment_total, assessment_passed, reliability_score`,
+    [input.workspace_id, input.agent_id, input.skill_id, passedInc, endedAt],
+  );
+
+  await appendToStream(pool, {
+    event_id: randomUUID(),
+    event_type: input.status === "passed" ? "skill.assessment.passed" : "skill.assessment.failed",
+    event_version: 1,
+    occurred_at: endedAt,
+    workspace_id: input.workspace_id,
+    actor: { actor_type, actor_id },
+    actor_principal_id,
+    stream: { stream_type: "workspace", stream_id: input.workspace_id },
+    correlation_id: input.correlation_id,
+    data: {
+      assessment_id,
+      agent_id: input.agent_id,
+      skill_id: input.skill_id,
+      score: finalScore,
+      source_skill_package_id: input.source_skill_package_id ?? null,
+    },
+    policy_context: {},
+    model_context: {},
+    display: {},
+  });
+
+  return {
+    assessment_id,
+    status: input.status,
+    score: finalScore,
+    reliability_score: skill.rows[0]?.reliability_score ?? 0,
+    assessment_total: skill.rows[0]?.assessment_total ?? 0,
+    assessment_passed: skill.rows[0]?.assessment_passed ?? 0,
+  };
+}
+
 export async function registerSkillsLedgerRoutes(app: FastifyInstance, pool: ApiDbPool): Promise<void> {
   app.get<{
     Querystring: { limit?: string };
@@ -876,161 +1068,143 @@ export async function registerSkillsLedgerRoutes(app: FastifyInstance, pool: Api
     const actor_principal_id = normalizeOptionalString(req.body.actor_principal_id);
     const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
 
-    const nowIso = new Date().toISOString();
-    await ensureCatalogSkill(pool, {
-      workspace_id,
-      skill_id,
-      name: skill_id,
-      skill_type: "workflow",
-      risk_class: "low",
-      assessment_suite: req.body.suite ?? {},
-      nowIso,
-    });
-    await upsertAgentSkillLearn(pool, {
+    const assessed = await createSkillAssessment(pool, {
       workspace_id,
       agent_id,
       skill_id,
-      level: 1,
-      nowIso,
+      status: req.body.status,
+      suite: req.body.suite ?? {},
+      results: req.body.results ?? {},
+      score: req.body.score,
+      run_id: req.body.run_id,
+      trigger_reason: req.body.trigger_reason,
+      actor_type,
+      actor_id,
+      actor_principal_id,
+      correlation_id,
     });
 
-    const assessment_id = `asmt_${randomUUID().replaceAll("-", "")}`;
-    await pool.query(
-      `INSERT INTO sec_skill_assessments (
-         assessment_id,
-         workspace_id,
-         agent_id,
-         skill_id,
-         status,
-         trigger_reason,
-         suite,
-         results,
-         score,
-         run_id,
-         started_at,
-         ended_at,
-         created_by_type,
-         created_by_id,
-         created_by_principal_id,
-         created_at,
-         updated_at
-       ) VALUES (
-         $1,$2,$3,$4,'started',$5,$6::jsonb,$7::jsonb,NULL,$8,$9,NULL,$10,$11,$12,$9,$9
-       )`,
-      [
-        assessment_id,
+    return reply.code(201).send(assessed);
+  });
+
+  app.post<{
+    Params: { agentId: string };
+    Body: {
+      limit?: number;
+      only_unassessed?: boolean;
+      actor_type?: ActorType;
+      actor_id?: string;
+      actor_principal_id?: string;
+      correlation_id?: string;
+    };
+  }>("/v1/agents/:agentId/skills/assess-imported", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const agent = await getAgent(pool, agent_id);
+    if (!agent) return reply.code(404).send({ error: "agent_not_found" });
+
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+    const actor_principal_id = normalizeOptionalString(req.body.actor_principal_id);
+    const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
+    const onlyUnassessed = req.body.only_unassessed !== false;
+    const limit = parseLimit(req.body.limit);
+
+    const candidates = await pool.query<{
+      skill_id: string;
+      skill_package_id: string;
+    }>(
+      `SELECT DISTINCT ON (sp.skill_id)
+         sp.skill_id,
+         asp.skill_package_id
+       FROM sec_agent_skill_packages asp
+       JOIN sec_skill_packages sp
+         ON sp.skill_package_id = asp.skill_package_id
+       WHERE sp.workspace_id = $1
+         AND asp.agent_id = $2
+         AND asp.verification_status = 'verified'
+       ORDER BY sp.skill_id ASC, asp.updated_at DESC, asp.skill_package_id DESC
+       LIMIT $3`,
+      [workspace_id, agent.agent_id, limit],
+    );
+
+    const skillIds = candidates.rows.map((row) => row.skill_id);
+    const existingMap = new Map<string, number>();
+    if (skillIds.length) {
+      const existing = await pool.query<{ skill_id: string; assessment_total: number }>(
+        `SELECT skill_id, assessment_total
+         FROM sec_agent_skills
+         WHERE workspace_id = $1
+           AND agent_id = $2
+           AND skill_id = ANY($3::text[])`,
+        [workspace_id, agent.agent_id, skillIds],
+      );
+      for (const row of existing.rows) existingMap.set(row.skill_id, row.assessment_total);
+    }
+
+    const items: Array<{
+      skill_id: string;
+      skill_package_id: string;
+      status: "passed";
+      assessment_id?: string;
+      skipped_reason?: "already_assessed";
+    }> = [];
+    let assessed = 0;
+    let skipped = 0;
+
+    for (const row of candidates.rows) {
+      const already = (existingMap.get(row.skill_id) ?? 0) > 0;
+      if (onlyUnassessed && already) {
+        skipped += 1;
+        items.push({
+          skill_id: row.skill_id,
+          skill_package_id: row.skill_package_id,
+          status: "passed",
+          skipped_reason: "already_assessed",
+        });
+        continue;
+      }
+
+      const res = await createSkillAssessment(pool, {
         workspace_id,
-        agent_id,
-        skill_id,
-        normalizeOptionalString(req.body.trigger_reason) ?? null,
-        JSON.stringify(req.body.suite ?? {}),
-        JSON.stringify({}),
-        normalizeOptionalString(req.body.run_id) ?? null,
-        nowIso,
+        agent_id: agent.agent_id,
+        skill_id: row.skill_id,
+        status: "passed",
+        suite: {
+          source: "onboarding_import",
+          verification_status: "verified",
+        },
+        results: {
+          source_skill_package_id: row.skill_package_id,
+          auto_assessed: true,
+        },
+        score: 1,
+        trigger_reason: "onboarding_import_verification",
+        source_skill_package_id: row.skill_package_id,
         actor_type,
         actor_id,
-        actor_principal_id ?? null,
-      ],
-    );
+        actor_principal_id,
+        correlation_id,
+      });
+      assessed += 1;
+      items.push({
+        skill_id: row.skill_id,
+        skill_package_id: row.skill_package_id,
+        status: "passed",
+        assessment_id: res.assessment_id,
+      });
+    }
 
-    await appendToStream(pool, {
-      event_id: randomUUID(),
-      event_type: "skill.assessment.started",
-      event_version: 1,
-      occurred_at: nowIso,
-      workspace_id,
-      actor: { actor_type, actor_id },
-      actor_principal_id,
-      stream: { stream_type: "workspace", stream_id: workspace_id },
-      correlation_id,
-      data: {
-        assessment_id,
-        agent_id,
-        skill_id,
+    return reply.code(200).send({
+      summary: {
+        total_candidates: candidates.rowCount,
+        assessed,
+        skipped,
       },
-      policy_context: {},
-      model_context: {},
-      display: {},
-    });
-
-    const endedAt = new Date().toISOString();
-    const score = req.body.score == null ? undefined : normalizeScore01(req.body.score, 0);
-    const finalScore = score ?? (req.body.status === "passed" ? 1 : 0);
-
-    await pool.query(
-      `UPDATE sec_skill_assessments
-       SET status = $5,
-           results = $6::jsonb,
-           score = $7,
-           ended_at = $8,
-           updated_at = $8
-       WHERE assessment_id = $1
-         AND workspace_id = $2
-         AND agent_id = $3
-         AND skill_id = $4
-         AND status = 'started'`,
-      [
-        assessment_id,
-        workspace_id,
-        agent_id,
-        skill_id,
-        req.body.status,
-        JSON.stringify(req.body.results ?? {}),
-        finalScore,
-        endedAt,
-      ],
-    );
-
-    const passedInc = req.body.status === "passed" ? 1 : 0;
-    const skill = await pool.query<{
-      assessment_total: number;
-      assessment_passed: number;
-      reliability_score: number;
-    }>(
-      `UPDATE sec_agent_skills
-       SET assessment_total = assessment_total + 1,
-           assessment_passed = assessment_passed + $4,
-           reliability_score = CASE
-             WHEN (assessment_total + 1) > 0
-               THEN (assessment_passed + $4)::double precision / (assessment_total + 1)::double precision
-             ELSE 0
-           END,
-           updated_at = $5
-       WHERE workspace_id = $1
-         AND agent_id = $2
-         AND skill_id = $3
-       RETURNING assessment_total, assessment_passed, reliability_score`,
-      [workspace_id, agent_id, skill_id, passedInc, endedAt],
-    );
-
-    await appendToStream(pool, {
-      event_id: randomUUID(),
-      event_type: req.body.status === "passed" ? "skill.assessment.passed" : "skill.assessment.failed",
-      event_version: 1,
-      occurred_at: endedAt,
-      workspace_id,
-      actor: { actor_type, actor_id },
-      actor_principal_id,
-      stream: { stream_type: "workspace", stream_id: workspace_id },
-      correlation_id,
-      data: {
-        assessment_id,
-        agent_id,
-        skill_id,
-        score: finalScore,
-      },
-      policy_context: {},
-      model_context: {},
-      display: {},
-    });
-
-    return reply.code(201).send({
-      assessment_id,
-      status: req.body.status,
-      score: finalScore,
-      reliability_score: skill.rows[0]?.reliability_score ?? 0,
-      assessment_total: skill.rows[0]?.assessment_total ?? 0,
-      assessment_passed: skill.rows[0]?.assessment_passed ?? 0,
+      items,
     });
   });
 }

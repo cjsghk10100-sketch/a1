@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import type {
   AgentRecordV1,
+  AgentSkillAssessImportedResponseV1,
   AgentSkillImportResponseV1,
   AutonomyApproveResponseV1,
   AutonomyRecommendationV1,
@@ -26,6 +27,7 @@ import type {
   RegisteredAgent,
 } from "../api/agents";
 import {
+  assessImportedAgentSkills,
   approveAutonomyUpgrade,
   getAgent,
   getAgentApprovalRecommendation,
@@ -450,6 +452,10 @@ export function AgentProfilePage(): JSX.Element {
   const [skillImportVerifyErrors, setSkillImportVerifyErrors] = useState<
     Array<{ skill_package_id: string; error_code: string }>
   >([]);
+  const [skillImportAssessLoading, setSkillImportAssessLoading] = useState<boolean>(false);
+  const [skillImportAssessError, setSkillImportAssessError] = useState<string | null>(null);
+  const [skillImportAssessResult, setSkillImportAssessResult] =
+    useState<AgentSkillAssessImportedResponseV1 | null>(null);
   const [autoVerifyPendingOnImport, setAutoVerifyPendingOnImport] = useState<boolean>(true);
 
   const selectedAgent = useMemo(() => agents.find((a) => a.agent_id === agentId) ?? null, [agents, agentId]);
@@ -1059,6 +1065,9 @@ export function AgentProfilePage(): JSX.Element {
     setSkillImportVerifyErrors([]);
     setSkillImportVerifyProgress(null);
     setSkillImportVerifyLoading(false);
+    setSkillImportAssessLoading(false);
+    setSkillImportAssessError(null);
+    setSkillImportAssessResult(null);
 
     setTrust(null);
     setTokens([]);
@@ -1397,6 +1406,41 @@ export function AgentProfilePage(): JSX.Element {
     if (!skillImportResult) return;
     const pendingIds = pendingImportPackageIds;
     await verifyPendingSkillPackageIds(pendingIds);
+  }
+
+  async function assessImportedSkillsFromImport(): Promise<void> {
+    const agent_id = agentId.trim();
+    if (!agent_id || !skillImportResult) return;
+
+    setSkillImportAssessLoading(true);
+    setSkillImportAssessError(null);
+    setSkillImportAssessResult(null);
+    try {
+      const actor_id = operatorActorId.trim() || "anon";
+      const actor_principal_id = await ensureOperatorPrincipalId();
+      const assessed = await assessImportedAgentSkills(agent_id, {
+        actor_type: "user",
+        actor_id,
+        actor_principal_id,
+        only_unassessed: true,
+        limit: 200,
+      });
+      setSkillImportAssessResult(assessed);
+
+      const [trustRes, skillsRes, assessmentsRes] = await Promise.all([
+        getAgentTrust(agent_id),
+        listAgentSkills({ agent_id, limit: 50 }),
+        listAgentSkillAssessments({ agent_id, limit: 100 }),
+      ]);
+      setTrust(trustRes);
+      setSkills(skillsRes);
+      setAssessments(assessmentsRes);
+      await reloadApprovalRecommendation(agent_id);
+    } catch (e) {
+      setSkillImportAssessError(toErrorCode(e));
+    } finally {
+      setSkillImportAssessLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -2135,6 +2179,9 @@ export function AgentProfilePage(): JSX.Element {
                       setSkillImportLoading(true);
                       setSkillImportError(null);
                       setSkillImportResult(null);
+                      setSkillImportAssessError(null);
+                      setSkillImportAssessResult(null);
+                      setSkillImportAssessLoading(false);
                       setSkillImportVerifyErrors([]);
                       setSkillImportVerifyProgress(null);
                       setSkillImportVerifyLoading(false);
@@ -2186,6 +2233,9 @@ export function AgentProfilePage(): JSX.Element {
                     setSkillImportJson("");
                     setSkillImportError(null);
                     setSkillImportResult(null);
+                    setSkillImportAssessError(null);
+                    setSkillImportAssessResult(null);
+                    setSkillImportAssessLoading(false);
                     setSkillImportVerifyErrors([]);
                     setSkillImportVerifyProgress(null);
                     setSkillImportVerifyLoading(false);
@@ -2251,6 +2301,16 @@ export function AgentProfilePage(): JSX.Element {
                       >
                         {t("agent_profile.onboarding.button_verify_pending")}
                       </button>
+                      <button
+                        type="button"
+                        className="ghostButton"
+                        disabled={
+                          skillImportAssessLoading || skillImportVerifyLoading || skillImportResult.summary.verified === 0
+                        }
+                        onClick={() => void assessImportedSkillsFromImport()}
+                      >
+                        {t("agent_profile.onboarding.button_assess_verified")}
+                      </button>
                     </div>
 
                     {skillImportVerifyProgress ? (
@@ -2271,11 +2331,39 @@ export function AgentProfilePage(): JSX.Element {
                         {t("agent_profile.onboarding.verify_errors", { count: skillImportVerifyErrors.length })}
                       </div>
                     ) : null}
+
+                    {skillImportAssessLoading ? (
+                      <div className="placeholder" style={{ marginTop: 10 }}>
+                        {t("agent_profile.onboarding.assess_loading")}
+                      </div>
+                    ) : null}
+
+                    {skillImportAssessError ? (
+                      <div className="errorBox" style={{ marginTop: 10 }}>
+                        {t("error.load_failed", { code: skillImportAssessError })}
+                      </div>
+                    ) : null}
+
+                    {skillImportAssessResult ? (
+                      <div className="muted" style={{ marginTop: 10 }}>
+                        {t("agent_profile.onboarding.assess_summary_line", {
+                          total: skillImportAssessResult.summary.total_candidates,
+                          assessed: skillImportAssessResult.summary.assessed,
+                          skipped: skillImportAssessResult.summary.skipped,
+                        })}
+                      </div>
+                    ) : null}
                   </div>
 
                   <details className="advancedDetails">
                     <summary className="advancedSummary">{t("common.advanced")}</summary>
-                    <JsonView value={{ import_result: skillImportResult, bulk_verify_errors: skillImportVerifyErrors }} />
+                    <JsonView
+                      value={{
+                        import_result: skillImportResult,
+                        bulk_verify_errors: skillImportVerifyErrors,
+                        bulk_assess_result: skillImportAssessResult,
+                      }}
+                    />
                   </details>
                 </>
               ) : null}

@@ -91,3 +91,27 @@ export interface AgentSkillReviewPendingResponseV1 {
     reason?: string;
   }>;
 }
+
+export interface AgentSkillAssessImportedRequestV1 {
+  limit?: number;
+  only_unassessed?: boolean;
+  actor_type?: ActorType;
+  actor_id?: string;
+  actor_principal_id?: string;
+  correlation_id?: string;
+}
+
+export interface AgentSkillAssessImportedResponseV1 {
+  summary: {
+    total_candidates: number;
+    assessed: number;
+    skipped: number;
+  };
+  items: Array<{
+    skill_id: string;
+    skill_package_id: string;
+    status: "passed";
+    assessment_id?: string;
+    skipped_reason?: "already_assessed";
+  }>;
+}

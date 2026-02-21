@@ -393,9 +393,13 @@ export const resources = {
       "agent_profile.onboarding.no_pending_from_import": "No pending packages in this import.",
       "agent_profile.onboarding.pending_from_import": "{{count}} pending from this import",
       "agent_profile.onboarding.button_verify_pending": "Verify pending",
+      "agent_profile.onboarding.button_assess_verified": "Assess verified",
       "agent_profile.onboarding.verify_progress": "Verifying {{done}} / {{total}}…",
       "agent_profile.onboarding.verify_done": "Bulk verify finished.",
       "agent_profile.onboarding.verify_errors": "Some packages failed to verify ({{count}}).",
+      "agent_profile.onboarding.assess_loading": "Assessing verified skills…",
+      "agent_profile.onboarding.assess_summary_line":
+        "assessment candidates {{total}} · assessed {{assessed}} · skipped {{skipped}}",
 
       "agent_profile.tokens_active": "{{active}} active / {{total}} total",
       "agent_profile.principal_missing": "Principal ID is missing. Pick an agent from the list to load capability tokens.",
@@ -964,9 +968,13 @@ export const resources = {
       "agent_profile.onboarding.no_pending_from_import": "이번 가져오기에 대기 패키지가 없습니다.",
       "agent_profile.onboarding.pending_from_import": "이번 가져오기에서 대기 {{count}}개",
       "agent_profile.onboarding.button_verify_pending": "대기 일괄 검증",
+      "agent_profile.onboarding.button_assess_verified": "검증됨 일괄 평가",
       "agent_profile.onboarding.verify_progress": "검증 중 {{done}} / {{total}}…",
       "agent_profile.onboarding.verify_done": "일괄 검증 완료",
       "agent_profile.onboarding.verify_errors": "일부 패키지 검증 실패 ({{count}}).",
+      "agent_profile.onboarding.assess_loading": "검증된 스킬 평가 중…",
+      "agent_profile.onboarding.assess_summary_line":
+        "평가 대상 {{total}} · 평가 완료 {{assessed}} · 건너뜀 {{skipped}}",
 
       "agent_profile.tokens_active": "활성 {{active}} / 전체 {{total}}",
       "agent_profile.principal_missing": "프린시펄 ID가 없습니다. 목록에서 에이전트를 선택하면 권한 토큰을 불러올 수 있습니다.",

@@ -173,6 +173,8 @@ async function main(): Promise<void> {
 
     const pendingImported = imported.items.find((item) => item.status === "pending");
     assert.ok(pendingImported);
+    const verifiedImported = imported.items.find((item) => item.status === "verified");
+    assert.ok(verifiedImported);
 
     const reviewed = await postJson<{
       summary: { total: number; verified: number; quarantined: number };
@@ -195,6 +197,40 @@ async function main(): Promise<void> {
     assert.equal(reviewed.items[0].skill_package_id, pendingImported?.skill_package_id);
     assert.equal(reviewed.items[0].status, "quarantined");
     assert.equal(reviewed.items[0].reason, "verify_signature_required");
+
+    const assessedImported = await postJson<{
+      summary: { total_candidates: number; assessed: number; skipped: number };
+      items: Array<{
+        skill_id: string;
+        skill_package_id: string;
+        status: "passed";
+        assessment_id?: string;
+        skipped_reason?: "already_assessed";
+      }>;
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered.agent_id)}/skills/assess-imported`,
+      {},
+      workspaceHeader,
+    );
+    assert.equal(assessedImported.summary.total_candidates, 1);
+    assert.equal(assessedImported.summary.assessed, 1);
+    assert.equal(assessedImported.summary.skipped, 0);
+    assert.equal(assessedImported.items.length, 1);
+    assert.equal(assessedImported.items[0].skill_package_id, verifiedImported?.skill_package_id);
+    assert.ok(assessedImported.items[0].assessment_id);
+
+    const assessedImportedAgain = await postJson<{
+      summary: { total_candidates: number; assessed: number; skipped: number };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered.agent_id)}/skills/assess-imported`,
+      {},
+      workspaceHeader,
+    );
+    assert.equal(assessedImportedAgain.summary.total_candidates, 1);
+    assert.equal(assessedImportedAgain.summary.assessed, 0);
+    assert.equal(assessedImportedAgain.summary.skipped, 1);
 
     const agentRow = await db.query<{ principal_id: string }>(
       "SELECT principal_id FROM sec_agents WHERE agent_id = $1",
@@ -223,6 +259,35 @@ async function main(): Promise<void> {
       linkRows.rows.filter((r) => r.verification_status === "quarantined").length,
       2,
     );
+
+    const assessments = await db.query<{ skill_id: string; status: string }>(
+      `SELECT skill_id, status
+       FROM sec_skill_assessments
+       WHERE workspace_id = $1
+         AND agent_id = $2`,
+      ["ws_contract", registered.agent_id],
+    );
+    assert.equal(assessments.rowCount, 1);
+    assert.equal(assessments.rows[0].skill_id, verifiedImported?.skill_id);
+    assert.equal(assessments.rows[0].status, "passed");
+
+    const assessedSkill = await db.query<{
+      skill_id: string;
+      source_skill_package_id: string | null;
+      assessment_total: number;
+      assessment_passed: number;
+    }>(
+      `SELECT skill_id, source_skill_package_id, assessment_total, assessment_passed
+       FROM sec_agent_skills
+       WHERE workspace_id = $1
+         AND agent_id = $2`,
+      ["ws_contract", registered.agent_id],
+    );
+    assert.equal(assessedSkill.rowCount, 1);
+    assert.equal(assessedSkill.rows[0].skill_id, verifiedImported?.skill_id);
+    assert.equal(assessedSkill.rows[0].source_skill_package_id, verifiedImported?.skill_package_id);
+    assert.equal(assessedSkill.rows[0].assessment_total, 1);
+    assert.equal(assessedSkill.rows[0].assessment_passed, 1);
 
     const registeredEvent = await db.query<{ event_type: string }>(
       `SELECT event_type
