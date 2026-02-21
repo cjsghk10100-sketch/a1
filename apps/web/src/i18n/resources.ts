@@ -402,6 +402,13 @@ export const resources = {
       "agent_profile.onboarding.assess_loading": "Assessing verified skills…",
       "agent_profile.onboarding.assess_summary_line":
         "assessment candidates {{total}} · assessed {{assessed}} · skipped {{skipped}}",
+      "agent_profile.onboarding.status_title": "Onboarding status",
+      "agent_profile.onboarding.status.total_linked": "linked",
+      "agent_profile.onboarding.status.verified": "verified",
+      "agent_profile.onboarding.status.pending": "pending",
+      "agent_profile.onboarding.status.quarantined": "quarantined",
+      "agent_profile.onboarding.status.verified_assessed": "verified assessed",
+      "agent_profile.onboarding.status.verified_unassessed": "verified unassessed",
 
       "agent_profile.tokens_active": "{{active}} active / {{total}} total",
       "agent_profile.principal_missing": "Principal ID is missing. Pick an agent from the list to load capability tokens.",
@@ -979,6 +986,13 @@ export const resources = {
       "agent_profile.onboarding.assess_loading": "검증된 스킬 평가 중…",
       "agent_profile.onboarding.assess_summary_line":
         "평가 대상 {{total}} · 평가 완료 {{assessed}} · 건너뜀 {{skipped}}",
+      "agent_profile.onboarding.status_title": "온보딩 상태",
+      "agent_profile.onboarding.status.total_linked": "연결 수",
+      "agent_profile.onboarding.status.verified": "검증됨",
+      "agent_profile.onboarding.status.pending": "대기",
+      "agent_profile.onboarding.status.quarantined": "격리",
+      "agent_profile.onboarding.status.verified_assessed": "검증+평가 완료",
+      "agent_profile.onboarding.status.verified_unassessed": "검증됨 미평가",
 
       "agent_profile.tokens_active": "활성 {{active}} / 전체 {{total}}",
       "agent_profile.principal_missing": "프린시펄 ID가 없습니다. 목록에서 에이전트를 선택하면 권한 토큰을 불러올 수 있습니다.",

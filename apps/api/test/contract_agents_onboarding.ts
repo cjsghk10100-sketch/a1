@@ -79,6 +79,24 @@ async function postJson<T>(
   return JSON.parse(text) as T;
 }
 
+async function getJson<T>(
+  baseUrl: string,
+  urlPath: string,
+  headers?: Record<string, string>,
+): Promise<T> {
+  const res = await fetch(`${baseUrl}${urlPath}`, {
+    method: "GET",
+    headers: {
+      ...(headers ?? {}),
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`GET ${urlPath} failed: ${res.status} ${text}`);
+  }
+  return JSON.parse(text) as T;
+}
+
 async function main(): Promise<void> {
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
@@ -231,6 +249,26 @@ async function main(): Promise<void> {
     assert.equal(assessedImportedAgain.summary.total_candidates, 1);
     assert.equal(assessedImportedAgain.summary.assessed, 0);
     assert.equal(assessedImportedAgain.summary.skipped, 1);
+    const onboardingStatus = await getJson<{
+      summary: {
+        total_linked: number;
+        verified: number;
+        pending: number;
+        quarantined: number;
+        verified_assessed: number;
+        verified_unassessed: number;
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered.agent_id)}/skills/onboarding-status`,
+      workspaceHeader,
+    );
+    assert.equal(onboardingStatus.summary.total_linked, 3);
+    assert.equal(onboardingStatus.summary.verified, 1);
+    assert.equal(onboardingStatus.summary.pending, 0);
+    assert.equal(onboardingStatus.summary.quarantined, 2);
+    assert.equal(onboardingStatus.summary.verified_assessed, 1);
+    assert.equal(onboardingStatus.summary.verified_unassessed, 0);
 
     const agentRow = await db.query<{ principal_id: string }>(
       "SELECT principal_id FROM sec_agents WHERE agent_id = $1",
@@ -338,6 +376,26 @@ async function main(): Promise<void> {
     assert.equal(imported2.summary.verified, 1);
     assert.equal(imported2.summary.pending, 1);
     assert.equal(imported2.summary.quarantined, 0);
+    const onboardingStatus2Before = await getJson<{
+      summary: {
+        total_linked: number;
+        verified: number;
+        pending: number;
+        quarantined: number;
+        verified_assessed: number;
+        verified_unassessed: number;
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered2.agent_id)}/skills/onboarding-status`,
+      workspaceHeader,
+    );
+    assert.equal(onboardingStatus2Before.summary.total_linked, 2);
+    assert.equal(onboardingStatus2Before.summary.verified, 1);
+    assert.equal(onboardingStatus2Before.summary.pending, 1);
+    assert.equal(onboardingStatus2Before.summary.quarantined, 0);
+    assert.equal(onboardingStatus2Before.summary.verified_assessed, 0);
+    assert.equal(onboardingStatus2Before.summary.verified_unassessed, 1);
 
     const certify = await postJson<{
       review: {
@@ -358,6 +416,26 @@ async function main(): Promise<void> {
     assert.equal(certify.assess.summary.total_candidates, 1);
     assert.equal(certify.assess.summary.assessed, 1);
     assert.equal(certify.assess.summary.skipped, 0);
+    const onboardingStatus2After = await getJson<{
+      summary: {
+        total_linked: number;
+        verified: number;
+        pending: number;
+        quarantined: number;
+        verified_assessed: number;
+        verified_unassessed: number;
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered2.agent_id)}/skills/onboarding-status`,
+      workspaceHeader,
+    );
+    assert.equal(onboardingStatus2After.summary.total_linked, 2);
+    assert.equal(onboardingStatus2After.summary.verified, 1);
+    assert.equal(onboardingStatus2After.summary.pending, 0);
+    assert.equal(onboardingStatus2After.summary.quarantined, 1);
+    assert.equal(onboardingStatus2After.summary.verified_assessed, 1);
+    assert.equal(onboardingStatus2After.summary.verified_unassessed, 0);
 
     const certifyAgain = await postJson<{
       review: {

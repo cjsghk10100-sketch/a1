@@ -11,6 +11,7 @@ import {
   type AgentSkillCertifyImportedResponseV1,
   type AgentSkillImportCertifyRequestV1,
   type AgentSkillImportCertifyResponseV1,
+  type AgentSkillOnboardingStatusResponseV1,
   type AgentSkillImportResponseV1,
   type AgentSkillReviewPendingResponseV1,
 } from "@agentapp/shared";
@@ -227,6 +228,80 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
         quarantine_reason: row.quarantine_reason ?? undefined,
       },
     });
+  });
+
+  app.get<{
+    Params: { agentId: string };
+  }>("/v1/agents/:agentId/skills/onboarding-status", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const agent = await pool.query<{ agent_id: string }>("SELECT agent_id FROM sec_agents WHERE agent_id = $1", [
+      agent_id,
+    ]);
+    if (agent.rowCount !== 1) return reply.code(404).send({ error: "agent_not_found" });
+
+    const counts = await pool.query<{ verification_status: SkillVerificationStatusValue; cnt: number }>(
+      `SELECT asp.verification_status, COUNT(*)::int AS cnt
+       FROM sec_agent_skill_packages asp
+       JOIN sec_skill_packages sp
+         ON sp.skill_package_id = asp.skill_package_id
+       WHERE asp.agent_id = $1
+         AND sp.workspace_id = $2
+       GROUP BY asp.verification_status`,
+      [agent_id, workspace_id],
+    );
+
+    let total_linked = 0;
+    let verified = 0;
+    let pending = 0;
+    let quarantined = 0;
+    for (const row of counts.rows) {
+      const cnt = Number(row.cnt) || 0;
+      total_linked += cnt;
+      if (row.verification_status === SkillVerificationStatus.Verified) verified += cnt;
+      else if (row.verification_status === SkillVerificationStatus.Pending) pending += cnt;
+      else if (row.verification_status === SkillVerificationStatus.Quarantined) quarantined += cnt;
+    }
+
+    const verifiedSkillIdsRes = await pool.query<{ skill_id: string }>(
+      `SELECT DISTINCT asp.skill_id
+       FROM sec_agent_skill_packages asp
+       JOIN sec_skill_packages sp
+         ON sp.skill_package_id = asp.skill_package_id
+       WHERE asp.agent_id = $1
+         AND sp.workspace_id = $2
+         AND asp.verification_status = 'verified'`,
+      [agent_id, workspace_id],
+    );
+    const verifiedSkillIds = verifiedSkillIdsRes.rows.map((row) => row.skill_id);
+
+    let verified_assessed = 0;
+    if (verifiedSkillIds.length > 0) {
+      const assessedRes = await pool.query<{ cnt: number }>(
+        `SELECT COUNT(*)::int AS cnt
+         FROM sec_agent_skills
+         WHERE workspace_id = $1
+           AND agent_id = $2
+           AND assessment_total > 0
+           AND skill_id = ANY($3::text[])`,
+        [workspace_id, agent_id, verifiedSkillIds],
+      );
+      verified_assessed = Number(assessedRes.rows[0]?.cnt ?? 0);
+    }
+
+    const response: AgentSkillOnboardingStatusResponseV1 = {
+      summary: {
+        total_linked,
+        verified,
+        pending,
+        quarantined,
+        verified_assessed,
+        verified_unassessed: Math.max(verified - verified_assessed, 0),
+      },
+    };
+    return reply.code(200).send(response);
   });
 
   app.post<{

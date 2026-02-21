@@ -6,6 +6,7 @@ import type {
   AgentRecordV1,
   AgentSkillAssessImportedResponseV1,
   AgentSkillImportResponseV1,
+  AgentSkillOnboardingStatusResponseV1,
   AutonomyApproveResponseV1,
   AutonomyRecommendationV1,
   SkillPackageRecordV1,
@@ -32,6 +33,7 @@ import {
   certifyImportedAgentSkills,
   getAgent,
   getAgentApprovalRecommendation,
+  getAgentSkillOnboardingStatus,
   getAgentTrust,
   importAndCertifyAgentSkills,
   importAgentSkills,
@@ -469,6 +471,9 @@ export function AgentProfilePage(): JSX.Element {
   const [skillImportAssessError, setSkillImportAssessError] = useState<string | null>(null);
   const [skillImportAssessResult, setSkillImportAssessResult] =
     useState<AgentSkillAssessImportedResponseV1 | null>(null);
+  const [onboardingStatus, setOnboardingStatus] = useState<AgentSkillOnboardingStatusResponseV1 | null>(null);
+  const [onboardingStatusLoading, setOnboardingStatusLoading] = useState<boolean>(false);
+  const [onboardingStatusError, setOnboardingStatusError] = useState<string | null>(null);
   const [autoVerifyPendingOnImport, setAutoVerifyPendingOnImport] = useState<boolean>(() =>
     readStoredBool(autoVerifyPendingStorageKey, true),
   );
@@ -1086,6 +1091,9 @@ export function AgentProfilePage(): JSX.Element {
     setSkillImportAssessLoading(false);
     setSkillImportAssessError(null);
     setSkillImportAssessResult(null);
+    setOnboardingStatus(null);
+    setOnboardingStatusError(null);
+    setOnboardingStatusLoading(false);
 
     setTrust(null);
     setTokens([]);
@@ -1128,6 +1136,7 @@ export function AgentProfilePage(): JSX.Element {
       setChangeEventsLoading(false);
       setTokensLoading(false);
       setApprovalRecommendationLoading(false);
+      setOnboardingStatusLoading(false);
       return;
     }
     let cancelled = false;
@@ -1154,10 +1163,12 @@ export function AgentProfilePage(): JSX.Element {
     setConstraintsLoading(true);
     setMistakesLoading(true);
     setApprovalRecommendationLoading(true);
+    setOnboardingStatusLoading(true);
+    setOnboardingStatusError(null);
 
     void (async () => {
       try {
-        const [coreResult, recommendationResult] = await Promise.allSettled([
+        const [coreResult, recommendationResult, onboardingResult] = await Promise.allSettled([
           Promise.all([
             getAgentTrust(agentId),
             listAgentSkills({ agent_id: agentId, limit: 50 }),
@@ -1167,6 +1178,7 @@ export function AgentProfilePage(): JSX.Element {
             listMistakeRepeatedEvents({ agent_id: agentId, limit: 200 }),
           ]),
           getAgentApprovalRecommendation(agentId),
+          getAgentSkillOnboardingStatus(agentId),
         ]);
 
         if (cancelled) return;
@@ -1196,6 +1208,13 @@ export function AgentProfilePage(): JSX.Element {
         } else {
           setApprovalRecommendationError(toErrorCode(recommendationResult.reason));
         }
+
+        if (onboardingResult.status === "fulfilled") {
+          setOnboardingStatus(onboardingResult.value);
+          setOnboardingStatusError(null);
+        } else {
+          setOnboardingStatusError(toErrorCode(onboardingResult.reason));
+        }
       } finally {
         if (cancelled) return;
         setTrustLoading(false);
@@ -1205,6 +1224,7 @@ export function AgentProfilePage(): JSX.Element {
         setConstraintsLoading(false);
         setMistakesLoading(false);
         setApprovalRecommendationLoading(false);
+        setOnboardingStatusLoading(false);
       }
     })();
 
@@ -1349,6 +1369,27 @@ export function AgentProfilePage(): JSX.Element {
     }
   }
 
+  async function reloadOnboardingStatus(agentOverride?: string): Promise<void> {
+    const nextAgentId = (agentOverride ?? agentId).trim();
+    if (!nextAgentId) {
+      setOnboardingStatus(null);
+      setOnboardingStatusError(null);
+      setOnboardingStatusLoading(false);
+      return;
+    }
+
+    setOnboardingStatusLoading(true);
+    setOnboardingStatusError(null);
+    try {
+      const status = await getAgentSkillOnboardingStatus(nextAgentId);
+      setOnboardingStatus(status);
+    } catch (e) {
+      setOnboardingStatusError(toErrorCode(e));
+    } finally {
+      setOnboardingStatusLoading(false);
+    }
+  }
+
   async function verifyPendingSkillPackageIds(
     pendingIds: string[],
     baseResult?: AgentSkillImportResponseV1,
@@ -1426,6 +1467,7 @@ export function AgentProfilePage(): JSX.Element {
       if (autoAssessVerifiedOnImport) {
         await assessImportedSkillsFromImport(baseResult, { clearPrevious: true });
       }
+      await reloadOnboardingStatus(agent_id);
     } finally {
       setSkillImportVerifyLoading(false);
     }
@@ -1476,6 +1518,7 @@ export function AgentProfilePage(): JSX.Element {
       });
       setSkillImportAssessResult(assessed);
       await refreshAgentGrowthViews(agent_id);
+      await reloadOnboardingStatus(agent_id);
     } catch (e) {
       setSkillImportAssessError(toErrorCode(e));
     } finally {
@@ -1540,6 +1583,7 @@ export function AgentProfilePage(): JSX.Element {
 
       await reloadSkillPackages();
       await refreshAgentGrowthViews(agent_id);
+      await reloadOnboardingStatus(agent_id);
     } catch (e) {
       setSkillImportError(toErrorCode(e));
       setSkillImportAssessError(toErrorCode(e));
@@ -2209,6 +2253,60 @@ export function AgentProfilePage(): JSX.Element {
               <div className="detailTitle">{t("agent_profile.section.onboarding")}</div>
             </div>
 
+            <div className="detailSection">
+              <div className="detailSectionTitle">{t("agent_profile.onboarding.status_title")}</div>
+              <div className="timelineControls" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  disabled={onboardingStatusLoading || !agentId.trim()}
+                  onClick={() => void reloadOnboardingStatus()}
+                >
+                  {t("common.refresh")}
+                </button>
+              </div>
+
+              {onboardingStatusError ? (
+                <div className="errorBox" style={{ marginTop: 10 }}>
+                  {t("error.load_failed", { code: onboardingStatusError })}
+                </div>
+              ) : null}
+
+              {!agentId.trim() ? (
+                <div className="muted" style={{ marginTop: 10 }}>
+                  {t("common.not_available")}
+                </div>
+              ) : onboardingStatusLoading ? (
+                <div className="placeholder" style={{ marginTop: 10 }}>
+                  {t("common.loading")}
+                </div>
+              ) : onboardingStatus ? (
+                <div className="kvGrid" style={{ marginTop: 10 }}>
+                  <div className="kvKey">{t("agent_profile.onboarding.status.total_linked")}</div>
+                  <div className="kvVal mono">{onboardingStatus.summary.total_linked}</div>
+
+                  <div className="kvKey">{t("agent_profile.onboarding.status.verified")}</div>
+                  <div className="kvVal mono">{onboardingStatus.summary.verified}</div>
+
+                  <div className="kvKey">{t("agent_profile.onboarding.status.pending")}</div>
+                  <div className="kvVal mono">{onboardingStatus.summary.pending}</div>
+
+                  <div className="kvKey">{t("agent_profile.onboarding.status.quarantined")}</div>
+                  <div className="kvVal mono">{onboardingStatus.summary.quarantined}</div>
+
+                  <div className="kvKey">{t("agent_profile.onboarding.status.verified_assessed")}</div>
+                  <div className="kvVal mono">{onboardingStatus.summary.verified_assessed}</div>
+
+                  <div className="kvKey">{t("agent_profile.onboarding.status.verified_unassessed")}</div>
+                  <div className="kvVal mono">{onboardingStatus.summary.verified_unassessed}</div>
+                </div>
+              ) : (
+                <div className="muted" style={{ marginTop: 10 }}>
+                  {t("common.not_available")}
+                </div>
+              )}
+            </div>
+
             <div className="detailSectionTitle">{t("agent_profile.onboarding.register_title")}</div>
 
             <label className="fieldLabel" htmlFor="registerDisplayName">
@@ -2353,10 +2451,12 @@ export function AgentProfilePage(): JSX.Element {
                           setSkillImportAssessResult(flow.certify.assess);
                           await reloadSkillPackages();
                           await refreshAgentGrowthViews(nextAgentId);
+                          await reloadOnboardingStatus(nextAgentId);
                         } else {
                           const res = await importAgentSkills(nextAgentId, { packages: packages as any[] });
                           setSkillImportResult(res);
                           await reloadSkillPackages();
+                          await reloadOnboardingStatus(nextAgentId);
 
                           if (autoVerifyPendingOnImport) {
                             const pendingIds = res.items

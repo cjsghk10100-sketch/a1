@@ -13,6 +13,7 @@ import type {
   AgentSkillImportCertifyRequestV1,
   AgentSkillImportCertifyResponseV1,
   AgentSkillImportResponseV1,
+  AgentSkillOnboardingStatusResponseV1,
   AgentSkillReviewPendingRequestV1,
   AgentSkillReviewPendingResponseV1,
   AgentUnquarantineResponseV1,
@@ -111,6 +112,14 @@ export async function importAndCertifyAgentSkills(
   return await apiPost<AgentSkillImportCertifyResponseV1>(
     `/v1/agents/${encodeURIComponent(agent_id)}/skills/import-certify`,
     payload,
+  );
+}
+
+export async function getAgentSkillOnboardingStatus(
+  agent_id: string,
+): Promise<AgentSkillOnboardingStatusResponseV1> {
+  return await apiGet<AgentSkillOnboardingStatusResponseV1>(
+    `/v1/agents/${encodeURIComponent(agent_id)}/skills/onboarding-status`,
   );
 }
 

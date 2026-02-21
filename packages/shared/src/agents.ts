@@ -146,3 +146,14 @@ export interface AgentSkillImportCertifyResponseV1 {
   import: AgentSkillImportResponseV1;
   certify: AgentSkillCertifyImportedResponseV1;
 }
+
+export interface AgentSkillOnboardingStatusResponseV1 {
+  summary: {
+    total_linked: number;
+    verified: number;
+    pending: number;
+    quarantined: number;
+    verified_assessed: number;
+    verified_unassessed: number;
+  };
+}
