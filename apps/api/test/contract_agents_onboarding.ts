@@ -289,6 +289,96 @@ async function main(): Promise<void> {
     assert.equal(assessedSkill.rows[0].assessment_total, 1);
     assert.equal(assessedSkill.rows[0].assessment_passed, 1);
 
+    const registered2 = await postJson<{ agent_id: string; principal_id: string }>(
+      baseUrl,
+      "/v1/agents",
+      { display_name: "Imported Agent 2" },
+      workspaceHeader,
+    );
+    assert.ok(registered2.agent_id.startsWith("agt_"));
+
+    const inventory2 = {
+      packages: [
+        {
+          skill_id: `skill.certify.pending.${runSuffix}`,
+          version: "1.0.0",
+          hash_sha256: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          manifest: {
+            required_tools: ["http_client"],
+            data_access: { read: ["web"] },
+            egress_domains: ["example.org"],
+            sandbox_required: true,
+          },
+        },
+        {
+          skill_id: `skill.certify.verified.${runSuffix}`,
+          version: "1.0.0",
+          hash_sha256: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          signature: "sig_v2",
+          manifest: {
+            required_tools: ["http_client"],
+            data_access: { read: ["web"] },
+            egress_domains: ["example.org"],
+            sandbox_required: true,
+          },
+        },
+      ],
+    };
+
+    const imported2 = await postJson<{
+      summary: { total: number; verified: number; pending: number; quarantined: number };
+      items: Array<{ skill_id: string; status: string; skill_package_id: string }>;
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered2.agent_id)}/skills/import`,
+      inventory2,
+      workspaceHeader,
+    );
+    assert.equal(imported2.summary.total, 2);
+    assert.equal(imported2.summary.verified, 1);
+    assert.equal(imported2.summary.pending, 1);
+    assert.equal(imported2.summary.quarantined, 0);
+
+    const certify = await postJson<{
+      review: {
+        summary: { total: number; verified: number; quarantined: number };
+      };
+      assess: {
+        summary: { total_candidates: number; assessed: number; skipped: number };
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered2.agent_id)}/skills/certify-imported`,
+      {},
+      workspaceHeader,
+    );
+    assert.equal(certify.review.summary.total, 1);
+    assert.equal(certify.review.summary.verified, 0);
+    assert.equal(certify.review.summary.quarantined, 1);
+    assert.equal(certify.assess.summary.total_candidates, 1);
+    assert.equal(certify.assess.summary.assessed, 1);
+    assert.equal(certify.assess.summary.skipped, 0);
+
+    const certifyAgain = await postJson<{
+      review: {
+        summary: { total: number; verified: number; quarantined: number };
+      };
+      assess: {
+        summary: { total_candidates: number; assessed: number; skipped: number };
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered2.agent_id)}/skills/certify-imported`,
+      {},
+      workspaceHeader,
+    );
+    assert.equal(certifyAgain.review.summary.total, 0);
+    assert.equal(certifyAgain.review.summary.verified, 0);
+    assert.equal(certifyAgain.review.summary.quarantined, 0);
+    assert.equal(certifyAgain.assess.summary.total_candidates, 1);
+    assert.equal(certifyAgain.assess.summary.assessed, 0);
+    assert.equal(certifyAgain.assess.summary.skipped, 1);
+
     const registeredEvent = await db.query<{ event_type: string }>(
       `SELECT event_type
        FROM evt_events

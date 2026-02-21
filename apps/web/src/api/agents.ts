@@ -5,6 +5,8 @@ import type {
   AgentRecordV1,
   AgentRegisterRequestV1,
   AgentRegisterResponseV1,
+  AgentSkillCertifyImportedRequestV1,
+  AgentSkillCertifyImportedResponseV1,
   AgentSkillAssessImportedRequestV1,
   AgentSkillAssessImportedResponseV1,
   AgentSkillImportRequestV1,
@@ -116,6 +118,16 @@ export async function assessImportedAgentSkills(
 ): Promise<AgentSkillAssessImportedResponseV1> {
   return await apiPost<AgentSkillAssessImportedResponseV1>(
     `/v1/agents/${encodeURIComponent(agent_id)}/skills/assess-imported`,
+    payload,
+  );
+}
+
+export async function certifyImportedAgentSkills(
+  agent_id: string,
+  payload: AgentSkillCertifyImportedRequestV1 = {},
+): Promise<AgentSkillCertifyImportedResponseV1> {
+  return await apiPost<AgentSkillCertifyImportedResponseV1>(
+    `/v1/agents/${encodeURIComponent(agent_id)}/skills/certify-imported`,
     payload,
   );
 }

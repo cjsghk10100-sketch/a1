@@ -6,7 +6,11 @@ import {
   type ActorType,
   SkillVerificationStatus,
   type SkillVerificationStatus as SkillVerificationStatusValue,
+  type AgentSkillAssessImportedResponseV1,
+  type AgentSkillCertifyImportedRequestV1,
+  type AgentSkillCertifyImportedResponseV1,
   type AgentSkillImportResponseV1,
+  type AgentSkillReviewPendingResponseV1,
 } from "@agentapp/shared";
 
 import type { DbPool } from "../../db/pool.js";
@@ -78,6 +82,10 @@ function normalizeManifest(raw: unknown): Record<string, unknown> | null {
     egress_domains,
     sandbox_required,
   };
+}
+
+function parseJsonBody<T>(raw: string): T {
+  return JSON.parse(raw) as T;
 }
 
 function newAgentId(): string {
@@ -810,5 +818,71 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
       },
       items,
     });
+  });
+
+  app.post<{
+    Params: { agentId: string };
+    Body: AgentSkillCertifyImportedRequestV1;
+  }>("/v1/agents/:agentId/skills/certify-imported", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+    const principal_id =
+      normalizeOptionalString(req.body.principal_id) ??
+      normalizeOptionalString(req.body.actor_principal_id);
+    const actor_principal_id =
+      normalizeOptionalString(req.body.actor_principal_id) ??
+      normalizeOptionalString(req.body.principal_id);
+    const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
+
+    const reviewResponse = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${encodeURIComponent(agent_id)}/skills/review-pending`,
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-id": workspace_id,
+      },
+      payload: {
+        actor_type,
+        actor_id,
+        principal_id,
+        correlation_id,
+      },
+    });
+    const reviewBody = parseJsonBody<unknown>(reviewResponse.payload);
+    if (reviewResponse.statusCode >= 400) {
+      return reply.code(reviewResponse.statusCode).send(reviewBody);
+    }
+
+    const assessResponse = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${encodeURIComponent(agent_id)}/skills/assess-imported`,
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-id": workspace_id,
+      },
+      payload: {
+        actor_type,
+        actor_id,
+        actor_principal_id,
+        correlation_id,
+        limit: req.body.limit,
+        only_unassessed: req.body.only_unassessed,
+      },
+    });
+    const assessBody = parseJsonBody<unknown>(assessResponse.payload);
+    if (assessResponse.statusCode >= 400) {
+      return reply.code(assessResponse.statusCode).send(assessBody);
+    }
+
+    const response: AgentSkillCertifyImportedResponseV1 = {
+      review: reviewBody as AgentSkillReviewPendingResponseV1,
+      assess: assessBody as AgentSkillAssessImportedResponseV1,
+    };
+    return reply.code(200).send(response);
   });
 }

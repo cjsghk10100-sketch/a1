@@ -115,3 +115,18 @@ export interface AgentSkillAssessImportedResponseV1 {
     skipped_reason?: "already_assessed";
   }>;
 }
+
+export interface AgentSkillCertifyImportedRequestV1 {
+  actor_type?: ActorType;
+  actor_id?: string;
+  principal_id?: string;
+  actor_principal_id?: string;
+  correlation_id?: string;
+  limit?: number;
+  only_unassessed?: boolean;
+}
+
+export interface AgentSkillCertifyImportedResponseV1 {
+  review: AgentSkillReviewPendingResponseV1;
+  assess: AgentSkillAssessImportedResponseV1;
+}
