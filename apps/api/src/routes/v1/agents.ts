@@ -54,6 +54,36 @@ function parseListLimit(raw: unknown): number {
   return Math.min(500, Math.max(1, parsed));
 }
 
+interface AgentListCursor {
+  created_at: string;
+  agent_id: string;
+}
+
+function encodeAgentListCursor(cursor: AgentListCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function parseAgentListCursor(raw: unknown): AgentListCursor | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!value) return null;
+  try {
+    const decoded = Buffer.from(value, "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded) as { created_at?: unknown; agent_id?: unknown };
+    if (!parsed || typeof parsed !== "object") return null;
+    if (typeof parsed.created_at !== "string" || typeof parsed.agent_id !== "string") return null;
+    if (!parsed.agent_id.trim()) return null;
+    const createdAtMs = new Date(parsed.created_at).getTime();
+    if (!Number.isFinite(createdAtMs)) return null;
+    return {
+      created_at: parsed.created_at,
+      agent_id: parsed.agent_id,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parseBooleanFlag(raw: unknown): boolean {
   if (typeof raw !== "string") return false;
   const normalized = raw.trim().toLowerCase();
@@ -176,9 +206,24 @@ function decideImportedStatus(input: {
 
 export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.get<{
-    Querystring: { limit?: string };
+    Querystring: { limit?: string; cursor?: string };
   }>("/v1/agents", async (req, reply) => {
     const limit = parseListLimit(req.query.limit);
+    const rawCursor = req.query.cursor;
+    const cursor = parseAgentListCursor(rawCursor);
+    if (typeof rawCursor === "string" && rawCursor.trim().length > 0 && !cursor) {
+      return reply.code(400).send({ error: "invalid_cursor" });
+    }
+
+    const params: Array<string | number> = [];
+    const where: string[] = [];
+    if (cursor) {
+      params.push(cursor.created_at, cursor.agent_id);
+      where.push(`(created_at, agent_id) < ($${params.length - 1}::timestamptz, $${params.length})`);
+    }
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
+
     const res = await pool.query<{
       agent_id: string;
       principal_id: string;
@@ -197,13 +242,25 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
          quarantined_at::text AS quarantined_at,
          quarantine_reason
        FROM sec_agents
-       ORDER BY created_at DESC
-       LIMIT $1`,
-      [limit],
+       ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+       ORDER BY created_at DESC, agent_id DESC
+       LIMIT ${limitParam}`,
+      params,
     );
 
+    const has_more = res.rows.length > limit;
+    const pageRows = has_more ? res.rows.slice(0, limit) : res.rows;
+    const lastRow = pageRows.length ? pageRows[pageRows.length - 1] : null;
+    const next_cursor =
+      has_more && lastRow
+        ? encodeAgentListCursor({
+            created_at: lastRow.created_at,
+            agent_id: lastRow.agent_id,
+          })
+        : undefined;
+
     return reply.code(200).send({
-      agents: res.rows.map((row) => ({
+      agents: pageRows.map((row) => ({
         agent_id: row.agent_id,
         principal_id: row.principal_id,
         display_name: row.display_name,
@@ -212,6 +269,8 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
         quarantined_at: row.quarantined_at ?? undefined,
         quarantine_reason: row.quarantine_reason ?? undefined,
       })),
+      next_cursor,
+      has_more,
     });
   });
 

@@ -33,10 +33,38 @@ import { apiGet, apiPost } from "./http";
 
 export type RegisteredAgent = AgentRecordV1;
 
-export async function listRegisteredAgents(params?: { limit?: number }): Promise<RegisteredAgent[]> {
+export interface RegisteredAgentPage {
+  agents: RegisteredAgent[];
+  next_cursor?: string;
+  has_more: boolean;
+}
+
+export async function listRegisteredAgentsPage(params?: {
+  limit?: number;
+  cursor?: string;
+}): Promise<RegisteredAgentPage> {
+  const query = new URLSearchParams();
   const limit = Math.max(1, Math.min(500, Math.floor(Number(params?.limit ?? 200))));
-  const res = await apiGet<AgentListResponseV1>(`/v1/agents?limit=${limit}`);
-  return res.agents ?? [];
+  query.set("limit", String(limit));
+  if (typeof params?.cursor === "string" && params.cursor.trim().length) {
+    query.set("cursor", params.cursor.trim());
+  }
+  const res = await apiGet<AgentListResponseV1>(`/v1/agents?${query.toString()}`);
+  const next_cursor =
+    typeof res.next_cursor === "string" && res.next_cursor.trim().length ? res.next_cursor.trim() : undefined;
+  return {
+    agents: res.agents ?? [],
+    next_cursor,
+    has_more: res.has_more === true && Boolean(next_cursor),
+  };
+}
+
+export async function listRegisteredAgents(params?: {
+  limit?: number;
+  cursor?: string;
+}): Promise<RegisteredAgent[]> {
+  const res = await listRegisteredAgentsPage(params);
+  return res.agents;
 }
 
 export async function getAgent(agent_id: string): Promise<AgentRecordV1> {

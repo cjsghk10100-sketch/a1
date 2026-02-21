@@ -46,7 +46,7 @@ import {
   listCapabilityTokens,
   listConstraintLearnedEvents,
   listMistakeRepeatedEvents,
-  listRegisteredAgents,
+  listRegisteredAgentsPage,
   quarantineAgent,
   reviewPendingAgentSkills,
   recommendAutonomyUpgrade,
@@ -329,6 +329,7 @@ const agentStorageKey = "agentapp.agent_id";
 const operatorStorageKey = "agentapp.operator_actor_id";
 const autoVerifyPendingStorageKey = "agentapp.onboarding.auto_verify_pending";
 const autoAssessVerifiedStorageKey = "agentapp.onboarding.auto_assess_verified";
+const AGENT_LIST_PAGE_LIMIT = 120;
 
 function readStoredBool(key: string, fallback: boolean): boolean {
   const raw = localStorage.getItem(key);
@@ -451,7 +452,10 @@ export function AgentProfilePage(): JSX.Element {
 
   const [agents, setAgents] = useState<RegisteredAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState<boolean>(false);
+  const [agentsLoadMoreLoading, setAgentsLoadMoreLoading] = useState<boolean>(false);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [agentsNextCursor, setAgentsNextCursor] = useState<string | null>(null);
+  const [agentsHasMore, setAgentsHasMore] = useState<boolean>(false);
   const [agentOnboardingWorkById, setAgentOnboardingWorkById] = useState<Record<string, number>>({});
   const [agentOnboardingWorkLoading, setAgentOnboardingWorkLoading] = useState<boolean>(false);
   const [agentOnboardingWorkError, setAgentOnboardingWorkError] = useState<string | null>(null);
@@ -1078,18 +1082,22 @@ export function AgentProfilePage(): JSX.Element {
 
     void (async () => {
       try {
-        const res = await listRegisteredAgents({ limit: 200 });
+        const res = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
         if (cancelled) return;
-        setAgents(res);
+        setAgents(res.agents);
+        setAgentsNextCursor(res.next_cursor ?? null);
+        setAgentsHasMore(res.has_more);
 
         // If no agent selected yet, pick the most recent one (if any).
         const stored = localStorage.getItem(agentStorageKey) ?? "";
-        if (!stored && res.length) {
-          setAgentId(res[0].agent_id);
+        if (!stored && res.agents.length) {
+          setAgentId(res.agents[0].agent_id);
         }
       } catch (e) {
         if (cancelled) return;
         setAgentsError(toErrorCode(e));
+        setAgentsNextCursor(null);
+        setAgentsHasMore(false);
       } finally {
         if (!cancelled) setAgentsLoading(false);
       }
@@ -1789,8 +1797,10 @@ export function AgentProfilePage(): JSX.Element {
                 setAgentsLoading(true);
                 setAgentsError(null);
                 try {
-                  const res = await listRegisteredAgents({ limit: 200 });
-                  setAgents(res);
+                  const res = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
+                  setAgents(res.agents);
+                  setAgentsNextCursor(res.next_cursor ?? null);
+                  setAgentsHasMore(res.has_more);
                 } catch (e) {
                   setAgentsError(toErrorCode(e));
                 } finally {
@@ -1801,6 +1811,42 @@ export function AgentProfilePage(): JSX.Element {
             disabled={agentsLoading}
           >
             {t("common.refresh")}
+          </button>
+          <button
+            type="button"
+            className="ghostButton"
+            onClick={() => {
+              void (async () => {
+                if (!agentsHasMore || !agentsNextCursor) return;
+                setAgentsLoadMoreLoading(true);
+                setAgentsError(null);
+                try {
+                  const res = await listRegisteredAgentsPage({
+                    limit: AGENT_LIST_PAGE_LIMIT,
+                    cursor: agentsNextCursor,
+                  });
+                  setAgents((prev) => {
+                    const merged = [...prev];
+                    const known = new Set(prev.map((agent) => agent.agent_id));
+                    for (const next of res.agents) {
+                      if (known.has(next.agent_id)) continue;
+                      known.add(next.agent_id);
+                      merged.push(next);
+                    }
+                    return merged;
+                  });
+                  setAgentsNextCursor(res.next_cursor ?? null);
+                  setAgentsHasMore(res.has_more);
+                } catch (e) {
+                  setAgentsError(toErrorCode(e));
+                } finally {
+                  setAgentsLoadMoreLoading(false);
+                }
+              })();
+            }}
+            disabled={agentsLoading || agentsLoadMoreLoading || !agentsHasMore || !agentsNextCursor}
+          >
+            {agentsLoadMoreLoading ? t("common.loading") : t("common.load_more")}
           </button>
         </div>
       </div>
@@ -2563,8 +2609,10 @@ export function AgentProfilePage(): JSX.Element {
 
                       setAgentsLoading(true);
                       setAgentsError(null);
-                      const list = await listRegisteredAgents({ limit: 200 });
-                      setAgents(list);
+                      const list = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
+                      setAgents(list.agents);
+                      setAgentsNextCursor(list.next_cursor ?? null);
+                      setAgentsHasMore(list.has_more);
                     } catch (e) {
                       setRegisterError(toErrorCode(e));
                     } finally {

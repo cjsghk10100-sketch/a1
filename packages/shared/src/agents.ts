@@ -26,6 +26,8 @@ export interface AgentGetResponseV1 {
 
 export interface AgentListResponseV1 {
   agents: AgentRecordV1[];
+  next_cursor?: string;
+  has_more: boolean;
 }
 
 export interface AgentQuarantineRequestV1 {

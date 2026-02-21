@@ -135,10 +135,13 @@ async function main(): Promise<void> {
         display_name: string;
         created_at: string;
       }>;
+      next_cursor?: string;
+      has_more: boolean;
     }>(baseUrl, "/v1/agents?limit=20", workspaceHeader);
     assert.ok(listedAgents.agents.some((agent) => agent.agent_id === registered.agent_id));
     assert.ok(listedAgents.agents.some((agent) => agent.principal_id === registered.principal_id));
     assert.ok(listedAgents.agents.every((agent) => typeof agent.created_at === "string" && agent.created_at.length > 0));
+    assert.equal(typeof listedAgents.has_more, "boolean");
 
     const inventory = {
       packages: [
@@ -347,6 +350,28 @@ async function main(): Promise<void> {
       workspaceHeader,
     );
     assert.ok(registered2.agent_id.startsWith("agt_"));
+    const pagedAgents1 = await getJson<{
+      agents: Array<{ agent_id: string }>;
+      next_cursor?: string;
+      has_more: boolean;
+    }>(baseUrl, "/v1/agents?limit=1", workspaceHeader);
+    assert.equal(pagedAgents1.agents.length, 1);
+    assert.equal(pagedAgents1.has_more, true);
+    assert.ok(typeof pagedAgents1.next_cursor === "string" && pagedAgents1.next_cursor.length > 0);
+    const pagedAgents2 = await getJson<{
+      agents: Array<{ agent_id: string }>;
+      next_cursor?: string;
+      has_more: boolean;
+    }>(
+      baseUrl,
+      `/v1/agents?limit=1&cursor=${encodeURIComponent(pagedAgents1.next_cursor ?? "")}`,
+      workspaceHeader,
+    );
+    assert.equal(pagedAgents2.agents.length, 1);
+    assert.notEqual(pagedAgents2.agents[0].agent_id, pagedAgents1.agents[0].agent_id);
+    const firstTwoPagedIds = [pagedAgents1.agents[0].agent_id, pagedAgents2.agents[0].agent_id];
+    assert.ok(firstTwoPagedIds.includes(registered.agent_id));
+    assert.ok(firstTwoPagedIds.includes(registered2.agent_id));
 
     const inventory2 = {
       packages: [
