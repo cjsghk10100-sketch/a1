@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import { newStepId, newToolCallId, type RunEventV1, type ToolEventV1 } from "@agentapp/shared";
+import { newStepId, newToolCallId, type RunEventV1, type ToolEventV1, type Zone } from "@agentapp/shared";
 
 import type { DbClient, DbPool } from "../db/pool.js";
 import { requestEgress } from "../egress/requestEgress.js";
 import { appendToStream } from "../eventStore/index.js";
+import { authorize_tool_call } from "../policy/authorize.js";
 import { applyRunEvent } from "../projectors/runProjector.js";
 import { applyToolEvent } from "../projectors/toolProjector.js";
 
@@ -32,8 +33,13 @@ type RuntimeEgressConfig = {
   method?: string;
   context?: Record<string, unknown>;
 };
+type RuntimePolicyConfig = {
+  principal_id?: string;
+  capability_token_id?: string;
+  zone?: Zone;
+};
 type RuntimeToolResult = {
-  tool_call_id: string;
+  tool_call_id?: string;
   event_id: string;
   blocked?: boolean;
   message?: string;
@@ -86,6 +92,11 @@ function normalizeAction(raw: string | undefined): string {
   return action;
 }
 
+function normalizeZone(raw: unknown): Zone | undefined {
+  if (raw === "sandbox" || raw === "supervised" || raw === "high_stakes") return raw;
+  return undefined;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object") return null;
   return value as Record<string, unknown>;
@@ -108,6 +119,18 @@ function parseRuntimeEgressConfig(input: Record<string, unknown> | null): Runtim
     target_url,
     method,
     context,
+  };
+}
+
+function parseRuntimePolicyConfig(input: Record<string, unknown> | null): RuntimePolicyConfig {
+  const runtime = asRecord(input?.runtime);
+  const policy = asRecord(runtime?.policy);
+  if (!policy) return {};
+
+  return {
+    principal_id: normalizeOptionalString(policy.principal_id),
+    capability_token_id: normalizeOptionalString(policy.capability_token_id),
+    zone: normalizeZone(policy.zone),
   };
 }
 
@@ -180,6 +203,36 @@ async function loadRun(pool: DbPool, run_id: string): Promise<QueuedRunRow | nul
   return res.rows[0];
 }
 
+function effectiveToolZone(policy: RuntimePolicyConfig | undefined): Zone {
+  return policy?.zone ?? "sandbox";
+}
+
+async function authorizeRuntimeTool(
+  pool: DbPool,
+  run: QueuedRunRow,
+  step_id: string,
+  tool_name: string,
+  policy: RuntimePolicyConfig | undefined,
+) {
+  return await authorize_tool_call(pool, {
+    action: `tool.call.${tool_name}`,
+    actor: runActor(),
+    workspace_id: run.workspace_id,
+    room_id: run.room_id ?? undefined,
+    thread_id: run.thread_id ?? undefined,
+    run_id: run.run_id,
+    step_id,
+    context: {
+      tool_call: {
+        tool_name,
+      },
+    },
+    principal_id: policy?.principal_id,
+    capability_token_id: policy?.capability_token_id,
+    zone: effectiveToolZone(policy),
+  });
+}
+
 async function appendRunStarted(pool: DbPool, run: QueuedRunRow): Promise<RunEventV1 & { event_id: string }> {
   const occurred_at = new Date().toISOString();
   const stream = streamForRun(run);
@@ -250,9 +303,13 @@ async function appendRuntimeNoopTool(
   run: QueuedRunRow,
   step_id: string,
   causation_id: string,
+  policy: RuntimePolicyConfig,
 ): Promise<RuntimeToolResult> {
   const tool_call_id = newToolCallId();
   const stream = streamForRun(run);
+  const zone = effectiveToolZone(policy);
+  const tool_name = "runtime.noop";
+  const policyResult = await authorizeRuntimeTool(pool, run, step_id, tool_name, policy);
 
   const invoked = await appendToStream(pool, {
     event_id: randomUUID(),
@@ -265,13 +322,13 @@ async function appendRuntimeNoopTool(
     run_id: run.run_id,
     step_id,
     actor: runActor(),
-    zone: "sandbox",
+    zone,
     stream,
     correlation_id: run.correlation_id,
     causation_id,
     data: {
       tool_call_id,
-      tool_name: "runtime.noop",
+      tool_name,
       title: "Runtime noop tool",
       input: {
         source: "run_worker",
@@ -282,6 +339,59 @@ async function appendRuntimeNoopTool(
     display: {},
   });
   await applyToolEvent(pool, invoked as ToolEventV1);
+
+  if (policyResult.blocked) {
+    const failed = await appendToStream(pool, {
+      event_id: randomUUID(),
+      event_type: "tool.failed",
+      event_version: 1,
+      occurred_at: new Date().toISOString(),
+      workspace_id: run.workspace_id,
+      room_id: run.room_id ?? undefined,
+      thread_id: run.thread_id ?? undefined,
+      run_id: run.run_id,
+      step_id,
+      actor: runActor(),
+      zone,
+      stream,
+      correlation_id: run.correlation_id,
+      causation_id: invoked.event_id,
+      data: {
+        tool_call_id,
+        message: policyResult.reason ?? policyResult.reason_code,
+        error: {
+          source: "run_worker",
+          stage: "tool_policy",
+          decision: policyResult.decision,
+          reason_code: policyResult.reason_code,
+          reason: policyResult.reason,
+          blocked: policyResult.blocked,
+          enforcement_mode: policyResult.enforcement_mode,
+          tool_name,
+        },
+      },
+      policy_context: {},
+      model_context: {},
+      display: {},
+    });
+    await applyToolEvent(pool, failed as ToolEventV1);
+    return {
+      tool_call_id,
+      event_id: failed.event_id,
+      blocked: true,
+      message: policyResult.reason ?? policyResult.reason_code,
+      error: {
+        source: "run_worker",
+        stage: "tool_policy",
+        decision: policyResult.decision,
+        reason_code: policyResult.reason_code,
+        reason: policyResult.reason,
+        blocked: policyResult.blocked,
+        enforcement_mode: policyResult.enforcement_mode,
+        tool_name,
+      },
+    };
+  }
 
   const succeeded = await appendToStream(pool, {
     event_id: randomUUID(),
@@ -294,7 +404,7 @@ async function appendRuntimeNoopTool(
     run_id: run.run_id,
     step_id,
     actor: runActor(),
-    zone: "sandbox",
+    zone,
     stream,
     correlation_id: run.correlation_id,
     causation_id: invoked.event_id,
@@ -303,6 +413,12 @@ async function appendRuntimeNoopTool(
       output: {
         ok: true,
         source: "run_worker",
+        policy: {
+          decision: policyResult.decision,
+          reason_code: policyResult.reason_code,
+          blocked: policyResult.blocked,
+          enforcement_mode: policyResult.enforcement_mode,
+        },
       },
     },
     policy_context: {},
@@ -319,9 +435,13 @@ async function appendRuntimeEgressTool(
   step_id: string,
   causation_id: string,
   egress: RuntimeEgressConfig,
+  policy: RuntimePolicyConfig,
 ): Promise<RuntimeToolResult> {
   const tool_call_id = newToolCallId();
   const stream = streamForRun(run);
+  const zone = effectiveToolZone(policy);
+  const tool_name = "egress.request";
+  const policyResult = await authorizeRuntimeTool(pool, run, step_id, tool_name, policy);
 
   const invoked = await appendToStream(pool, {
     event_id: randomUUID(),
@@ -334,13 +454,13 @@ async function appendRuntimeEgressTool(
     run_id: run.run_id,
     step_id,
     actor: runActor(),
-    zone: "sandbox",
+    zone,
     stream,
     correlation_id: run.correlation_id,
     causation_id,
     data: {
       tool_call_id,
-      tool_name: "egress.request",
+      tool_name,
       title: "Runtime egress request",
       input: {
         source: "run_worker",
@@ -356,6 +476,59 @@ async function appendRuntimeEgressTool(
   });
   await applyToolEvent(pool, invoked as ToolEventV1);
 
+  if (policyResult.blocked) {
+    const failed = await appendToStream(pool, {
+      event_id: randomUUID(),
+      event_type: "tool.failed",
+      event_version: 1,
+      occurred_at: new Date().toISOString(),
+      workspace_id: run.workspace_id,
+      room_id: run.room_id ?? undefined,
+      thread_id: run.thread_id ?? undefined,
+      run_id: run.run_id,
+      step_id,
+      actor: runActor(),
+      zone,
+      stream,
+      correlation_id: run.correlation_id,
+      causation_id: invoked.event_id,
+      data: {
+        tool_call_id,
+        message: policyResult.reason ?? policyResult.reason_code,
+        error: {
+          source: "run_worker",
+          stage: "tool_policy",
+          decision: policyResult.decision,
+          reason_code: policyResult.reason_code,
+          reason: policyResult.reason,
+          blocked: policyResult.blocked,
+          enforcement_mode: policyResult.enforcement_mode,
+          tool_name,
+        },
+      },
+      policy_context: {},
+      model_context: {},
+      display: {},
+    });
+    await applyToolEvent(pool, failed as ToolEventV1);
+    return {
+      tool_call_id,
+      event_id: failed.event_id,
+      blocked: true,
+      message: policyResult.reason ?? policyResult.reason_code,
+      error: {
+        source: "run_worker",
+        stage: "tool_policy",
+        decision: policyResult.decision,
+        reason_code: policyResult.reason_code,
+        reason: policyResult.reason,
+        blocked: policyResult.blocked,
+        enforcement_mode: policyResult.enforcement_mode,
+        tool_name,
+      },
+    };
+  }
+
   const egressResult = await requestEgress(pool, {
     workspace_id: run.workspace_id,
     action: egress.action,
@@ -366,7 +539,9 @@ async function appendRuntimeEgressTool(
     step_id,
     actor_type: "service",
     actor_id: "run_worker",
-    zone: "sandbox",
+    principal_id: policy.principal_id,
+    capability_token_id: policy.capability_token_id,
+    zone,
     context: egress.context,
     correlation_id: run.correlation_id,
   });
@@ -383,7 +558,7 @@ async function appendRuntimeEgressTool(
       run_id: run.run_id,
       step_id,
       actor: runActor(),
-      zone: "sandbox",
+      zone,
       stream,
       correlation_id: run.correlation_id,
       causation_id: invoked.event_id,
@@ -437,7 +612,7 @@ async function appendRuntimeEgressTool(
     run_id: run.run_id,
     step_id,
     actor: runActor(),
-    zone: "sandbox",
+    zone,
     stream,
     correlation_id: run.correlation_id,
     causation_id: invoked.event_id,
@@ -452,6 +627,12 @@ async function appendRuntimeEgressTool(
         blocked: egressResult.blocked,
         enforcement_mode: egressResult.enforcement_mode,
         approval_id: egressResult.approval_id,
+        policy: {
+          decision: policyResult.decision,
+          reason_code: policyResult.reason_code,
+          blocked: policyResult.blocked,
+          enforcement_mode: policyResult.enforcement_mode,
+        },
       },
     },
     policy_context: {},
@@ -544,6 +725,7 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
   let started = false;
   try {
     const egressConfig = parseRuntimeEgressConfig(run.input);
+    const policyConfig = parseRuntimePolicyConfig(run.input);
 
     const startedEvent = await appendRunStarted(pool, run);
     started = true;
@@ -553,8 +735,8 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
     lastEventId = step.event_id;
 
     const tool = egressConfig
-      ? await appendRuntimeEgressTool(pool, run, step.step_id, lastEventId, egressConfig)
-      : await appendRuntimeNoopTool(pool, run, step.step_id, lastEventId);
+      ? await appendRuntimeEgressTool(pool, run, step.step_id, lastEventId, egressConfig, policyConfig)
+      : await appendRuntimeNoopTool(pool, run, step.step_id, lastEventId, policyConfig);
     lastEventId = tool.event_id;
 
     if (tool.blocked) {
@@ -564,6 +746,10 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
         error: tool.error,
       });
       return "failed";
+    }
+
+    if (!tool.tool_call_id) {
+      throw new Error("run_worker_missing_tool_call_id");
     }
 
     await appendRunCompleted(pool, run, {
