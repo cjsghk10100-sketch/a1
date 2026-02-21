@@ -33,6 +33,7 @@ import {
   getAgent,
   getAgentApprovalRecommendation,
   getAgentTrust,
+  importAndCertifyAgentSkills,
   importAgentSkills,
   listAgentSkills,
   listAgentSkillAssessments,
@@ -2310,23 +2311,65 @@ export function AgentProfilePage(): JSX.Element {
                           return;
                         }
 
-                        const res = await importAgentSkills(nextAgentId, { packages: packages as any[] });
-                        setSkillImportResult(res);
-                        await reloadSkillPackages();
-
                         if (autoVerifyPendingOnImport && autoAssessVerifiedOnImport) {
-                          await certifyImportedSkillsFromImport(res);
-                        } else if (autoVerifyPendingOnImport) {
-                          const pendingIds = res.items
-                            .filter((it) => it.status === "pending")
-                            .map((it) => it.skill_package_id);
-                          if (pendingIds.length > 0) {
-                            await verifyPendingSkillPackageIds(pendingIds, res);
+                          const actor_id = operatorActorId.trim() || "anon";
+                          const principal_id = await ensureOperatorPrincipalId();
+                          const flow = await importAndCertifyAgentSkills(nextAgentId, {
+                            packages: packages as any[],
+                            actor_type: "user",
+                            actor_id,
+                            principal_id,
+                            actor_principal_id: principal_id,
+                            only_unassessed: true,
+                            limit: 200,
+                          });
+
+                          const statusById = new Map(
+                            flow.certify.review.items.map((item) => [item.skill_package_id, item.status] as const),
+                          );
+                          const items = flow.import.items.map((it) => {
+                            const nextStatus = statusById.get(it.skill_package_id);
+                            return nextStatus ? { ...it, status: nextStatus } : it;
+                          });
+                          const summary = {
+                            total: items.length,
+                            verified: items.filter((it) => it.status === "verified").length,
+                            pending: items.filter((it) => it.status === "pending").length,
+                            quarantined: items.filter((it) => it.status === "quarantined").length,
+                          };
+                          setSkillImportResult({ summary, items });
+                          setSkillImportVerifyProgress({
+                            done: flow.certify.review.summary.total,
+                            total: flow.certify.review.summary.total,
+                          });
+                          setSkillImportVerifyErrors(
+                            flow.certify.review.items
+                              .filter((item) => item.status === "quarantined")
+                              .map((item) => ({
+                                skill_package_id: item.skill_package_id,
+                                error_code: item.reason ?? "quarantined",
+                              })),
+                          );
+                          setSkillImportAssessResult(flow.certify.assess);
+                          await reloadSkillPackages();
+                          await refreshAgentGrowthViews(nextAgentId);
+                        } else {
+                          const res = await importAgentSkills(nextAgentId, { packages: packages as any[] });
+                          setSkillImportResult(res);
+                          await reloadSkillPackages();
+
+                          if (autoVerifyPendingOnImport) {
+                            const pendingIds = res.items
+                              .filter((it) => it.status === "pending")
+                              .map((it) => it.skill_package_id);
+                            if (pendingIds.length > 0) {
+                              await verifyPendingSkillPackageIds(pendingIds, res);
+                            } else if (autoAssessVerifiedOnImport && res.summary.verified > 0) {
+                              await assessImportedSkillsFromImport(res, { clearPrevious: true });
+                            }
                           } else if (autoAssessVerifiedOnImport && res.summary.verified > 0) {
                             await assessImportedSkillsFromImport(res, { clearPrevious: true });
                           }
-                        } else if (autoAssessVerifiedOnImport && res.summary.verified > 0) {
-                          await assessImportedSkillsFromImport(res, { clearPrevious: true });
                         }
                       } catch (e) {
                         setSkillImportError(toErrorCode(e));

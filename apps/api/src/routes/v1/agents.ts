@@ -9,6 +9,8 @@ import {
   type AgentSkillAssessImportedResponseV1,
   type AgentSkillCertifyImportedRequestV1,
   type AgentSkillCertifyImportedResponseV1,
+  type AgentSkillImportCertifyRequestV1,
+  type AgentSkillImportCertifyResponseV1,
   type AgentSkillImportResponseV1,
   type AgentSkillReviewPendingResponseV1,
 } from "@agentapp/shared";
@@ -659,6 +661,73 @@ export async function registerAgentRoutes(app: FastifyInstance, pool: DbPool): P
       },
       items,
     });
+  });
+
+  app.post<{
+    Params: { agentId: string };
+    Body: AgentSkillImportCertifyRequestV1;
+  }>("/v1/agents/:agentId/skills/import-certify", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "anon");
+    const principal_id =
+      normalizeOptionalString(req.body.principal_id) ??
+      normalizeOptionalString(req.body.actor_principal_id);
+    const actor_principal_id =
+      normalizeOptionalString(req.body.actor_principal_id) ??
+      normalizeOptionalString(req.body.principal_id);
+    const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
+
+    const importResponse = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${encodeURIComponent(agent_id)}/skills/import`,
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-id": workspace_id,
+      },
+      payload: {
+        packages: Array.isArray(req.body.packages) ? req.body.packages : [],
+        actor_type,
+        actor_id,
+        correlation_id,
+      },
+    });
+    const importBody = parseJsonBody<unknown>(importResponse.payload);
+    if (importResponse.statusCode >= 400) {
+      return reply.code(importResponse.statusCode).send(importBody);
+    }
+
+    const certifyResponse = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${encodeURIComponent(agent_id)}/skills/certify-imported`,
+      headers: {
+        "content-type": "application/json",
+        "x-workspace-id": workspace_id,
+      },
+      payload: {
+        actor_type,
+        actor_id,
+        principal_id,
+        actor_principal_id,
+        correlation_id,
+        limit: req.body.limit,
+        only_unassessed: req.body.only_unassessed,
+      },
+    });
+    const certifyBody = parseJsonBody<unknown>(certifyResponse.payload);
+    if (certifyResponse.statusCode >= 400) {
+      return reply.code(certifyResponse.statusCode).send(certifyBody);
+    }
+
+    const response: AgentSkillImportCertifyResponseV1 = {
+      import: importBody as AgentSkillImportResponseV1,
+      certify: certifyBody as AgentSkillCertifyImportedResponseV1,
+    };
+    return reply.code(200).send(response);
   });
 
   app.post<{

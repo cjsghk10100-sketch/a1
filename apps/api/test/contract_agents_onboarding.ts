@@ -379,6 +379,88 @@ async function main(): Promise<void> {
     assert.equal(certifyAgain.assess.summary.assessed, 0);
     assert.equal(certifyAgain.assess.summary.skipped, 1);
 
+    const registered3 = await postJson<{ agent_id: string; principal_id: string }>(
+      baseUrl,
+      "/v1/agents",
+      { display_name: "Imported Agent 3" },
+      workspaceHeader,
+    );
+    assert.ok(registered3.agent_id.startsWith("agt_"));
+
+    const inventory3 = {
+      packages: [
+        {
+          skill_id: `skill.importcertify.verified.${runSuffix}`,
+          version: "1.0.0",
+          hash_sha256: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          signature: "sig_v3",
+          manifest: {
+            required_tools: ["http_client"],
+            data_access: { read: ["web"] },
+            egress_domains: ["example.net"],
+            sandbox_required: true,
+          },
+        },
+        {
+          skill_id: `skill.importcertify.pending.${runSuffix}`,
+          version: "1.0.0",
+          hash_sha256: "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          manifest: {
+            required_tools: ["http_client"],
+            data_access: { read: ["web"] },
+            egress_domains: ["example.net"],
+            sandbox_required: true,
+          },
+        },
+      ],
+    };
+
+    const importCertify = await postJson<{
+      import: { summary: { total: number; verified: number; pending: number; quarantined: number } };
+      certify: {
+        review: { summary: { total: number; verified: number; quarantined: number } };
+        assess: { summary: { total_candidates: number; assessed: number; skipped: number } };
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered3.agent_id)}/skills/import-certify`,
+      inventory3,
+      workspaceHeader,
+    );
+    assert.equal(importCertify.import.summary.total, 2);
+    assert.equal(importCertify.import.summary.verified, 1);
+    assert.equal(importCertify.import.summary.pending, 1);
+    assert.equal(importCertify.import.summary.quarantined, 0);
+    assert.equal(importCertify.certify.review.summary.total, 1);
+    assert.equal(importCertify.certify.review.summary.verified, 0);
+    assert.equal(importCertify.certify.review.summary.quarantined, 1);
+    assert.equal(importCertify.certify.assess.summary.total_candidates, 1);
+    assert.equal(importCertify.certify.assess.summary.assessed, 1);
+    assert.equal(importCertify.certify.assess.summary.skipped, 0);
+
+    const importCertifyAgain = await postJson<{
+      import: { summary: { total: number; verified: number; pending: number; quarantined: number } };
+      certify: {
+        review: { summary: { total: number; verified: number; quarantined: number } };
+        assess: { summary: { total_candidates: number; assessed: number; skipped: number } };
+      };
+    }>(
+      baseUrl,
+      `/v1/agents/${encodeURIComponent(registered3.agent_id)}/skills/import-certify`,
+      inventory3,
+      workspaceHeader,
+    );
+    assert.equal(importCertifyAgain.import.summary.total, 2);
+    assert.equal(importCertifyAgain.import.summary.verified, 1);
+    assert.equal(importCertifyAgain.import.summary.pending, 0);
+    assert.equal(importCertifyAgain.import.summary.quarantined, 1);
+    assert.equal(importCertifyAgain.certify.review.summary.total, 0);
+    assert.equal(importCertifyAgain.certify.review.summary.verified, 0);
+    assert.equal(importCertifyAgain.certify.review.summary.quarantined, 0);
+    assert.equal(importCertifyAgain.certify.assess.summary.total_candidates, 1);
+    assert.equal(importCertifyAgain.certify.assess.summary.assessed, 0);
+    assert.equal(importCertifyAgain.certify.assess.summary.skipped, 1);
+
     const registeredEvent = await db.query<{ event_type: string }>(
       `SELECT event_type
        FROM evt_events

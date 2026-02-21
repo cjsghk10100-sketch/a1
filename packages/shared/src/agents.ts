@@ -130,3 +130,19 @@ export interface AgentSkillCertifyImportedResponseV1 {
   review: AgentSkillReviewPendingResponseV1;
   assess: AgentSkillAssessImportedResponseV1;
 }
+
+export interface AgentSkillImportCertifyRequestV1 {
+  packages: AgentSkillImportItemV1[];
+  actor_type?: ActorType;
+  actor_id?: string;
+  principal_id?: string;
+  actor_principal_id?: string;
+  correlation_id?: string;
+  limit?: number;
+  only_unassessed?: boolean;
+}
+
+export interface AgentSkillImportCertifyResponseV1 {
+  import: AgentSkillImportResponseV1;
+  certify: AgentSkillCertifyImportedResponseV1;
+}
