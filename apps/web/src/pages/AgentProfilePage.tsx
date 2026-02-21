@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -459,6 +459,7 @@ export function AgentProfilePage(): JSX.Element {
   const [agentOnboardingWorkById, setAgentOnboardingWorkById] = useState<Record<string, number>>({});
   const [agentOnboardingWorkLoading, setAgentOnboardingWorkLoading] = useState<boolean>(false);
   const [agentOnboardingWorkError, setAgentOnboardingWorkError] = useState<string | null>(null);
+  const agentOnboardingWorkByIdRef = useRef<Record<string, number>>({});
 
   const [agentId, setAgentId] = useState<string>(() => localStorage.getItem(agentStorageKey) ?? "");
   const [manualAgentId, setManualAgentId] = useState<string>("");
@@ -1274,6 +1275,10 @@ export function AgentProfilePage(): JSX.Element {
   }, [agentId]);
 
   useEffect(() => {
+    agentOnboardingWorkByIdRef.current = agentOnboardingWorkById;
+  }, [agentOnboardingWorkById]);
+
+  useEffect(() => {
     let cancelled = false;
     if (!agents.length) {
       setAgentOnboardingWorkById({});
@@ -1282,26 +1287,42 @@ export function AgentProfilePage(): JSX.Element {
       return;
     }
 
-    setAgentOnboardingWorkLoading(true);
-    setAgentOnboardingWorkError(null);
-
     void (async () => {
       try {
         const agentIds = [...new Set(agents.map((agent) => agent.agent_id.trim()).filter((id) => id.length > 0))];
+        const knownMap = agentOnboardingWorkByIdRef.current;
+        const missingIds = agentIds.filter((agent_id) => knownMap[agent_id] == null);
+        if (!missingIds.length) {
+          if (cancelled) return;
+          setAgentOnboardingWorkLoading(false);
+          setAgentOnboardingWorkError(null);
+          return;
+        }
+
+        setAgentOnboardingWorkLoading(true);
+        setAgentOnboardingWorkError(null);
+
         const chunkSize = 120;
         if (cancelled) return;
-        const next: Record<string, number> = {};
+        const fetchedById: Record<string, number> = {};
 
-        for (let idx = 0; idx < agentIds.length; idx += chunkSize) {
-          const chunk = agentIds.slice(idx, idx + chunkSize);
+        for (let idx = 0; idx < missingIds.length; idx += chunkSize) {
+          const chunk = missingIds.slice(idx, idx + chunkSize);
           if (!chunk.length) continue;
           const rows = await listAgentSkillOnboardingStatuses({ agent_ids: chunk });
           if (cancelled) return;
           for (const row of rows) {
-            next[row.agent_id] = onboardingWorkCount(row.summary);
+            fetchedById[row.agent_id] = onboardingWorkCount(row.summary);
           }
         }
-        setAgentOnboardingWorkById(next);
+
+        setAgentOnboardingWorkById((prev) => {
+          const next = { ...prev };
+          for (const missingId of missingIds) {
+            next[missingId] = fetchedById[missingId] ?? 0;
+          }
+          return next;
+        });
       } catch (e) {
         if (cancelled) return;
         setAgentOnboardingWorkError(toErrorCode(e));
@@ -1797,6 +1818,7 @@ export function AgentProfilePage(): JSX.Element {
                 setAgentsLoading(true);
                 setAgentsError(null);
                 try {
+                  setAgentOnboardingWorkById({});
                   const res = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
                   setAgents(res.agents);
                   setAgentsNextCursor(res.next_cursor ?? null);
@@ -2609,6 +2631,7 @@ export function AgentProfilePage(): JSX.Element {
 
                       setAgentsLoading(true);
                       setAgentsError(null);
+                      setAgentOnboardingWorkById({});
                       const list = await listRegisteredAgentsPage({ limit: AGENT_LIST_PAGE_LIMIT });
                       setAgents(list.agents);
                       setAgentsNextCursor(list.next_cursor ?? null);
