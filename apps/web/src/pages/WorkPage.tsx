@@ -99,6 +99,38 @@ function saveStepsRunId(roomId: string, runId: string): void {
   localStorage.setItem(stepsRunStorageKey(roomId), runId);
 }
 
+type StepsRunSelectionDecision = {
+  persistRoomId: string;
+  persistRunId: string;
+  applyToCurrentRoom: boolean;
+};
+
+export function decideStepsRunSelection(args: {
+  targetRoomId: string;
+  targetRunId: string;
+  currentRoomId: string;
+  currentRunId: string;
+  anchorRunId?: string;
+}): StepsRunSelectionDecision | null {
+  const room = args.targetRoomId.trim();
+  const run = args.targetRunId.trim();
+  if (!room || !run) return null;
+
+  const isCurrentRoom = args.currentRoomId.trim() === room;
+  const anchorRunId = args.anchorRunId?.trim() ?? "";
+  if (isCurrentRoom && anchorRunId) {
+    const currentRunId = args.currentRunId.trim();
+    const anchorStillActive = currentRunId === anchorRunId || currentRunId === "" || currentRunId === run;
+    if (!anchorStillActive) return null;
+  }
+
+  return {
+    persistRoomId: room,
+    persistRunId: run,
+    applyToCurrentRoom: isCurrentRoom,
+  };
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -558,21 +590,19 @@ export function WorkPage(): JSX.Element {
   }
 
   function selectStepsRunForRoom(targetRoomId: string, runId: string, options?: { anchorRunId?: string }): void {
-    const room = targetRoomId.trim();
-    const run = runId.trim();
-    if (!room || !run) return;
-    const isCurrentRoom = roomIdRef.current === room;
-    const anchorRunId = options?.anchorRunId?.trim() ?? "";
-    if (isCurrentRoom && anchorRunId) {
-      const currentRunId = stepsRunIdRef.current.trim();
-      const anchorStillActive = currentRunId === anchorRunId || currentRunId === "" || currentRunId === run;
-      if (!anchorStillActive) return;
-    }
+    const decision = decideStepsRunSelection({
+      targetRoomId,
+      targetRunId: runId,
+      currentRoomId: roomIdRef.current,
+      currentRunId: stepsRunIdRef.current,
+      anchorRunId: options?.anchorRunId,
+    });
+    if (!decision) return;
     // Persist by room to keep room-scoped defaults, but do not overwrite an explicitly changed
     // in-memory selection when an async action resolves with a stale anchor.
-    saveStepsRunId(room, run);
-    if (isCurrentRoom) {
-      setStepsRunId(run);
+    saveStepsRunId(decision.persistRoomId, decision.persistRunId);
+    if (decision.applyToCurrentRoom) {
+      setStepsRunId(decision.persistRunId);
     }
   }
 
