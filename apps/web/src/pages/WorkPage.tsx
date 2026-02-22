@@ -131,6 +131,57 @@ export function decideStepsRunSelection(args: {
   };
 }
 
+type DownstreamStepSelectionDecision = {
+  persistRunId: string;
+  persistStepId: string;
+  persistToolCalls: boolean;
+  persistArtifacts: boolean;
+  applyToolCallsToCurrentRun: boolean;
+  applyArtifactsToCurrentRun: boolean;
+};
+
+export function decideDownstreamStepSelection(args: {
+  targetRunId: string;
+  targetStepId: string;
+  currentRunId: string;
+  currentToolCallsStepId: string;
+  currentArtifactsStepId: string;
+  anchorToolCallsStepId?: string;
+  anchorArtifactsStepId?: string;
+}): DownstreamStepSelectionDecision | null {
+  const run = args.targetRunId.trim();
+  const step = args.targetStepId.trim();
+  if (!run || !step) return null;
+
+  const isCurrentRun = args.currentRunId.trim() === run;
+  const anchorToolCallsStepId = args.anchorToolCallsStepId?.trim() ?? "";
+  const anchorArtifactsStepId = args.anchorArtifactsStepId?.trim() ?? "";
+  const currentToolCallsStepId = args.currentToolCallsStepId.trim();
+  const currentArtifactsStepId = args.currentArtifactsStepId.trim();
+
+  const toolCallsAnchorStillActive =
+    !isCurrentRun ||
+    !anchorToolCallsStepId ||
+    currentToolCallsStepId === anchorToolCallsStepId ||
+    currentToolCallsStepId === "" ||
+    currentToolCallsStepId === step;
+  const artifactsAnchorStillActive =
+    !isCurrentRun ||
+    !anchorArtifactsStepId ||
+    currentArtifactsStepId === anchorArtifactsStepId ||
+    currentArtifactsStepId === "" ||
+    currentArtifactsStepId === step;
+
+  return {
+    persistRunId: run,
+    persistStepId: step,
+    persistToolCalls: toolCallsAnchorStillActive,
+    persistArtifacts: artifactsAnchorStillActive,
+    applyToolCallsToCurrentRun: isCurrentRun && toolCallsAnchorStillActive,
+    applyArtifactsToCurrentRun: isCurrentRun && artifactsAnchorStillActive,
+  };
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -611,39 +662,28 @@ export function WorkPage(): JSX.Element {
     stepId: string,
     options?: { anchorToolCallsStepId?: string; anchorArtifactsStepId?: string },
   ): void {
-    const run = targetRunId.trim();
-    const step = stepId.trim();
-    if (!run || !step) return;
-    const isCurrentRun = stepsRunIdRef.current === run;
-    const anchorToolCallsStepId = options?.anchorToolCallsStepId?.trim() ?? "";
-    const anchorArtifactsStepId = options?.anchorArtifactsStepId?.trim() ?? "";
-    const currentToolCallsStepId = toolCallsStepIdRef.current.trim();
-    const currentArtifactsStepId = artifactsStepIdRef.current.trim();
+    const decision = decideDownstreamStepSelection({
+      targetRunId,
+      targetStepId: stepId,
+      currentRunId: stepsRunIdRef.current,
+      currentToolCallsStepId: toolCallsStepIdRef.current,
+      currentArtifactsStepId: artifactsStepIdRef.current,
+      anchorToolCallsStepId: options?.anchorToolCallsStepId,
+      anchorArtifactsStepId: options?.anchorArtifactsStepId,
+    });
+    if (!decision) return;
 
-    const toolCallsAnchorStillActive =
-      !isCurrentRun ||
-      !anchorToolCallsStepId ||
-      currentToolCallsStepId === anchorToolCallsStepId ||
-      currentToolCallsStepId === "" ||
-      currentToolCallsStepId === step;
-    const artifactsAnchorStillActive =
-      !isCurrentRun ||
-      !anchorArtifactsStepId ||
-      currentArtifactsStepId === anchorArtifactsStepId ||
-      currentArtifactsStepId === "" ||
-      currentArtifactsStepId === step;
-
-    if (toolCallsAnchorStillActive) {
-      saveToolCallsStepId(run, step);
+    if (decision.persistToolCalls) {
+      saveToolCallsStepId(decision.persistRunId, decision.persistStepId);
     }
-    if (artifactsAnchorStillActive) {
-      saveArtifactsStepId(run, step);
+    if (decision.persistArtifacts) {
+      saveArtifactsStepId(decision.persistRunId, decision.persistStepId);
     }
-    if (isCurrentRun && toolCallsAnchorStillActive) {
-      setToolCallsStepId(step);
+    if (decision.applyToolCallsToCurrentRun) {
+      setToolCallsStepId(decision.persistStepId);
     }
-    if (isCurrentRun && artifactsAnchorStillActive) {
-      setArtifactsStepId(step);
+    if (decision.applyArtifactsToCurrentRun) {
+      setArtifactsStepId(decision.persistStepId);
     }
   }
 
