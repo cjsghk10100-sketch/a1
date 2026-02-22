@@ -161,6 +161,8 @@ export async function registerEventRoutes(app: FastifyInstance, pool: DbPool): P
     if (subject_principal_id) {
       args.push(subject_principal_id);
       where += ` AND (
+        actor_principal_id = $${args.length}
+        OR
         data->>'principal_id' = $${args.length}
         OR data->>'issued_to_principal_id' = $${args.length}
       )`;

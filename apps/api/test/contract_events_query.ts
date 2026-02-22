@@ -266,6 +266,45 @@ async function main(): Promise<void> {
       ),
       true,
     );
+
+    const policyByAgentPrincipal = await postJson<{
+      decision: string;
+      reason_code: string;
+    }>(
+      baseUrl,
+      "/v1/policy/evaluate",
+      {
+        action: "external.write",
+        actor_type: "agent",
+        actor_id: agent.agent_id,
+        principal_id: agent.principal_id,
+        room_id,
+      },
+      workspaceHeader,
+    );
+    assert.equal(policyByAgentPrincipal.decision, "require_approval");
+
+    const actorPrincipalEvents = await getJson<{
+      events: Array<{
+        event_type: string;
+        actor_principal_id: string | null;
+        data: Record<string, unknown>;
+      }>;
+    }>(
+      baseUrl,
+      `/v1/events?event_types=${encodeURIComponent("policy.requires_approval")}&subject_principal_id=${encodeURIComponent(agent.principal_id)}&limit=20`,
+      workspaceHeader,
+    );
+    assert.ok(actorPrincipalEvents.events.length >= 1);
+    assert.equal(
+      actorPrincipalEvents.events.some(
+        (event) =>
+          event.event_type === "policy.requires_approval" &&
+          event.actor_principal_id === agent.principal_id &&
+          event.data.reason_code === "external_write_requires_approval",
+      ),
+      true,
+    );
   } finally {
     await app.close();
   }
