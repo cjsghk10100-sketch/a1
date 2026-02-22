@@ -102,6 +102,34 @@ async function main(): Promise<void> {
   try {
     const workspaceHeader = { "x-workspace-id": "ws_contract" };
 
+    const requestAgentEgress = async (input: {
+      agent_id: string;
+      principal_id: string;
+      target_url?: string;
+    }): Promise<{ status: number; decision: string; reason_code: string }> => {
+      const res = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/egress/requests",
+        {
+          action: "external.write",
+          target_url: input.target_url ?? "https://api.example.com/sync",
+          method: "POST",
+          actor_type: "agent",
+          actor_id: input.agent_id,
+          principal_id: input.principal_id,
+          zone: "supervised",
+        },
+        workspaceHeader,
+      );
+      const body = res.json as { decision: string; reason_code: string };
+      return {
+        status: res.status,
+        decision: body.decision,
+        reason_code: body.reason_code,
+      };
+    };
+
     const registered = await requestJson(
       baseUrl,
       "POST",
@@ -460,6 +488,105 @@ async function main(): Promise<void> {
     assert.equal(idempotentBody.recommendation_id, recommended.recommendation.recommendation_id);
     assert.equal(idempotentBody.token_id, approved.token_id);
     assert.equal(idempotentBody.already_approved, true);
+
+    const prevMode = process.env.POLICY_ENFORCEMENT_MODE;
+    try {
+      process.env.POLICY_ENFORCEMENT_MODE = "shadow";
+      for (let i = 0; i < 3; i += 1) {
+        const shadowEgress = await requestAgentEgress({
+          agent_id: agent.agent_id,
+          principal_id: agent.principal_id,
+        });
+        assert.equal(shadowEgress.status, 201);
+        assert.equal(shadowEgress.decision, "require_approval");
+        assert.equal(shadowEgress.reason_code, "external_write_requires_approval");
+      }
+
+      const shadowRecommend = await requestJson(
+        baseUrl,
+        "POST",
+        `/v1/agents/${encodeURIComponent(agent.agent_id)}/autonomy/recommend`,
+        {
+          rationale: "refresh trust after shadow-only violations",
+        },
+        workspaceHeader,
+      );
+      assert.ok(shadowRecommend.status === 200 || shadowRecommend.status === 201);
+      const shadowBody = shadowRecommend.json as {
+        trust: { policy_violations_7d: number };
+      };
+      assert.equal(shadowBody.trust.policy_violations_7d, 0);
+
+      process.env.POLICY_ENFORCEMENT_MODE = "enforce";
+      for (let i = 0; i < 3; i += 1) {
+        const enforcedEgress = await requestAgentEgress({
+          agent_id: agent.agent_id,
+          principal_id: agent.principal_id,
+        });
+        assert.equal(enforcedEgress.status, 201);
+        assert.equal(enforcedEgress.decision, "require_approval");
+        assert.equal(enforcedEgress.reason_code, "external_write_requires_approval");
+      }
+
+      const enforcedRecommend = await requestJson(
+        baseUrl,
+        "POST",
+        `/v1/agents/${encodeURIComponent(agent.agent_id)}/autonomy/recommend`,
+        {
+          rationale: "refresh trust after enforced burst",
+        },
+        workspaceHeader,
+      );
+      assert.ok(enforcedRecommend.status === 200 || enforcedRecommend.status === 201);
+      const enforcedBody = enforcedRecommend.json as {
+        trust: { policy_violations_7d: number };
+      };
+      assert.equal(enforcedBody.trust.policy_violations_7d, 1);
+
+      const quarantine = await requestJson(
+        baseUrl,
+        "POST",
+        `/v1/agents/${encodeURIComponent(agent.agent_id)}/quarantine`,
+        {
+          quarantine_reason: "contract_test_quarantine",
+          actor_type: "service",
+          actor_id: "qa",
+        },
+        workspaceHeader,
+      );
+      assert.equal(quarantine.status, 200);
+
+      for (let i = 0; i < 2; i += 1) {
+        const quarantinedEgress = await requestAgentEgress({
+          agent_id: agent.agent_id,
+          principal_id: agent.principal_id,
+        });
+        assert.equal(quarantinedEgress.status, 201);
+        assert.equal(quarantinedEgress.decision, "deny");
+        assert.equal(quarantinedEgress.reason_code, "agent_quarantined");
+      }
+
+      const quarantinedRecommend = await requestJson(
+        baseUrl,
+        "POST",
+        `/v1/agents/${encodeURIComponent(agent.agent_id)}/autonomy/recommend`,
+        {
+          rationale: "refresh trust while quarantined",
+        },
+        workspaceHeader,
+      );
+      assert.ok(quarantinedRecommend.status === 200 || quarantinedRecommend.status === 201);
+      const quarantinedBody = quarantinedRecommend.json as {
+        trust: { policy_violations_7d: number };
+      };
+      assert.equal(quarantinedBody.trust.policy_violations_7d, 1);
+    } finally {
+      if (prevMode == null) {
+        delete process.env.POLICY_ENFORCEMENT_MODE;
+      } else {
+        process.env.POLICY_ENFORCEMENT_MODE = prevMode;
+      }
+    }
   } finally {
     await db.end();
     await app.close();

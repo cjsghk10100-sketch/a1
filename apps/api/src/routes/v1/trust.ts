@@ -617,12 +617,28 @@ async function loadSignalDefaults(
   if (!Number.isFinite(success_rate_7d)) success_rate_7d = 0.5;
 
   const violations = await pool.query<{ cnt: string }>(
-    `SELECT COUNT(*) AS cnt
-     FROM evt_events
-     WHERE workspace_id = $1
-       AND actor_principal_id = $2
-       AND event_type IN ('egress.blocked', 'data.access.denied', 'policy.denied')
-       AND occurred_at >= now() - interval '7 days'`,
+    `WITH filtered AS (
+       SELECT
+         event_type,
+         date_trunc('hour', occurred_at) AS hour_bucket,
+         COALESCE(NULLIF(data->>'reason_code', ''), 'unknown') AS reason_code,
+         COALESCE(NULLIF(data->>'action', ''), event_type) AS action_key
+       FROM evt_events
+       WHERE workspace_id = $1
+         AND actor_principal_id = $2
+         AND event_type IN ('egress.blocked', 'data.access.denied', 'policy.denied')
+         AND occurred_at >= now() - interval '7 days'
+         AND (
+           NOT (data ? 'blocked')
+           OR lower(COALESCE(data->>'blocked', 'true')) = 'true'
+         )
+         AND COALESCE(data->>'reason_code', '') NOT IN ('agent_quarantined', 'kill_switch_active')
+     )
+     SELECT COUNT(*)::text AS cnt
+     FROM (
+       SELECT DISTINCT event_type, reason_code, action_key, hour_bucket
+       FROM filtered
+     ) dedup`,
     [workspace_id, principal_id],
   );
   const policy_violations_7d = Math.max(0, Number(violations.rows[0]?.cnt ?? "0"));
