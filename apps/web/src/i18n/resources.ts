@@ -493,6 +493,8 @@ export const resources = {
       "agent_profile.delegation.depth": "depth",
 
       "agent_profile.last_recalc": "last recalculated: {{at}}",
+      "agent_profile.trust.button_recalculate": "Recalculate trust",
+      "agent_profile.trust.recalculate_loading": "Recalculating…",
       "agent_profile.trust_score": "Trust",
       "agent_profile.autonomy_rate_7d": "Autonomy (7D)",
       "agent_profile.success_rate_7d": "Success (7D)",
@@ -1132,6 +1134,8 @@ export const resources = {
       "agent_profile.delegation.depth": "깊이",
 
       "agent_profile.last_recalc": "마지막 계산: {{at}}",
+      "agent_profile.trust.button_recalculate": "신뢰 재계산",
+      "agent_profile.trust.recalculate_loading": "재계산 중…",
       "agent_profile.trust_score": "신뢰",
       "agent_profile.autonomy_rate_7d": "자율(7일)",
       "agent_profile.success_rate_7d": "성공(7일)",

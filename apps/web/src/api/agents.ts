@@ -25,6 +25,8 @@ import type {
   AutonomyRecommendRequestV1,
   AutonomyRecommendResponseV1,
   CapabilityScopesV1,
+  TrustRecalculateRequestV1,
+  TrustRecalculateResponseV1,
 } from "@agentapp/shared";
 
 import type { EventRow } from "./events";
@@ -195,6 +197,16 @@ export interface AgentTrustRow {
 export async function getAgentTrust(agent_id: string): Promise<AgentTrustRow> {
   const res = await apiGet<{ trust: AgentTrustRow }>(`/v1/agents/${encodeURIComponent(agent_id)}/trust`);
   return res.trust;
+}
+
+export async function recalculateAgentTrust(
+  agent_id: string,
+  payload: TrustRecalculateRequestV1 = {},
+): Promise<TrustRecalculateResponseV1> {
+  return await apiPost<TrustRecalculateResponseV1>(
+    `/v1/agents/${encodeURIComponent(agent_id)}/trust/recalculate`,
+    payload,
+  );
 }
 
 export type ApprovalRecommendationMode = "auto" | "post" | "pre" | "blocked";

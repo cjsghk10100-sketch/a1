@@ -49,6 +49,7 @@ import {
   listMistakeRepeatedEvents,
   listRegisteredAgentsPage,
   quarantineAgent,
+  recalculateAgentTrust,
   reviewPendingAgentSkills,
   recommendAutonomyUpgrade,
   registerAgent,
@@ -664,6 +665,8 @@ export function AgentProfilePage(): JSX.Element {
   const [trust, setTrust] = useState<AgentTrustRow | null>(null);
   const [trustError, setTrustError] = useState<string | null>(null);
   const [trustLoading, setTrustLoading] = useState<boolean>(false);
+  const [trustRecalcLoading, setTrustRecalcLoading] = useState<boolean>(false);
+  const [trustRecalcError, setTrustRecalcError] = useState<string | null>(null);
 
   const [tokens, setTokens] = useState<CapabilityTokenRow[]>([]);
   const [tokensError, setTokensError] = useState<string | null>(null);
@@ -1345,6 +1348,8 @@ export function AgentProfilePage(): JSX.Element {
     setMistakes([]);
 
     setTrustError(null);
+    setTrustRecalcError(null);
+    setTrustRecalcLoading(false);
     setTokensError(null);
     setSkillsError(null);
     setAssessmentsError(null);
@@ -1856,6 +1861,32 @@ export function AgentProfilePage(): JSX.Element {
     setSkills(skillsRes);
     setAssessments(assessmentsRes);
     await reloadApprovalRecommendation(agent_id);
+  }
+
+  async function recalculateTrust(nextAgentId?: string): Promise<void> {
+    const agent_id = (nextAgentId ?? agentId).trim();
+    if (!agent_id) return;
+
+    setTrustRecalcLoading(true);
+    setTrustRecalcError(null);
+    try {
+      const actor_id = operatorActorId.trim() || "anon";
+      const actor_principal_id = await ensureOperatorPrincipalId();
+      const res = await recalculateAgentTrust(agent_id, {
+        actor_type: "user",
+        actor_id,
+        actor_principal_id,
+      });
+      if (!isStillActiveAgent(agent_id)) return;
+      setTrust(res.trust);
+      await Promise.all([reloadApprovalRecommendation(agent_id), reloadChangeEvents(agent_id)]);
+    } catch (e) {
+      if (!isStillActiveAgent(agent_id)) return;
+      setTrustRecalcError(toErrorCode(e));
+    } finally {
+      if (!isStillActiveAgent(agent_id)) return;
+      setTrustRecalcLoading(false);
+    }
   }
 
   async function assessImportedSkillsFromImport(
@@ -3548,9 +3579,24 @@ export function AgentProfilePage(): JSX.Element {
           <div className="detailCard">
             <div className="detailHeader">
               <div className="detailTitle">{t("agent_profile.section.trust")}</div>
-              <div className="muted">{trust ? t("agent_profile.last_recalc", { at: formatTimestamp(trust.last_recalculated_at) }) : ""}</div>
+              <div className="timelineControls">
+                <div className="muted">
+                  {trust ? t("agent_profile.last_recalc", { at: formatTimestamp(trust.last_recalculated_at) }) : ""}
+                </div>
+                <button
+                  type="button"
+                  className="ghostButton"
+                  disabled={trustLoading || trustRecalcLoading || !agentId.trim()}
+                  onClick={() => void recalculateTrust()}
+                >
+                  {trustRecalcLoading
+                    ? t("agent_profile.trust.recalculate_loading")
+                    : t("agent_profile.trust.button_recalculate")}
+                </button>
+              </div>
             </div>
 
+            {trustRecalcError ? <div className="errorBox">{t("error.load_failed", { code: trustRecalcError })}</div> : null}
             {trustError ? <div className="errorBox">{t("error.load_failed", { code: trustError })}</div> : null}
             {trustLoading ? <div className="placeholder">{t("common.loading")}</div> : null}
             {!trustLoading && !trustError && !trust ? <div className="placeholder">{t("common.not_available")}</div> : null}
