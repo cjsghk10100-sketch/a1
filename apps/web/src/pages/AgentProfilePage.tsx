@@ -720,6 +720,7 @@ export function AgentProfilePage(): JSX.Element {
   const growthViewsRequestSeqRef = useRef<number>(0);
   const skillPackagesRequestSeqRef = useRef<number>(0);
   const onboardingStatusRequestSeqRef = useRef<number>(0);
+  const tokensRequestSeqRef = useRef<number>(0);
 
   const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
   const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
@@ -785,6 +786,16 @@ export function AgentProfilePage(): JSX.Element {
 
   function isLatestOnboardingStatusRequest(requestSeq: number): boolean {
     return onboardingStatusRequestSeqRef.current === requestSeq;
+  }
+
+  function beginTokensRequest(): number {
+    const next = tokensRequestSeqRef.current + 1;
+    tokensRequestSeqRef.current = next;
+    return next;
+  }
+
+  function isLatestTokensRequest(requestSeq: number): boolean {
+    return tokensRequestSeqRef.current === requestSeq;
   }
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
@@ -1617,10 +1628,12 @@ export function AgentProfilePage(): JSX.Element {
   }, [autoAssessVerifiedOnImport]);
 
   useEffect(() => {
+    const requestSeq = beginTokensRequest();
     setTokens([]);
     setTokensError(null);
 
     if (!principalId?.trim()) {
+      if (!isLatestTokensRequest(requestSeq)) return;
       setTokensLoading(false);
       return;
     }
@@ -1631,13 +1644,13 @@ export function AgentProfilePage(): JSX.Element {
     void (async () => {
       try {
         const tok = await listCapabilityTokens(principalId);
-        if (cancelled) return;
+        if (cancelled || !isLatestTokensRequest(requestSeq)) return;
         setTokens(tok);
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled || !isLatestTokensRequest(requestSeq)) return;
         setTokensError(toErrorCode(e));
       } finally {
-        if (!cancelled) setTokensLoading(false);
+        if (!cancelled && isLatestTokensRequest(requestSeq)) setTokensLoading(false);
       }
     })();
 
@@ -1647,8 +1660,10 @@ export function AgentProfilePage(): JSX.Element {
   }, [principalId]);
 
   async function reloadTokens(): Promise<void> {
+    const requestSeq = beginTokensRequest();
     const nextPrincipalId = principalId?.trim();
     if (!nextPrincipalId) {
+      if (!isLatestTokensRequest(requestSeq)) return;
       setTokens([]);
       setTokensError(null);
       setTokensLoading(false);
@@ -1659,13 +1674,13 @@ export function AgentProfilePage(): JSX.Element {
     setTokensError(null);
     try {
       const tok = await listCapabilityTokens(nextPrincipalId);
-      if (!isStillActivePrincipal(nextPrincipalId)) return;
+      if (!isStillActivePrincipal(nextPrincipalId) || !isLatestTokensRequest(requestSeq)) return;
       setTokens(tok);
     } catch (e) {
-      if (!isStillActivePrincipal(nextPrincipalId)) return;
+      if (!isStillActivePrincipal(nextPrincipalId) || !isLatestTokensRequest(requestSeq)) return;
       setTokensError(toErrorCode(e));
     } finally {
-      if (!isStillActivePrincipal(nextPrincipalId)) return;
+      if (!isStillActivePrincipal(nextPrincipalId) || !isLatestTokensRequest(requestSeq)) return;
       setTokensLoading(false);
     }
   }
