@@ -240,6 +240,32 @@ export function decideRunAutoSelection(args: {
   return firstRunId !== currentRunId ? firstRunId : null;
 }
 
+export function decideStepAutoSelection(args: {
+  stepsState: ConnState;
+  stepIds: string[];
+  currentStepId: string;
+  preferredStepId?: string;
+}): string | null {
+  if (args.stepsState === "loading") return null;
+
+  const currentStepId = args.currentStepId.trim();
+  if (args.stepIds.length === 0) {
+    return currentStepId ? "" : null;
+  }
+
+  const currentStillExists = currentStepId && args.stepIds.includes(currentStepId);
+  if (currentStillExists) return null;
+
+  const preferredStepId = args.preferredStepId?.trim() ?? "";
+  if (preferredStepId && args.stepIds.includes(preferredStepId)) {
+    return preferredStepId !== currentStepId ? preferredStepId : null;
+  }
+
+  const firstStepId = args.stepIds[0] ?? "";
+  if (!firstStepId) return null;
+  return firstStepId !== currentStepId ? firstStepId : null;
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -1106,39 +1132,29 @@ export function WorkPage(): JSX.Element {
   }, [stepsRunId]);
 
   useEffect(() => {
-    if (stepsState === "loading") return;
-
-    if (!steps.length) {
-      if (toolCallsStepId) setToolCallsStepId("");
-      return;
-    }
-
-    const current = toolCallsStepId.trim();
-    const stillExists = current && steps.some((s) => s.step_id === current);
-    if (stillExists) return;
-
     const run_id = stepsRunId.trim();
-    const preferred = run_id ? loadToolCallsStepId(run_id).trim() : "";
-    const next = preferred && steps.some((s) => s.step_id === preferred) ? preferred : steps[0]?.step_id ?? "";
-    if (next && next !== toolCallsStepId) setToolCallsStepId(next);
+    const next = decideStepAutoSelection({
+      stepsState,
+      stepIds: steps.map((s) => s.step_id),
+      currentStepId: toolCallsStepId,
+      preferredStepId: run_id ? loadToolCallsStepId(run_id).trim() : "",
+    });
+    if (next != null && next !== toolCallsStepId) {
+      setToolCallsStepId(next);
+    }
   }, [steps, stepsState, stepsRunId, toolCallsStepId]);
 
   useEffect(() => {
-    if (stepsState === "loading") return;
-
-    if (!steps.length) {
-      if (artifactsStepId) setArtifactsStepId("");
-      return;
-    }
-
-    const current = artifactsStepId.trim();
-    const stillExists = current && steps.some((s) => s.step_id === current);
-    if (stillExists) return;
-
     const run_id = stepsRunId.trim();
-    const preferred = run_id ? loadArtifactsStepId(run_id).trim() : "";
-    const next = preferred && steps.some((s) => s.step_id === preferred) ? preferred : steps[0]?.step_id ?? "";
-    if (next && next !== artifactsStepId) setArtifactsStepId(next);
+    const next = decideStepAutoSelection({
+      stepsState,
+      stepIds: steps.map((s) => s.step_id),
+      currentStepId: artifactsStepId,
+      preferredStepId: run_id ? loadArtifactsStepId(run_id).trim() : "",
+    });
+    if (next != null && next !== artifactsStepId) {
+      setArtifactsStepId(next);
+    }
   }, [steps, stepsState, stepsRunId, artifactsStepId]);
 
   useEffect(() => {
