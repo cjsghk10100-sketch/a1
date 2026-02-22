@@ -481,7 +481,7 @@ export async function registerCapabilityRoutes(app: FastifyInstance, pool: DbPoo
 
     if (res.rowCount !== 1) {
       const exists = await pool.query(
-        `SELECT token_id FROM sec_capability_tokens WHERE workspace_id = $1 AND token_id = $2 LIMIT 1`,
+        "SELECT token_id FROM sec_capability_tokens WHERE workspace_id = $1 AND token_id = $2 LIMIT 1",
         [workspace_id, token_id],
       );
       if (exists.rowCount !== 1) return reply.code(404).send({ error: "token_not_found" });

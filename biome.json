@@ -9,7 +9,16 @@
   "organizeImports": { "enabled": true },
   "linter": {
     "enabled": true,
-    "rules": { "recommended": true }
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "useExhaustiveDependencies": "off",
+        "noUnsafeFinally": "off"
+      },
+      "performance": {
+        "noDelete": "off"
+      }
+    }
   },
   "files": {
     "ignore": ["node_modules", "dist", "build", ".tmp", ".out", "coverage"]

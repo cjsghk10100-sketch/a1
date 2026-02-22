@@ -1640,7 +1640,7 @@ export function WorkPage(): JSX.Element {
 
                                     const summary = runCompleteSummary.trim();
                                     const rawOutput = runCompleteOutputJson.trim();
-                                    let payload: { summary?: string; output?: unknown } = {};
+                                    const payload: { summary?: string; output?: unknown } = {};
                                     if (summary) payload.summary = summary;
                                     if (rawOutput) {
                                       try {
@@ -1692,7 +1692,7 @@ export function WorkPage(): JSX.Element {
 
                                     const message = runFailMessage.trim();
                                     const rawError = runFailErrorJson.trim();
-                                    let payload: { message?: string; error?: unknown } = {};
+                                    const payload: { message?: string; error?: unknown } = {};
                                     if (message) payload.message = message;
                                     if (rawError) {
                                       try {
@@ -2331,7 +2331,7 @@ export function WorkPage(): JSX.Element {
                                     const message = toolCallFailMessage.trim();
 
                                     const rawError = toolCallFailErrorJson.trim();
-                                    let payload: { message?: string; error?: unknown } = {};
+                                    const payload: { message?: string; error?: unknown } = {};
                                     if (message) payload.message = message;
                                     if (rawError) {
                                       try {

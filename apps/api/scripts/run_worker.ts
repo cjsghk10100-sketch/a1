@@ -46,7 +46,7 @@ async function runCycleOrLoop(): Promise<void> {
     const once = parseOnce();
     const pollMs = parsePollMs();
 
-    do {
+    for (;;) {
       const result = await runQueuedRunsWorker(pool, {
         workspace_id,
         batch_limit,
@@ -68,7 +68,7 @@ async function runCycleOrLoop(): Promise<void> {
 
       if (once) break;
       await sleep(pollMs);
-    } while (true);
+    }
   } finally {
     await pool.end();
   }

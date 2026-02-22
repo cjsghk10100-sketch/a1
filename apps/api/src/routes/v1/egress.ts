@@ -1,11 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
-import {
-  type ActorType,
-  type Zone,
-  type EgressRequestCreateV1,
-  type EgressRequestDecisionV1,
-} from "@agentapp/shared";
+import type { ActorType, Zone, EgressRequestCreateV1, EgressRequestDecisionV1 } from "@agentapp/shared";
 
 import type { DbPool } from "../../db/pool.js";
 import { InvalidEgressTargetError, requestEgress } from "../../egress/requestEgress.js";

@@ -181,7 +181,7 @@ export async function registerIncidentRoutes(app: FastifyInstance, pool: DbPool)
       return reply.code(400).send({ error: "invalid_severity" });
     }
 
-    let run_id = normalizeOptionalString(req.body.run_id);
+    const run_id = normalizeOptionalString(req.body.run_id);
     let room_id = normalizeOptionalString(req.body.room_id);
     let thread_id = normalizeOptionalString(req.body.thread_id);
     let correlation_id = normalizeOptionalString(req.body.correlation_id);

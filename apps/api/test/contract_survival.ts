@@ -250,7 +250,7 @@ async function main(): Promise<void> {
     const workspaceLedger = await requestJson(
       baseUrl,
       "GET",
-      `/v1/survival/ledger/workspace/ws_contract_survival?days=7`,
+      "/v1/survival/ledger/workspace/ws_contract_survival?days=7",
       undefined,
       workspaceHeader,
     );

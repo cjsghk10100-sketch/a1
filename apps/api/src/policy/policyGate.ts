@@ -52,7 +52,7 @@ function normalizeDataAccessContext(raw: unknown): DataAccessContextV1 | null {
 
   return {
     label: label.length ? label : undefined,
-    label_room_id: label_room_id && label_room_id.length ? label_room_id : null,
+    label_room_id: label_room_id?.length ? label_room_id : null,
     purpose_hint_mismatch: d.purpose_hint_mismatch === true,
     justification_provided: d.justification_provided === true,
   };

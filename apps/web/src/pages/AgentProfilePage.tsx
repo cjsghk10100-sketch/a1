@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import type {
   AgentRecordV1,
+  AgentSkillImportItemV1,
   AgentSkillAssessImportedResponseV1,
   AgentSkillCertifyImportedResponseV1,
   AgentSkillImportResponseV1,
@@ -118,6 +119,35 @@ function formatSignedPercent(value: number): string {
   const pct = value * 100;
   const sign = pct > 0 ? "+" : "";
   return `${sign}${pct.toFixed(1)}%`;
+}
+
+function parseSkillImportPackages(input: unknown): AgentSkillImportItemV1[] | null {
+  let packages: unknown = input;
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    const obj = input as Record<string, unknown>;
+    if (Array.isArray(obj.packages)) packages = obj.packages;
+  }
+  if (!Array.isArray(packages)) return null;
+
+  const normalized: AgentSkillImportItemV1[] = [];
+  for (const item of packages) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const row = item as Record<string, unknown>;
+    const skill_id = typeof row.skill_id === "string" ? row.skill_id.trim() : "";
+    const version = typeof row.version === "string" ? row.version.trim() : "";
+    const hash_sha256 = typeof row.hash_sha256 === "string" ? row.hash_sha256.trim() : "";
+    if (!skill_id || !version || !hash_sha256) return null;
+
+    const next: AgentSkillImportItemV1 = { skill_id, version, hash_sha256 };
+    if (typeof row.signature === "string" && row.signature.trim()) {
+      next.signature = row.signature.trim();
+    }
+    if (row.manifest && typeof row.manifest === "object" && !Array.isArray(row.manifest)) {
+      next.manifest = row.manifest as AgentSkillImportItemV1["manifest"];
+    }
+    normalized.push(next);
+  }
+  return normalized;
 }
 
 function onboardingWorkCount(summary: AgentSkillOnboardingSummaryV1): number {
@@ -2794,12 +2824,8 @@ export function AgentProfilePage(): JSX.Element {
                           return;
                         }
 
-                        let packages: unknown = parsed;
-                        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-                          const obj = parsed as Record<string, unknown>;
-                          if (Array.isArray(obj.packages)) packages = obj.packages;
-                        }
-                        if (!Array.isArray(packages)) {
+                        const packages = parseSkillImportPackages(parsed);
+                        if (!packages) {
                           setSkillImportError("invalid_shape");
                           return;
                         }
@@ -2808,7 +2834,7 @@ export function AgentProfilePage(): JSX.Element {
                           const actor_id = operatorActorId.trim() || "anon";
                           const principal_id = await ensureOperatorPrincipalId();
                           const flow = await importAndCertifyAgentSkills(nextAgentId, {
-                            packages: packages as any[],
+                            packages,
                             actor_type: "user",
                             actor_id,
                             principal_id,
@@ -2849,7 +2875,7 @@ export function AgentProfilePage(): JSX.Element {
                           await refreshAgentGrowthViews(nextAgentId);
                           await reloadOnboardingStatus(nextAgentId);
                         } else {
-                          const res = await importAgentSkills(nextAgentId, { packages: packages as any[] });
+                          const res = await importAgentSkills(nextAgentId, { packages });
                           if (!isStillActiveAgent(nextAgentId)) return;
                           setSkillImportResult(res);
                           await reloadSkillPackages();
