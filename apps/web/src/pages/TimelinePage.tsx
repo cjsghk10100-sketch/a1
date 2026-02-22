@@ -51,17 +51,21 @@ export function TimelinePage(): JSX.Element {
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [roomsLoading, setRoomsLoading] = useState<boolean>(false);
   const [roomsError, setRoomsError] = useState<string | null>(null);
+  const roomsRequestRef = useRef<number>(0);
 
   const [roomId, setRoomId] = useState<string>(() => localStorage.getItem(roomStorageKey) ?? "");
+  const roomIdRef = useRef<string>(roomId);
   const [manualRoomId, setManualRoomId] = useState<string>("");
 
   const [conn, setConn] = useState<ConnState>("disconnected");
   const [cursor, setCursor] = useState<number>(() => (roomId ? loadCursor(roomId) : 0));
+  const cursorRef = useRef<number>(cursor);
   const [events, setEvents] = useState<RoomStreamEventRow[]>([]);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const streamTokenRef = useRef<number>(0);
 
   const roomOptions = useMemo(() => {
     return rooms.map((r) => ({
@@ -71,31 +75,41 @@ export function TimelinePage(): JSX.Element {
   }, [rooms]);
 
   useEffect(() => {
-    let cancelled = false;
+    roomIdRef.current = roomId;
+  }, [roomId]);
+
+  useEffect(() => {
+    cursorRef.current = cursor;
+  }, [cursor]);
+
+  async function reloadRooms(): Promise<void> {
+    const requestId = roomsRequestRef.current + 1;
+    roomsRequestRef.current = requestId;
     setRoomsLoading(true);
     setRoomsError(null);
+    try {
+      const res = await listRooms();
+      if (roomsRequestRef.current !== requestId) return;
+      setRooms(res);
+    } catch (e) {
+      if (roomsRequestRef.current !== requestId) return;
+      setRoomsError(e instanceof ApiError ? `${e.status}` : "unknown");
+    } finally {
+      if (roomsRequestRef.current !== requestId) return;
+      setRoomsLoading(false);
+    }
+  }
 
-    void (async () => {
-      try {
-        const res = await listRooms();
-        if (cancelled) return;
-        setRooms(res);
-      } catch (e) {
-        if (cancelled) return;
-        setRoomsError(e instanceof ApiError ? `${e.status}` : "unknown");
-      } finally {
-        if (!cancelled) setRoomsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+  useEffect(() => {
+    void reloadRooms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     localStorage.setItem(roomStorageKey, roomId);
-    setCursor(roomId ? loadCursor(roomId) : 0);
+    const nextCursor = roomId ? loadCursor(roomId) : 0;
+    cursorRef.current = nextCursor;
+    setCursor(nextCursor);
     setEvents([]);
     disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -109,6 +123,7 @@ export function TimelinePage(): JSX.Element {
   }, []);
 
   function disconnect(): void {
+    streamTokenRef.current += 1;
     if (reconnectTimerRef.current) {
       window.clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -120,30 +135,39 @@ export function TimelinePage(): JSX.Element {
     setConn("disconnected");
   }
 
-  function scheduleReconnect(nextCursor: number): void {
+  function scheduleReconnect(nextCursor: number, streamToken: number, roomSnapshotId: string): void {
     if (reconnectTimerRef.current) return;
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
+      if (streamTokenRef.current !== streamToken) return;
+      if (roomIdRef.current.trim() !== roomSnapshotId) return;
       connect(nextCursor);
     }, 1000);
   }
 
   function connect(fromSeq?: number): void {
-    if (!roomId.trim()) return;
+    const roomSnapshotId = roomIdRef.current.trim();
+    if (!roomSnapshotId) return;
     disconnect();
+    const streamToken = streamTokenRef.current + 1;
+    streamTokenRef.current = streamToken;
 
-    const start = typeof fromSeq === "number" ? fromSeq : cursor;
+    const start = typeof fromSeq === "number" ? fromSeq : cursorRef.current;
     setConn("connecting");
 
-    const url = `/v1/streams/rooms/${encodeURIComponent(roomId)}?from_seq=${encodeURIComponent(String(start))}`;
+    const url = `/v1/streams/rooms/${encodeURIComponent(roomSnapshotId)}?from_seq=${encodeURIComponent(String(start))}`;
     const es = new EventSource(url);
     eventSourceRef.current = es;
 
     es.onopen = () => {
+      if (streamTokenRef.current !== streamToken) return;
+      if (roomIdRef.current.trim() !== roomSnapshotId) return;
       setConn("connected");
     };
 
     es.onmessage = (msg) => {
+      if (streamTokenRef.current !== streamToken) return;
+      if (roomIdRef.current.trim() !== roomSnapshotId) return;
       const row = safeParseEvent(msg.data);
       if (!row) return;
       setEvents((prev) => {
@@ -153,7 +177,8 @@ export function TimelinePage(): JSX.Element {
 
       setCursor((prev) => {
         const next = row.stream_seq > prev ? row.stream_seq : prev;
-        saveCursor(roomId, next);
+        cursorRef.current = next;
+        saveCursor(roomSnapshotId, next);
         return next;
       });
 
@@ -165,10 +190,14 @@ export function TimelinePage(): JSX.Element {
     };
 
     es.onerror = () => {
+      if (streamTokenRef.current !== streamToken) return;
+      if (roomIdRef.current.trim() !== roomSnapshotId) return;
       setConn("error");
       es.close();
-      eventSourceRef.current = null;
-      scheduleReconnect(cursor);
+      if (eventSourceRef.current === es) {
+        eventSourceRef.current = null;
+      }
+      scheduleReconnect(cursorRef.current, streamToken, roomSnapshotId);
     };
   }
 
@@ -213,20 +242,7 @@ export function TimelinePage(): JSX.Element {
             <button
               type="button"
               className="ghostButton"
-              onClick={() => {
-                void (async () => {
-                  setRoomsLoading(true);
-                  setRoomsError(null);
-                  try {
-                    const res = await listRooms();
-                    setRooms(res);
-                  } catch (e) {
-                    setRoomsError(e instanceof ApiError ? `${e.status}` : "unknown");
-                  } finally {
-                    setRoomsLoading(false);
-                  }
-                })();
-              }}
+              onClick={() => void reloadRooms()}
               disabled={roomsLoading}
             >
               {t("common.refresh")}
