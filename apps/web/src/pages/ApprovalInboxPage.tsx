@@ -71,7 +71,8 @@ export function ApprovalInboxPage(): JSX.Element {
         const approvals = await listApprovals({ status: statusFilter, limit: 100 });
         if (cancelled) return;
         setItems(approvals);
-        if (selectedId && !approvals.some((a) => a.approval_id === selectedId)) {
+        const selectedSnapshot = selectedIdRef.current;
+        if (selectedSnapshot && !approvals.some((a) => a.approval_id === selectedSnapshot)) {
           setSelectedId(null);
           setDetail(null);
           setReason("");
@@ -87,7 +88,7 @@ export function ApprovalInboxPage(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, statusFilter, selectedId]);
+  }, [activeTab, statusFilter]);
 
   useEffect(() => {
     if (!selectedId) return;
