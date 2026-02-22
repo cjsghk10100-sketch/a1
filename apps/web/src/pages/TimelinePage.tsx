@@ -44,6 +44,18 @@ function saveCursor(roomId: string, cursor: number): void {
   localStorage.setItem(roomCursorKey(roomId), String(cursor));
 }
 
+export function shouldAcceptStreamCallback(args: {
+  activeStreamToken: number;
+  callbackStreamToken: number;
+  activeRoomId: string;
+  callbackRoomId: string;
+}): boolean {
+  return (
+    args.activeStreamToken === args.callbackStreamToken &&
+    args.activeRoomId.trim() === args.callbackRoomId.trim()
+  );
+}
+
 export function TimelinePage(): JSX.Element {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -139,8 +151,16 @@ export function TimelinePage(): JSX.Element {
     if (reconnectTimerRef.current) return;
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
-      if (streamTokenRef.current !== streamToken) return;
-      if (roomIdRef.current.trim() !== roomSnapshotId) return;
+      if (
+        !shouldAcceptStreamCallback({
+          activeStreamToken: streamTokenRef.current,
+          callbackStreamToken: streamToken,
+          activeRoomId: roomIdRef.current,
+          callbackRoomId: roomSnapshotId,
+        })
+      ) {
+        return;
+      }
       connect(nextCursor);
     }, 1000);
   }
@@ -160,14 +180,30 @@ export function TimelinePage(): JSX.Element {
     eventSourceRef.current = es;
 
     es.onopen = () => {
-      if (streamTokenRef.current !== streamToken) return;
-      if (roomIdRef.current.trim() !== roomSnapshotId) return;
+      if (
+        !shouldAcceptStreamCallback({
+          activeStreamToken: streamTokenRef.current,
+          callbackStreamToken: streamToken,
+          activeRoomId: roomIdRef.current,
+          callbackRoomId: roomSnapshotId,
+        })
+      ) {
+        return;
+      }
       setConn("connected");
     };
 
     es.onmessage = (msg) => {
-      if (streamTokenRef.current !== streamToken) return;
-      if (roomIdRef.current.trim() !== roomSnapshotId) return;
+      if (
+        !shouldAcceptStreamCallback({
+          activeStreamToken: streamTokenRef.current,
+          callbackStreamToken: streamToken,
+          activeRoomId: roomIdRef.current,
+          callbackRoomId: roomSnapshotId,
+        })
+      ) {
+        return;
+      }
       const row = safeParseEvent(msg.data);
       if (!row) return;
       setEvents((prev) => {
@@ -190,8 +226,16 @@ export function TimelinePage(): JSX.Element {
     };
 
     es.onerror = () => {
-      if (streamTokenRef.current !== streamToken) return;
-      if (roomIdRef.current.trim() !== roomSnapshotId) return;
+      if (
+        !shouldAcceptStreamCallback({
+          activeStreamToken: streamTokenRef.current,
+          callbackStreamToken: streamToken,
+          activeRoomId: roomIdRef.current,
+          callbackRoomId: roomSnapshotId,
+        })
+      ) {
+        return;
+      }
       setConn("error");
       es.close();
       if (eventSourceRef.current === es) {
