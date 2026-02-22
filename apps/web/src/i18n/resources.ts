@@ -517,6 +517,26 @@ export const resources = {
       "agent_profile.violations.remediation.2": "Re-run failed flows in Sandbox/Supervised mode to learn constraints safely.",
       "agent_profile.violations.remediation.3":
         "When repeat_count keeps rising, narrow egress/data scopes or quarantine until assessment recovers.",
+      "agent_profile.violations.remediation.generic":
+        "Open the latest blocked event in Inspector and verify principal, scope, and zone fields first.",
+      "agent_profile.violations.remediation.reason.quota":
+        "Quota exceeded: reduce burst traffic, increase interval, or raise hourly quota only after cost review.",
+      "agent_profile.violations.remediation.reason.quarantined":
+        "Agent is quarantined: resolve quarantine reason and re-run assessments before restoring external actions.",
+      "agent_profile.violations.remediation.reason.identity":
+        "Agent identity mismatch: verify actor_id/principal_id binding and capability token ownership.",
+      "agent_profile.violations.remediation.reason.room_scope":
+        "Room scope mismatch: grant room-specific read/write scope instead of widening global permissions.",
+      "agent_profile.violations.remediation.reason.purpose_hint":
+        "Purpose hint mismatch: provide explicit justification and narrow data target to the run goal.",
+      "agent_profile.violations.remediation.reason.approval":
+        "External write requires approval: request approval with rollback/cost context instead of retrying blindly.",
+      "agent_profile.violations.remediation.reason.kill_switch":
+        "Kill-switch active: keep writes blocked and inspect active incident before resuming traffic.",
+      "agent_profile.violations.remediation.reason.capability_scope":
+        "Capability scope denied: grant the minimal missing scope (tool/domain/action/data) and re-test in supervised mode.",
+      "agent_profile.violations.remediation.reason.action_registry":
+        "Action policy mismatch: align requested action with registry zone/reversibility or route to approval flow.",
       "agent_profile.time_in_service_days": "Time in service (days)",
       "agent_profile.growth.delta_trust_7d": "Trust delta (7D)",
       "agent_profile.growth.delta_autonomy_7d": "Autonomy delta (7D)",
@@ -1136,6 +1156,26 @@ export const resources = {
       "agent_profile.violations.remediation.2": "실패 플로우는 Sandbox/Supervised에서 재실행해 제약 학습을 먼저 누적하세요.",
       "agent_profile.violations.remediation.3":
         "repeat_count가 계속 늘면 egress/data scope를 축소하거나 평가 회복 전까지 격리 운용하세요.",
+      "agent_profile.violations.remediation.generic":
+        "최근 차단 이벤트를 Inspector에서 열고 principal/scope/zone 필드를 먼저 확인하세요.",
+      "agent_profile.violations.remediation.reason.quota":
+        "쿼터 초과: 단기 폭주를 줄이고 실행 간격을 늘린 뒤, 비용 검토 후에만 한도를 상향하세요.",
+      "agent_profile.violations.remediation.reason.quarantined":
+        "격리 상태: 격리 사유를 해소하고 재평가를 통과한 뒤 외부 액션을 복구하세요.",
+      "agent_profile.violations.remediation.reason.identity":
+        "신원 불일치: actor_id/principal_id 바인딩과 capability token 소유 주체를 확인하세요.",
+      "agent_profile.violations.remediation.reason.room_scope":
+        "룸 스코프 불일치: 전역 확장 대신 해당 룸에 필요한 최소 read/write 권한만 부여하세요.",
+      "agent_profile.violations.remediation.reason.purpose_hint":
+        "목적 힌트 불일치: run goal 대비 접근 사유를 명시하고 데이터 범위를 축소하세요.",
+      "agent_profile.violations.remediation.reason.approval":
+        "외부 쓰기 승인 필요: 무작정 재시도하지 말고 rollback/cost 정보를 포함해 승인 요청으로 전환하세요.",
+      "agent_profile.violations.remediation.reason.kill_switch":
+        "킬스위치 활성: 쓰기를 유지 차단하고 활성 incident를 점검한 뒤 재개하세요.",
+      "agent_profile.violations.remediation.reason.capability_scope":
+        "Capability scope 거부: 누락된 최소 스코프(tool/domain/action/data)만 보강하고 supervised에서 재검증하세요.",
+      "agent_profile.violations.remediation.reason.action_registry":
+        "액션 정책 불일치: action registry의 zone/reversible 조건에 맞추거나 승인 플로우로 전환하세요.",
       "agent_profile.time_in_service_days": "운영 기간(일)",
       "agent_profile.growth.delta_trust_7d": "신뢰 변화(7일)",
       "agent_profile.growth.delta_autonomy_7d": "자율 변화(7일)",

@@ -399,6 +399,39 @@ const agentChangeEventTypes = [
 
 const policyViolationEventTypes = new Set<string>(["egress.blocked", "data.access.denied", "policy.denied"]);
 
+function violationGuidanceKeyFromReason(reasonCode: string): string {
+  const reason = reasonCode.trim().toLowerCase();
+  if (!reason) return "agent_profile.violations.remediation.generic";
+  if (reason === "quota_exceeded") return "agent_profile.violations.remediation.reason.quota";
+  if (reason === "agent_quarantined") return "agent_profile.violations.remediation.reason.quarantined";
+  if (
+    reason === "agent_principal_required" ||
+    reason === "agent_principal_not_found" ||
+    reason === "agent_actor_id_mismatch"
+  ) {
+    return "agent_profile.violations.remediation.reason.identity";
+  }
+  if (reason === "data_access_restricted_room_mismatch") {
+    return "agent_profile.violations.remediation.reason.room_scope";
+  }
+  if (reason === "data_access_purpose_hint_mismatch") {
+    return "agent_profile.violations.remediation.reason.purpose_hint";
+  }
+  if (reason === "external_write_requires_approval") {
+    return "agent_profile.violations.remediation.reason.approval";
+  }
+  if (reason === "kill_switch_active") {
+    return "agent_profile.violations.remediation.reason.kill_switch";
+  }
+  if (reason.startsWith("capability_scope_")) {
+    return "agent_profile.violations.remediation.reason.capability_scope";
+  }
+  if (reason.startsWith("action_")) {
+    return "agent_profile.violations.remediation.reason.action_registry";
+  }
+  return "agent_profile.violations.remediation.generic";
+}
+
 function asObject(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -1235,6 +1268,29 @@ export function AgentProfilePage(): JSX.Element {
       .sort((a, b) => b.count - a.count || a.reason_code.localeCompare(b.reason_code))
       .slice(0, 5);
   }, [recentViolationEvents]);
+  const violationGuidanceKeys = useMemo(() => {
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    for (const row of violationTopReasons) {
+      const key = violationGuidanceKeyFromReason(row.reason_code);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(key);
+      if (ordered.length >= 4) break;
+    }
+    const fallback = [
+      "agent_profile.violations.remediation.1",
+      "agent_profile.violations.remediation.2",
+      "agent_profile.violations.remediation.3",
+    ];
+    for (const key of fallback) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ordered.push(key);
+      if (ordered.length >= 4) break;
+    }
+    return ordered;
+  }, [violationTopReasons]);
 
   useEffect(() => {
     void reloadAgentList({ ensureInitialSelection: true });
@@ -3633,15 +3689,11 @@ export function AgentProfilePage(): JSX.Element {
                     {t("agent_profile.violations.remediation_title")}
                   </div>
                   <ul className="constraintList">
-                    <li className="constraintRow">
-                      <div className="muted">{t("agent_profile.violations.remediation.1")}</div>
-                    </li>
-                    <li className="constraintRow">
-                      <div className="muted">{t("agent_profile.violations.remediation.2")}</div>
-                    </li>
-                    <li className="constraintRow">
-                      <div className="muted">{t("agent_profile.violations.remediation.3")}</div>
-                    </li>
+                    {violationGuidanceKeys.map((guidanceKey) => (
+                      <li key={guidanceKey} className="constraintRow">
+                        <div className="muted">{t(guidanceKey)}</div>
+                      </li>
+                    ))}
                   </ul>
                 </div>
               </>
