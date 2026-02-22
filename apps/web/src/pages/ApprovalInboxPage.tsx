@@ -47,10 +47,15 @@ export function ApprovalInboxPage(): JSX.Element {
 
   const [reason, setReason] = useState<string>("");
   const [deciding, setDeciding] = useState<boolean>(false);
+  const activeTabRef = useRef<TabKey>(activeTab);
   const selectedIdRef = useRef<string | null>(selectedId);
   const decideRequestRef = useRef<number>(0);
 
   const statusFilter: ApprovalStatus | undefined = activeTab === "all" ? undefined : activeTab;
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
@@ -113,15 +118,19 @@ export function ApprovalInboxPage(): JSX.Element {
     if (!approvalId) return;
     const requestId = decideRequestRef.current + 1;
     decideRequestRef.current = requestId;
+    const tabAtRequest = activeTabRef.current;
+    const statusFilterAtRequest: ApprovalStatus | undefined = tabAtRequest === "all" ? undefined : tabAtRequest;
     setDeciding(true);
     setDetailError(null);
 
     try {
       await decideApproval({ approvalId, decision, reason: reason.trim() || undefined });
       const refreshed = await getApproval(approvalId);
-      const approvals = await listApprovals({ status: statusFilter, limit: 100 });
+      const approvals = await listApprovals({ status: statusFilterAtRequest, limit: 100 });
       if (decideRequestRef.current !== requestId) return;
-      setItems(approvals);
+      if (activeTabRef.current === tabAtRequest) {
+        setItems(approvals);
+      }
       if (selectedIdRef.current === approvalId) {
         setDetail(refreshed);
         setReason("");
