@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -47,6 +47,7 @@ export function NotificationsPage(): JSX.Element {
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
   const [roomId, setRoomId] = useState<string>(() => localStorage.getItem(roomStorageKey) ?? "");
+  const roomIdRef = useRef<string>(roomId);
   const [manualRoomId, setManualRoomId] = useState<string>("");
 
   const [readCursor, setReadCursor] = useState<number>(() => (roomId ? loadReadCursor(roomId) : 0));
@@ -54,6 +55,8 @@ export function NotificationsPage(): JSX.Element {
 
   const [state, setState] = useState<ConnState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const roomsRequestRef = useRef<number>(0);
+  const unreadRequestRef = useRef<number>(0);
 
   const roomOptions = useMemo(() => {
     return rooms.map((r) => ({
@@ -63,29 +66,34 @@ export function NotificationsPage(): JSX.Element {
   }, [rooms]);
 
   useEffect(() => {
-    let cancelled = false;
+    roomIdRef.current = roomId;
+  }, [roomId]);
+
+  async function reloadRooms(): Promise<void> {
+    const requestId = roomsRequestRef.current + 1;
+    roomsRequestRef.current = requestId;
     setRoomsLoading(true);
     setRoomsError(null);
+    try {
+      const res = await listRooms();
+      if (roomsRequestRef.current !== requestId) return;
+      setRooms(res);
+    } catch (e) {
+      if (roomsRequestRef.current !== requestId) return;
+      setRoomsError(toErrorCode(e));
+    } finally {
+      if (roomsRequestRef.current !== requestId) return;
+      setRoomsLoading(false);
+    }
+  }
 
-    void (async () => {
-      try {
-        const res = await listRooms();
-        if (cancelled) return;
-        setRooms(res);
-      } catch (e) {
-        if (cancelled) return;
-        setRoomsError(toErrorCode(e));
-      } finally {
-        if (!cancelled) setRoomsLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+  useEffect(() => {
+    void reloadRooms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    unreadRequestRef.current += 1;
     localStorage.setItem(roomStorageKey, roomId);
     setReadCursor(roomId ? loadReadCursor(roomId) : 0);
     setEvents([]);
@@ -94,7 +102,10 @@ export function NotificationsPage(): JSX.Element {
   }, [roomId]);
 
   async function fetchUnread(): Promise<void> {
+    const requestId = unreadRequestRef.current + 1;
+    unreadRequestRef.current = requestId;
     const id = roomId.trim();
+    const cursor = readCursor;
     if (!id) return;
 
     setState("loading");
@@ -104,12 +115,16 @@ export function NotificationsPage(): JSX.Element {
       const ev = await listEvents({
         stream_type: "room",
         stream_id: id,
-        from_seq: readCursor,
+        from_seq: cursor,
         limit: 200,
       });
+      if (unreadRequestRef.current !== requestId) return;
+      if (roomIdRef.current.trim() !== id) return;
       setEvents(ev);
       setState("idle");
     } catch (e) {
+      if (unreadRequestRef.current !== requestId) return;
+      if (roomIdRef.current.trim() !== id) return;
       setError(toErrorCode(e));
       setState("error");
     }
@@ -169,20 +184,7 @@ export function NotificationsPage(): JSX.Element {
             <button
               type="button"
               className="ghostButton"
-              onClick={() => {
-                void (async () => {
-                  setRoomsLoading(true);
-                  setRoomsError(null);
-                  try {
-                    const res = await listRooms();
-                    setRooms(res);
-                  } catch (e) {
-                    setRoomsError(toErrorCode(e));
-                  } finally {
-                    setRoomsLoading(false);
-                  }
-                })();
-              }}
+              onClick={() => void reloadRooms()}
               disabled={roomsLoading}
             >
               {t("common.refresh")}
