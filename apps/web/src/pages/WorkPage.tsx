@@ -2279,7 +2279,9 @@ export function WorkPage(): JSX.Element {
                                       try {
                                         payload = { output: JSON.parse(rawOutput) as unknown };
                                       } catch {
-                                        setToolCallActionError("invalid_json");
+                                        if (toolCallsStepIdRef.current === step_id) {
+                                          setToolCallActionError("invalid_json");
+                                        }
                                         return;
                                       }
                                     }
@@ -2335,7 +2337,9 @@ export function WorkPage(): JSX.Element {
                                       try {
                                         payload.error = JSON.parse(rawError) as unknown;
                                       } catch {
-                                        setToolCallActionError("invalid_json");
+                                        if (toolCallsStepIdRef.current === step_id) {
+                                          setToolCallActionError("invalid_json");
+                                        }
                                         return;
                                       }
                                     }
