@@ -87,6 +87,7 @@ export function InspectorPage(): JSX.Element {
   const eventTokenRef = useRef<number>(0);
   const redactionTokenRef = useRef<number>(0);
   const hashVerifyTokenRef = useRef<number>(0);
+  const recentRunsTokenRef = useRef<number>(0);
 
   const runIdsFromEvents = useMemo(() => uniqueNonNull(events.map((e) => e.run_id)), [events]);
   const recentRunsPickUnknown = useMemo(() => {
@@ -96,15 +97,19 @@ export function InspectorPage(): JSX.Element {
   }, [recentRuns, recentRunsPick]);
 
   async function reloadRecentRuns(nextLimit?: number): Promise<void> {
+    const token = ++recentRunsTokenRef.current;
     const limitNum = nextLimit ?? 50;
     setRecentRunsLoading(true);
     setRecentRunsError(null);
     try {
       const runs = await listRuns({ limit: limitNum });
+      if (token !== recentRunsTokenRef.current) return;
       setRecentRuns(runs);
     } catch (e) {
+      if (token !== recentRunsTokenRef.current) return;
       setRecentRunsError(toErrorCode(e));
     } finally {
+      if (token !== recentRunsTokenRef.current) return;
       setRecentRunsLoading(false);
     }
   }
