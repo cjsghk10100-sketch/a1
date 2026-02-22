@@ -99,6 +99,38 @@ function saveStepsRunId(roomId: string, runId: string): void {
   localStorage.setItem(stepsRunStorageKey(roomId), runId);
 }
 
+type ThreadSelectionDecision = {
+  persistRoomId: string;
+  persistThreadId: string;
+  applyToCurrentRoom: boolean;
+};
+
+export function decideThreadSelection(args: {
+  targetRoomId: string;
+  targetThreadId: string;
+  currentRoomId: string;
+  currentThreadId: string;
+  anchorThreadId?: string;
+}): ThreadSelectionDecision | null {
+  const room = args.targetRoomId.trim();
+  const thread = args.targetThreadId.trim();
+  if (!room || !thread) return null;
+
+  const isCurrentRoom = args.currentRoomId.trim() === room;
+  const anchorThreadId = args.anchorThreadId?.trim() ?? "";
+  if (isCurrentRoom && anchorThreadId) {
+    const currentThreadId = args.currentThreadId.trim();
+    const anchorStillActive = currentThreadId === anchorThreadId || currentThreadId === "" || currentThreadId === thread;
+    if (!anchorStillActive) return null;
+  }
+
+  return {
+    persistRoomId: room,
+    persistThreadId: thread,
+    applyToCurrentRoom: isCurrentRoom,
+  };
+}
+
 type StepsRunSelectionDecision = {
   persistRoomId: string;
   persistRunId: string;
@@ -630,13 +662,18 @@ export function WorkPage(): JSX.Element {
     }
   }
 
-  function selectThreadForRoom(targetRoomId: string, targetThreadId: string): void {
-    const room = targetRoomId.trim();
-    if (!room) return;
-    const thread = targetThreadId.trim();
-    saveThreadId(room, thread);
-    if (roomIdRef.current === room) {
-      setThreadId(thread);
+  function selectThreadForRoom(targetRoomId: string, targetThreadId: string, options?: { anchorThreadId?: string }): void {
+    const decision = decideThreadSelection({
+      targetRoomId,
+      targetThreadId,
+      currentRoomId: roomIdRef.current,
+      currentThreadId: threadIdRef.current,
+      anchorThreadId: options?.anchorThreadId,
+    });
+    if (!decision) return;
+    saveThreadId(decision.persistRoomId, decision.persistThreadId);
+    if (decision.applyToCurrentRoom) {
+      setThreadId(decision.persistThreadId);
     }
   }
 
@@ -1402,6 +1439,7 @@ export function WorkPage(): JSX.Element {
                     const title = createThreadTitle.trim();
                     const nextRoomId = roomId.trim();
                     if (!nextRoomId || !title) return;
+                    const selectionAnchor = threadIdRef.current.trim();
                     const requestId = createThreadRequestRef.current + 1;
                     createThreadRequestRef.current = requestId;
 
@@ -1413,7 +1451,7 @@ export function WorkPage(): JSX.Element {
                         setCreateThreadTitle("");
                       }
                       await reloadThreads(nextRoomId, true);
-                      selectThreadForRoom(nextRoomId, newThreadId);
+                      selectThreadForRoom(nextRoomId, newThreadId, { anchorThreadId: selectionAnchor });
                       if (createThreadRequestRef.current === requestId && roomIdRef.current === nextRoomId) {
                         setCreateThreadState("idle");
                       }
