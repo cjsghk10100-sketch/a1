@@ -715,6 +715,8 @@ export function AgentProfilePage(): JSX.Element {
   );
   const [approvalRecommendationLoading, setApprovalRecommendationLoading] = useState<boolean>(false);
   const [approvalRecommendationError, setApprovalRecommendationError] = useState<string | null>(null);
+  const approvalRecommendationRequestSeqRef = useRef<number>(0);
+  const changeEventsRequestSeqRef = useRef<number>(0);
 
   const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
   const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
@@ -730,6 +732,26 @@ export function AgentProfilePage(): JSX.Element {
 
   function isStillActivePrincipal(nextPrincipalId: string): boolean {
     return (activePrincipalIdRef.current ?? "") === nextPrincipalId.trim();
+  }
+
+  function beginApprovalRecommendationRequest(): number {
+    const next = approvalRecommendationRequestSeqRef.current + 1;
+    approvalRecommendationRequestSeqRef.current = next;
+    return next;
+  }
+
+  function isLatestApprovalRecommendationRequest(requestSeq: number): boolean {
+    return approvalRecommendationRequestSeqRef.current === requestSeq;
+  }
+
+  function beginChangeEventsRequest(): number {
+    const next = changeEventsRequestSeqRef.current + 1;
+    changeEventsRequestSeqRef.current = next;
+    return next;
+  }
+
+  function isLatestChangeEventsRequest(requestSeq: number): boolean {
+    return changeEventsRequestSeqRef.current === requestSeq;
   }
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
@@ -1616,8 +1638,10 @@ export function AgentProfilePage(): JSX.Element {
   }
 
   async function reloadApprovalRecommendation(nextAgentId?: string): Promise<void> {
+    const requestSeq = beginApprovalRecommendationRequest();
     const agent_id = (nextAgentId ?? agentId).trim();
     if (!agent_id) {
+      if (!isLatestApprovalRecommendationRequest(requestSeq)) return;
       setApprovalRecommendationData(null);
       setApprovalRecommendationError(null);
       setApprovalRecommendationLoading(false);
@@ -1628,21 +1652,23 @@ export function AgentProfilePage(): JSX.Element {
     setApprovalRecommendationError(null);
     try {
       const res = await getAgentApprovalRecommendation(agent_id);
-      if (!isStillActiveAgent(agent_id)) return;
+      if (!isStillActiveAgent(agent_id) || !isLatestApprovalRecommendationRequest(requestSeq)) return;
       setApprovalRecommendationData(res);
     } catch (e) {
-      if (!isStillActiveAgent(agent_id)) return;
+      if (!isStillActiveAgent(agent_id) || !isLatestApprovalRecommendationRequest(requestSeq)) return;
       setApprovalRecommendationError(toErrorCode(e));
     } finally {
-      if (!isStillActiveAgent(agent_id)) return;
+      if (!isStillActiveAgent(agent_id) || !isLatestApprovalRecommendationRequest(requestSeq)) return;
       setApprovalRecommendationLoading(false);
     }
   }
 
   async function reloadChangeEvents(nextAgentId?: string): Promise<void> {
+    const requestSeq = beginChangeEventsRequest();
     const agent_id = (nextAgentId ?? agentId).trim();
     const subject_principal_id = principalId?.trim() || undefined;
     if (!agent_id) {
+      if (!isLatestChangeEventsRequest(requestSeq)) return;
       setChangeEvents([]);
       setChangeEventsError(null);
       setChangeEventsLoading(false);
@@ -1658,13 +1684,13 @@ export function AgentProfilePage(): JSX.Element {
         subject_principal_id,
         limit: 300,
       });
-      if (!isStillActiveAgent(agent_id)) return;
+      if (!isStillActiveAgent(agent_id) || !isLatestChangeEventsRequest(requestSeq)) return;
       setChangeEvents(rows);
     } catch (e) {
-      if (!isStillActiveAgent(agent_id)) return;
+      if (!isStillActiveAgent(agent_id) || !isLatestChangeEventsRequest(requestSeq)) return;
       setChangeEventsError(toErrorCode(e));
     } finally {
-      if (!isStillActiveAgent(agent_id)) return;
+      if (!isStillActiveAgent(agent_id) || !isLatestChangeEventsRequest(requestSeq)) return;
       setChangeEventsLoading(false);
     }
   }
