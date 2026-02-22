@@ -502,17 +502,18 @@ async function main(): Promise<void> {
         assert.equal(shadowEgress.reason_code, "external_write_requires_approval");
       }
 
-      const shadowRecommend = await requestJson(
+      const shadowRecalc = await requestJson(
         baseUrl,
         "POST",
-        `/v1/agents/${encodeURIComponent(agent.agent_id)}/autonomy/recommend`,
+        `/v1/agents/${encodeURIComponent(agent.agent_id)}/trust/recalculate`,
         {
-          rationale: "refresh trust after shadow-only violations",
+          actor_type: "service",
+          actor_id: "contract_recalc",
         },
         workspaceHeader,
       );
-      assert.ok(shadowRecommend.status === 200 || shadowRecommend.status === 201);
-      const shadowBody = shadowRecommend.json as {
+      assert.equal(shadowRecalc.status, 200);
+      const shadowBody = shadowRecalc.json as {
         trust: { policy_violations_7d: number };
       };
       assert.equal(shadowBody.trust.policy_violations_7d, 0);
@@ -528,17 +529,18 @@ async function main(): Promise<void> {
         assert.equal(enforcedEgress.reason_code, "external_write_requires_approval");
       }
 
-      const enforcedRecommend = await requestJson(
+      const enforcedRecalc = await requestJson(
         baseUrl,
         "POST",
-        `/v1/agents/${encodeURIComponent(agent.agent_id)}/autonomy/recommend`,
+        `/v1/agents/${encodeURIComponent(agent.agent_id)}/trust/recalculate`,
         {
-          rationale: "refresh trust after enforced burst",
+          actor_type: "service",
+          actor_id: "contract_recalc",
         },
         workspaceHeader,
       );
-      assert.ok(enforcedRecommend.status === 200 || enforcedRecommend.status === 201);
-      const enforcedBody = enforcedRecommend.json as {
+      assert.equal(enforcedRecalc.status, 200);
+      const enforcedBody = enforcedRecalc.json as {
         trust: { policy_violations_7d: number };
       };
       assert.equal(enforcedBody.trust.policy_violations_7d, 1);
@@ -566,17 +568,18 @@ async function main(): Promise<void> {
         assert.equal(quarantinedEgress.reason_code, "agent_quarantined");
       }
 
-      const quarantinedRecommend = await requestJson(
+      const quarantinedRecalc = await requestJson(
         baseUrl,
         "POST",
-        `/v1/agents/${encodeURIComponent(agent.agent_id)}/autonomy/recommend`,
+        `/v1/agents/${encodeURIComponent(agent.agent_id)}/trust/recalculate`,
         {
-          rationale: "refresh trust while quarantined",
+          actor_type: "service",
+          actor_id: "contract_recalc",
         },
         workspaceHeader,
       );
-      assert.ok(quarantinedRecommend.status === 200 || quarantinedRecommend.status === 201);
-      const quarantinedBody = quarantinedRecommend.json as {
+      assert.equal(quarantinedRecalc.status, 200);
+      const quarantinedBody = quarantinedRecalc.json as {
         trust: { policy_violations_7d: number };
       };
       assert.equal(quarantinedBody.trust.policy_violations_7d, 1);

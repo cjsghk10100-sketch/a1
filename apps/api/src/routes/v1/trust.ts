@@ -7,6 +7,7 @@ import type {
   AutonomyApproveRequestV1,
   AutonomyRecommendRequestV1,
   CapabilityScopesV1,
+  TrustRecalculateRequestV1,
   TrustComponentsV1,
 } from "@agentapp/shared";
 
@@ -842,6 +843,118 @@ export async function registerTrustRoutes(app: FastifyInstance, pool: DbPool): P
         last_recalculated_at: trust.last_recalculated_at,
         created_at: trust.created_at,
         updated_at: trust.updated_at,
+      },
+    });
+  });
+
+  app.post<{
+    Params: { agentId: string };
+    Body: TrustRecalculateRequestV1;
+  }>("/v1/agents/:agentId/trust/recalculate", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeRequiredString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const agent = await getAgent(pool, workspace_id, agent_id);
+    if (!agent) return reply.code(404).send({ error: "agent_not_found" });
+
+    const actor_type = normalizeActorType(req.body.actor_type);
+    const actor_id =
+      normalizeOptionalString(req.body.actor_id) || (actor_type === "service" ? "api" : "system");
+    const actor_principal_id = normalizeOptionalString(req.body.actor_principal_id);
+    const correlation_id = normalizeOptionalString(req.body.correlation_id) ?? randomUUID();
+
+    const current = await getCurrentTrust(pool, workspace_id, agent);
+    const defaults = await loadSignalDefaults(pool, workspace_id, agent.principal_id, agent.created_at);
+    const nextScore = computeTrustScore(defaults);
+    const updatedAt = nowIso();
+
+    await pool.query(
+      `UPDATE sec_agent_trust
+       SET trust_score = $3,
+           success_rate_7d = $4,
+           eval_quality_trend = $5,
+           user_feedback_score = $6,
+           policy_violations_7d = $7,
+           time_in_service_days = $8,
+           components = $9::jsonb,
+           last_recalculated_at = $10,
+           updated_at = $10
+       WHERE agent_id = $1
+         AND workspace_id = $2`,
+      [
+        agent_id,
+        workspace_id,
+        nextScore,
+        defaults.success_rate_7d,
+        defaults.eval_quality_trend,
+        defaults.user_feedback_score,
+        defaults.policy_violations_7d,
+        defaults.time_in_service_days,
+        JSON.stringify(defaults),
+        updatedAt,
+      ],
+    );
+
+    const delta = nextScore - current.trust_score;
+    if (delta > TRUST_EPSILON) {
+      await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "agent.trust.increased",
+        event_version: 1,
+        occurred_at: updatedAt,
+        workspace_id,
+        actor: { actor_type, actor_id },
+        actor_principal_id,
+        stream: { stream_type: "workspace", stream_id: workspace_id },
+        correlation_id,
+        data: {
+          agent_id,
+          previous_score: current.trust_score,
+          trust_score: nextScore,
+          components: defaults,
+        },
+        policy_context: {},
+        model_context: {},
+        display: {},
+      });
+    } else if (delta < -TRUST_EPSILON) {
+      await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "agent.trust.decreased",
+        event_version: 1,
+        occurred_at: updatedAt,
+        workspace_id,
+        actor: { actor_type, actor_id },
+        actor_principal_id,
+        stream: { stream_type: "workspace", stream_id: workspace_id },
+        correlation_id,
+        data: {
+          agent_id,
+          previous_score: current.trust_score,
+          trust_score: nextScore,
+          components: defaults,
+        },
+        policy_context: {},
+        model_context: {},
+        display: {},
+      });
+    }
+
+    return reply.code(200).send({
+      trust: {
+        agent_id,
+        workspace_id,
+        trust_score: nextScore,
+        success_rate_7d: defaults.success_rate_7d,
+        eval_quality_trend: defaults.eval_quality_trend,
+        user_feedback_score: defaults.user_feedback_score,
+        policy_violations_7d: defaults.policy_violations_7d,
+        time_in_service_days: defaults.time_in_service_days,
+        components: defaults,
+        last_recalculated_at: updatedAt,
+        created_at: current.created_at,
+        updated_at: updatedAt,
       },
     });
   });

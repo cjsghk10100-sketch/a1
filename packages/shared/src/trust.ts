@@ -54,6 +54,17 @@ export interface AutonomyRecommendResponseV1 {
   trust: AgentTrustRecordV1;
 }
 
+export interface TrustRecalculateRequestV1 {
+  actor_type?: "user" | "service" | "agent";
+  actor_id?: string;
+  actor_principal_id?: string;
+  correlation_id?: string;
+}
+
+export interface TrustRecalculateResponseV1 {
+  trust: AgentTrustRecordV1;
+}
+
 export interface AutonomyApproveRequestV1 {
   recommendation_id: string;
   granted_by_principal_id: string;
