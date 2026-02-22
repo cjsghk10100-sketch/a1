@@ -391,8 +391,13 @@ const agentChangeEventTypes = [
   "agent.unquarantined",
   "constraint.learned",
   "mistake.repeated",
+  "egress.blocked",
+  "data.access.denied",
+  "policy.denied",
   "daily.agent.snapshot",
 ] as const;
+
+const policyViolationEventTypes = new Set<string>(["egress.blocked", "data.access.denied", "policy.denied"]);
 
 function asObject(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -450,6 +455,11 @@ function summarizeAgentChangeEvent(event: EventRow): string {
     const reasonCode = readString(data.reason_code) ?? "-";
     const repeat = readNumber(data.repeat_count);
     return repeat != null ? `${reasonCode} (x${repeat})` : reasonCode;
+  }
+  if (policyViolationEventTypes.has(event.event_type)) {
+    const reasonCode = readString(data.reason_code) ?? "unknown";
+    const action = readString(data.action);
+    return action ? `${reasonCode} / ${action}` : reasonCode;
   }
   if (event.event_type === "daily.agent.snapshot") {
     const date = readString(data.snapshot_date) ?? "-";
@@ -776,6 +786,7 @@ export function AgentProfilePage(): JSX.Element {
         if (eventAgentId && eventAgentId === nextAgentId) return true;
 
         if (nextPrincipalId) {
+          if (event.actor_principal_id === nextPrincipalId) return true;
           if (readString(data.principal_id) === nextPrincipalId) return true;
           if (readString(data.issued_to_principal_id) === nextPrincipalId) return true;
         }
@@ -1192,25 +1203,38 @@ export function AgentProfilePage(): JSX.Element {
     if (policyViolations7d >= 2 || latestRepeatedMistakes7d >= 1) return "limited";
     return "allowed";
   }, [latestRepeatedMistakes7d, policyViolations7d]);
+  const recentViolationEvents = useMemo(
+    () =>
+      relevantChangeEvents
+        .filter((event) => policyViolationEventTypes.has(event.event_type))
+        .slice(0, 6)
+        .map((event) => {
+          const data = asObject(event.data);
+          const reason_code = readString(data.reason_code) ?? "unknown";
+          const action = readString(data.action) ?? readString(data.target_domain) ?? "-";
+          return {
+            event_id: event.event_id,
+            event_type: event.event_type,
+            occurred_at: event.occurred_at,
+            run_id: event.run_id,
+            reason_code,
+            action,
+          };
+        }),
+    [relevantChangeEvents],
+  );
   const violationTopReasons = useMemo(() => {
     const scoreByReason = new Map<string, number>();
-    for (const row of constraints) {
+    for (const row of recentViolationEvents) {
       const reason = row.reason_code.trim();
       if (!reason) continue;
-      const weight = Math.max(1, row.repeat_count || 0);
-      scoreByReason.set(reason, (scoreByReason.get(reason) ?? 0) + weight);
-    }
-    for (const row of mistakes) {
-      const reason = row.reason_code.trim();
-      if (!reason) continue;
-      const weight = Math.max(1, row.repeat_count || 0);
-      scoreByReason.set(reason, (scoreByReason.get(reason) ?? 0) + weight);
+      scoreByReason.set(reason, (scoreByReason.get(reason) ?? 0) + 1);
     }
     return [...scoreByReason.entries()]
       .map(([reason_code, count]) => ({ reason_code, count }))
       .sort((a, b) => b.count - a.count || a.reason_code.localeCompare(b.reason_code))
       .slice(0, 5);
-  }, [constraints, mistakes]);
+  }, [recentViolationEvents]);
 
   useEffect(() => {
     void reloadAgentList({ ensureInitialSelection: true });
@@ -3558,6 +3582,50 @@ export function AgentProfilePage(): JSX.Element {
                   ) : (
                     <div className="muted" style={{ marginTop: 6 }}>
                       {t("agent_profile.violations.top_reasons_empty")}
+                    </div>
+                  )}
+
+                  <div className="detailSectionTitle" style={{ marginTop: 10 }}>
+                    {t("agent_profile.violations.recent_events")}
+                  </div>
+                  {recentViolationEvents.length ? (
+                    <ul className="constraintList">
+                      {recentViolationEvents.map((event) => (
+                        <li key={event.event_id} className="constraintRow">
+                          <div className="constraintTop">
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                              <span className="mono">
+                                {t(`agent_profile.change_timeline.type.${event.event_type}`, {
+                                  defaultValue: event.event_type,
+                                })}
+                              </span>
+                              <span className="muted">{formatTimestamp(event.occurred_at)}</span>
+                            </div>
+                            <button
+                              type="button"
+                              className="ghostButton"
+                              onClick={() => {
+                                openInspectorByEvent(event.event_id, event.run_id);
+                              }}
+                            >
+                              {t("agent_profile.open_inspector.event")}
+                            </button>
+                          </div>
+                          <div className="muted">
+                            <span className="mono">
+                              {t("agent_profile.violations.reason")}: {event.reason_code}
+                            </span>
+                            <span className="muted"> · </span>
+                            <span className="mono">
+                              {t("agent_profile.violations.action")}: {event.action}
+                            </span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="muted" style={{ marginTop: 6 }}>
+                      {t("agent_profile.violations.recent_events_empty")}
                     </div>
                   )}
 
