@@ -214,6 +214,32 @@ export function decideDownstreamStepSelection(args: {
   };
 }
 
+export function decideRunAutoSelection(args: {
+  runsState: ConnState;
+  runIds: string[];
+  currentRunId: string;
+  preferredRunId?: string;
+}): string | null {
+  if (args.runsState === "loading") return null;
+
+  const currentRunId = args.currentRunId.trim();
+  if (args.runIds.length === 0) {
+    return currentRunId ? "" : null;
+  }
+
+  const currentStillExists = currentRunId && args.runIds.includes(currentRunId);
+  if (currentStillExists) return null;
+
+  const preferredRunId = args.preferredRunId?.trim() ?? "";
+  if (preferredRunId && args.runIds.includes(preferredRunId)) {
+    return preferredRunId !== currentRunId ? preferredRunId : null;
+  }
+
+  const firstRunId = args.runIds[0] ?? "";
+  if (!firstRunId) return null;
+  return firstRunId !== currentRunId ? firstRunId : null;
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -1036,20 +1062,15 @@ export function WorkPage(): JSX.Element {
   }, [threadId, roomId, threads]);
 
   useEffect(() => {
-    if (runsState === "loading") return;
-
-    if (!runs.length) {
-      if (stepsRunId) setStepsRunId("");
-      return;
+    const next = decideRunAutoSelection({
+      runsState,
+      runIds: runs.map((r) => r.run_id),
+      currentRunId: stepsRunId,
+      preferredRunId: createdRunId ?? "",
+    });
+    if (next != null && next !== stepsRunId) {
+      setStepsRunId(next);
     }
-
-    const current = stepsRunId.trim();
-    const stillExists = current && runs.some((r) => r.run_id === current);
-    if (stillExists) return;
-
-    const preferred = (createdRunId ?? "").trim();
-    const next = preferred && runs.some((r) => r.run_id === preferred) ? preferred : runs[0]?.run_id ?? "";
-    if (next && next !== stepsRunId) setStepsRunId(next);
   }, [runs, runsState, createdRunId, stepsRunId]);
 
   useEffect(() => {
