@@ -360,6 +360,29 @@ export function parseOptionalJsonInput(rawInput: string): {
   }
 }
 
+export function buildArtifactContent(args: {
+  contentType: ArtifactContentType;
+  textInput: string;
+  jsonInput: string;
+  uriInput: string;
+}): {
+  content: { type: ArtifactContentType; text?: string; json?: unknown; uri?: string } | undefined;
+  errorCode: string | null;
+} {
+  if (args.contentType === "text") {
+    return { content: { type: "text", text: args.textInput }, errorCode: null };
+  }
+  if (args.contentType === "json") {
+    const parsedJson = parseOptionalJsonInput(args.jsonInput);
+    if (parsedJson.errorCode) return { content: undefined, errorCode: parsedJson.errorCode };
+    return { content: { type: "json", json: parsedJson.value ?? {} }, errorCode: null };
+  }
+  if (args.contentType === "uri") {
+    return { content: { type: "uri", uri: args.uriInput.trim() }, errorCode: null };
+  }
+  return { content: undefined, errorCode: null };
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -881,18 +904,13 @@ export function WorkPage(): JSX.Element {
     setCreateRunError(null);
     setCreatedRunId(null);
 
-    const rawJson = createRunInputJson.trim();
-    let inputJson: unknown | undefined = undefined;
-    if (rawJson) {
-      try {
-        inputJson = JSON.parse(rawJson) as unknown;
-      } catch {
-        if (createRunRequestRef.current === requestId) {
-          setCreateRunError("invalid_json");
-          setCreateRunState("error");
-        }
-        return;
+    const parsedInput = parseOptionalJsonInput(createRunInputJson);
+    if (parsedInput.errorCode) {
+      if (createRunRequestRef.current === requestId) {
+        setCreateRunError(parsedInput.errorCode);
+        setCreateRunState("error");
       }
+      return;
     }
 
     const correlation_id = createRunCorrelationId.trim() || undefined;
@@ -913,7 +931,7 @@ export function WorkPage(): JSX.Element {
         thread_id: threadId.trim() ? threadId.trim() : undefined,
         title: createRunTitle.trim() ? createRunTitle.trim() : undefined,
         goal: createRunGoal.trim() ? createRunGoal.trim() : undefined,
-        input: inputJson,
+        input: parsedInput.value,
         tags,
         correlation_id,
       });
@@ -2777,43 +2795,27 @@ export function WorkPage(): JSX.Element {
                     setCreateArtifactError(null);
                     setCreatedArtifactId(null);
 
-                    let content:
-                      | { type: ArtifactContentType; text?: string; json?: unknown; uri?: string }
-                      | undefined = undefined;
-
-                    if (createArtifactContentType === "text") {
-                      content = { type: "text", text: createArtifactText };
-                    } else if (createArtifactContentType === "json") {
-                      const rawJson = createArtifactJson.trim();
-                      if (rawJson) {
-                        try {
-                          content = { type: "json", json: JSON.parse(rawJson) as unknown };
-                        } catch {
-                          if (createArtifactRequestRef.current === requestId) {
-                            setCreateArtifactError("invalid_json");
-                            setCreateArtifactState("error");
-                          }
-                          return;
-                        }
-                      } else {
-                        content = { type: "json", json: {} };
+                    const builtContent = buildArtifactContent({
+                      contentType: createArtifactContentType,
+                      textInput: createArtifactText,
+                      jsonInput: createArtifactJson,
+                      uriInput: createArtifactUri,
+                    });
+                    if (builtContent.errorCode) {
+                      if (createArtifactRequestRef.current === requestId) {
+                        setCreateArtifactError(builtContent.errorCode);
+                        setCreateArtifactState("error");
                       }
-                    } else if (createArtifactContentType === "uri") {
-                      content = { type: "uri", uri: createArtifactUri.trim() };
+                      return;
                     }
 
-                    const rawMetadata = createArtifactMetadataJson.trim();
-                    let metadata: unknown | undefined = undefined;
-                    if (rawMetadata) {
-                      try {
-                        metadata = JSON.parse(rawMetadata) as unknown;
-                      } catch {
-                        if (createArtifactRequestRef.current === requestId) {
-                          setCreateArtifactError("invalid_json");
-                          setCreateArtifactState("error");
-                        }
-                        return;
+                    const parsedMetadata = parseOptionalJsonInput(createArtifactMetadataJson);
+                    if (parsedMetadata.errorCode) {
+                      if (createArtifactRequestRef.current === requestId) {
+                        setCreateArtifactError(parsedMetadata.errorCode);
+                        setCreateArtifactState("error");
                       }
+                      return;
                     }
 
                     try {
@@ -2821,8 +2823,8 @@ export function WorkPage(): JSX.Element {
                         kind,
                         title: createArtifactTitle.trim() ? createArtifactTitle.trim() : undefined,
                         mime_type: createArtifactMimeType.trim() ? createArtifactMimeType.trim() : undefined,
-                        content,
-                        metadata,
+                        content: builtContent.content,
+                        metadata: parsedMetadata.value,
                       });
 
                       if (artifactsStepIdRef.current === step_id) {
