@@ -717,6 +717,7 @@ export function AgentProfilePage(): JSX.Element {
   const [approvalRecommendationError, setApprovalRecommendationError] = useState<string | null>(null);
   const approvalRecommendationRequestSeqRef = useRef<number>(0);
   const changeEventsRequestSeqRef = useRef<number>(0);
+  const growthViewsRequestSeqRef = useRef<number>(0);
 
   const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
   const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
@@ -752,6 +753,16 @@ export function AgentProfilePage(): JSX.Element {
 
   function isLatestChangeEventsRequest(requestSeq: number): boolean {
     return changeEventsRequestSeqRef.current === requestSeq;
+  }
+
+  function beginGrowthViewsRequest(): number {
+    const next = growthViewsRequestSeqRef.current + 1;
+    growthViewsRequestSeqRef.current = next;
+    return next;
+  }
+
+  function isLatestGrowthViewsRequest(requestSeq: number): boolean {
+    return growthViewsRequestSeqRef.current === requestSeq;
   }
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
@@ -1877,12 +1888,13 @@ export function AgentProfilePage(): JSX.Element {
   }
 
   async function refreshAgentGrowthViews(agent_id: string): Promise<void> {
+    const requestSeq = beginGrowthViewsRequest();
     const [trustRes, skillsRes, assessmentsRes] = await Promise.all([
       getAgentTrust(agent_id),
       listAgentSkills({ agent_id, limit: 50 }),
       listAgentSkillAssessments({ agent_id, limit: 100 }),
     ]);
-    if (!isStillActiveAgent(agent_id)) return;
+    if (!isStillActiveAgent(agent_id) || !isLatestGrowthViewsRequest(requestSeq)) return;
     setTrust(trustRes);
     setSkills(skillsRes);
     setAssessments(assessmentsRes);
