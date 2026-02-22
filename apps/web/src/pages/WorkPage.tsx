@@ -347,6 +347,19 @@ export function parseToolCallFailPayload(args: {
   return { payload, errorCode: null };
 }
 
+export function parseOptionalJsonInput(rawInput: string): {
+  value: unknown | undefined;
+  errorCode: string | null;
+} {
+  const raw = rawInput.trim();
+  if (!raw) return { value: undefined, errorCode: null };
+  try {
+    return { value: JSON.parse(raw) as unknown, errorCode: null };
+  } catch {
+    return { value: undefined, errorCode: "invalid_json" };
+  }
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -2152,25 +2165,20 @@ export function WorkPage(): JSX.Element {
                     setCreateStepError(null);
                     setCreatedStepId(null);
 
-                    const rawJson = createStepInputJson.trim();
-                    let inputJson: unknown | undefined = undefined;
-                    if (rawJson) {
-                      try {
-                        inputJson = JSON.parse(rawJson) as unknown;
-                      } catch {
-                        if (createStepRequestRef.current === requestId) {
-                          setCreateStepError("invalid_json");
-                          setCreateStepState("error");
-                        }
-                        return;
+                    const parsedInput = parseOptionalJsonInput(createStepInputJson);
+                    if (parsedInput.errorCode) {
+                      if (createStepRequestRef.current === requestId) {
+                        setCreateStepError(parsedInput.errorCode);
+                        setCreateStepState("error");
                       }
+                      return;
                     }
 
                     try {
                       const res = await createStep(run_id, {
                         kind,
                         title: createStepTitle.trim() ? createStepTitle.trim() : undefined,
-                        input: inputJson,
+                        input: parsedInput.value,
                       });
                       if (stepsRunIdRef.current === run_id) {
                         setCreateStepTitle("");
@@ -2355,25 +2363,20 @@ export function WorkPage(): JSX.Element {
                     setCreateToolCallError(null);
                     setCreatedToolCallId(null);
 
-                    const rawJson = createToolCallInputJson.trim();
-                    let inputJson: unknown | undefined = undefined;
-                    if (rawJson) {
-                      try {
-                        inputJson = JSON.parse(rawJson) as unknown;
-                      } catch {
-                        if (createToolCallRequestRef.current === requestId) {
-                          setCreateToolCallError("invalid_json");
-                          setCreateToolCallState("error");
-                        }
-                        return;
+                    const parsedInput = parseOptionalJsonInput(createToolCallInputJson);
+                    if (parsedInput.errorCode) {
+                      if (createToolCallRequestRef.current === requestId) {
+                        setCreateToolCallError(parsedInput.errorCode);
+                        setCreateToolCallState("error");
                       }
+                      return;
                     }
 
                     try {
                       const res = await createToolCall(step_id, {
                         tool_name,
                         title: createToolCallTitle.trim() ? createToolCallTitle.trim() : undefined,
-                        input: inputJson,
+                        input: parsedInput.value,
                         agent_id: createToolCallAgentId.trim() ? createToolCallAgentId.trim() : undefined,
                       });
 
