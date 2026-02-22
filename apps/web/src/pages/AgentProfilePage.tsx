@@ -718,6 +718,8 @@ export function AgentProfilePage(): JSX.Element {
   const approvalRecommendationRequestSeqRef = useRef<number>(0);
   const changeEventsRequestSeqRef = useRef<number>(0);
   const growthViewsRequestSeqRef = useRef<number>(0);
+  const skillPackagesRequestSeqRef = useRef<number>(0);
+  const onboardingStatusRequestSeqRef = useRef<number>(0);
 
   const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
   const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
@@ -763,6 +765,26 @@ export function AgentProfilePage(): JSX.Element {
 
   function isLatestGrowthViewsRequest(requestSeq: number): boolean {
     return growthViewsRequestSeqRef.current === requestSeq;
+  }
+
+  function beginSkillPackagesRequest(): number {
+    const next = skillPackagesRequestSeqRef.current + 1;
+    skillPackagesRequestSeqRef.current = next;
+    return next;
+  }
+
+  function isLatestSkillPackagesRequest(requestSeq: number): boolean {
+    return skillPackagesRequestSeqRef.current === requestSeq;
+  }
+
+  function beginOnboardingStatusRequest(): number {
+    const next = onboardingStatusRequestSeqRef.current + 1;
+    onboardingStatusRequestSeqRef.current = next;
+    return next;
+  }
+
+  function isLatestOnboardingStatusRequest(requestSeq: number): boolean {
+    return onboardingStatusRequestSeqRef.current === requestSeq;
   }
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
@@ -1713,6 +1735,7 @@ export function AgentProfilePage(): JSX.Element {
   }
 
   async function reloadSkillPackages(): Promise<void> {
+    const requestSeq = beginSkillPackagesRequest();
     const limitNum = Number(skillPackagesLimit);
     const limit = Number.isFinite(limitNum) ? Math.max(1, Math.min(200, Math.floor(limitNum))) : 50;
     const skill_id = skillPackagesSkillId.trim() || undefined;
@@ -1723,17 +1746,22 @@ export function AgentProfilePage(): JSX.Element {
     setSkillPackagesActionError(null);
     try {
       const rows = await listSkillPackages({ status, skill_id, limit });
+      if (!isLatestSkillPackagesRequest(requestSeq)) return;
       setSkillPackages(rows);
     } catch (e) {
+      if (!isLatestSkillPackagesRequest(requestSeq)) return;
       setSkillPackagesError(toErrorCode(e));
     } finally {
+      if (!isLatestSkillPackagesRequest(requestSeq)) return;
       setSkillPackagesLoading(false);
     }
   }
 
   async function reloadOnboardingStatus(agentOverride?: string): Promise<void> {
+    const requestSeq = beginOnboardingStatusRequest();
     const nextAgentId = (agentOverride ?? agentId).trim();
     if (!nextAgentId) {
+      if (!isLatestOnboardingStatusRequest(requestSeq)) return;
       setOnboardingStatus(null);
       setOnboardingStatusError(null);
       setOnboardingStatusLoading(false);
@@ -1744,6 +1772,7 @@ export function AgentProfilePage(): JSX.Element {
     setOnboardingStatusError(null);
     try {
       const status = await getAgentSkillOnboardingStatus(nextAgentId);
+      if (!isLatestOnboardingStatusRequest(requestSeq)) return;
       setAgentOnboardingWorkById((prev) => ({
         ...prev,
         [nextAgentId]: onboardingWorkCount(status.summary),
@@ -1751,10 +1780,10 @@ export function AgentProfilePage(): JSX.Element {
       if (!isStillActiveAgent(nextAgentId)) return;
       setOnboardingStatus(status);
     } catch (e) {
-      if (!isStillActiveAgent(nextAgentId)) return;
+      if (!isStillActiveAgent(nextAgentId) || !isLatestOnboardingStatusRequest(requestSeq)) return;
       setOnboardingStatusError(toErrorCode(e));
     } finally {
-      if (!isStillActiveAgent(nextAgentId)) return;
+      if (!isStillActiveAgent(nextAgentId) || !isLatestOnboardingStatusRequest(requestSeq)) return;
       setOnboardingStatusLoading(false);
     }
   }
