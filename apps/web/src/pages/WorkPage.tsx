@@ -266,6 +266,48 @@ export function decideStepAutoSelection(args: {
   return firstStepId !== currentStepId ? firstStepId : null;
 }
 
+export function parseRunCompletePayload(args: {
+  summaryInput: string;
+  outputJsonInput: string;
+}): {
+  payload: { summary?: string; output?: unknown };
+  errorCode: string | null;
+} {
+  const summary = args.summaryInput.trim();
+  const rawOutput = args.outputJsonInput.trim();
+  const payload: { summary?: string; output?: unknown } = {};
+  if (summary) payload.summary = summary;
+  if (rawOutput) {
+    try {
+      payload.output = JSON.parse(rawOutput) as unknown;
+    } catch {
+      return { payload, errorCode: "invalid_json" };
+    }
+  }
+  return { payload, errorCode: null };
+}
+
+export function parseRunFailPayload(args: {
+  messageInput: string;
+  errorJsonInput: string;
+}): {
+  payload: { message?: string; error?: unknown };
+  errorCode: string | null;
+} {
+  const message = args.messageInput.trim();
+  const rawError = args.errorJsonInput.trim();
+  const payload: { message?: string; error?: unknown } = {};
+  if (message) payload.message = message;
+  if (rawError) {
+    try {
+      payload.error = JSON.parse(rawError) as unknown;
+    } catch {
+      return { payload, errorCode: "invalid_json" };
+    }
+  }
+  return { payload, errorCode: null };
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -1783,19 +1825,15 @@ export function WorkPage(): JSX.Element {
                                       setRunActionError(null);
                                     }
 
-                                    const summary = runCompleteSummary.trim();
-                                    const rawOutput = runCompleteOutputJson.trim();
-                                    const payload: { summary?: string; output?: unknown } = {};
-                                    if (summary) payload.summary = summary;
-                                    if (rawOutput) {
-                                      try {
-                                        payload.output = JSON.parse(rawOutput) as unknown;
-                                      } catch {
-                                        if (roomIdRef.current === nextRoomId) {
-                                          setRunActionError("invalid_json");
-                                        }
-                                        return;
+                                    const parsed = parseRunCompletePayload({
+                                      summaryInput: runCompleteSummary,
+                                      outputJsonInput: runCompleteOutputJson,
+                                    });
+                                    if (parsed.errorCode) {
+                                      if (roomIdRef.current === nextRoomId) {
+                                        setRunActionError(parsed.errorCode);
                                       }
+                                      return;
                                     }
 
                                     const requestId = runActionRequestRef.current + 1;
@@ -1804,7 +1842,7 @@ export function WorkPage(): JSX.Element {
                                       setRunActionId(r.run_id);
                                     }
                                     try {
-                                      await completeRun(r.run_id, payload);
+                                      await completeRun(r.run_id, parsed.payload);
                                       await reloadRuns(nextRoomId);
                                       selectStepsRunForRoom(nextRoomId, r.run_id, { anchorRunId: selectionAnchor });
                                     } catch (e) {
@@ -1835,19 +1873,15 @@ export function WorkPage(): JSX.Element {
                                       setRunActionError(null);
                                     }
 
-                                    const message = runFailMessage.trim();
-                                    const rawError = runFailErrorJson.trim();
-                                    const payload: { message?: string; error?: unknown } = {};
-                                    if (message) payload.message = message;
-                                    if (rawError) {
-                                      try {
-                                        payload.error = JSON.parse(rawError) as unknown;
-                                      } catch {
-                                        if (roomIdRef.current === nextRoomId) {
-                                          setRunActionError("invalid_json");
-                                        }
-                                        return;
+                                    const parsed = parseRunFailPayload({
+                                      messageInput: runFailMessage,
+                                      errorJsonInput: runFailErrorJson,
+                                    });
+                                    if (parsed.errorCode) {
+                                      if (roomIdRef.current === nextRoomId) {
+                                        setRunActionError(parsed.errorCode);
                                       }
+                                      return;
                                     }
 
                                     const requestId = runActionRequestRef.current + 1;
@@ -1856,7 +1890,7 @@ export function WorkPage(): JSX.Element {
                                       setRunActionId(r.run_id);
                                     }
                                     try {
-                                      await failRun(r.run_id, payload);
+                                      await failRun(r.run_id, parsed.payload);
                                       await reloadRuns(nextRoomId);
                                       selectStepsRunForRoom(nextRoomId, r.run_id, { anchorRunId: selectionAnchor });
                                     } catch (e) {
