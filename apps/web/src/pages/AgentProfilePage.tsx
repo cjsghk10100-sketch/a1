@@ -1186,6 +1186,31 @@ export function AgentProfilePage(): JSX.Element {
   }, [autonomyGrowthPct]);
   const latestNewSkills7d = latestSnapshot?.new_skills_learned_7d ?? 0;
   const latestRepeatedMistakes7d = latestSnapshot?.repeated_mistakes_7d ?? 0;
+  const policyViolations7d = trust?.policy_violations_7d ?? 0;
+  const violationSeverity: PermissionState = useMemo(() => {
+    if (policyViolations7d >= 5 || latestRepeatedMistakes7d >= 2) return "blocked";
+    if (policyViolations7d >= 2 || latestRepeatedMistakes7d >= 1) return "limited";
+    return "allowed";
+  }, [latestRepeatedMistakes7d, policyViolations7d]);
+  const violationTopReasons = useMemo(() => {
+    const scoreByReason = new Map<string, number>();
+    for (const row of constraints) {
+      const reason = row.reason_code.trim();
+      if (!reason) continue;
+      const weight = Math.max(1, row.repeat_count || 0);
+      scoreByReason.set(reason, (scoreByReason.get(reason) ?? 0) + weight);
+    }
+    for (const row of mistakes) {
+      const reason = row.reason_code.trim();
+      if (!reason) continue;
+      const weight = Math.max(1, row.repeat_count || 0);
+      scoreByReason.set(reason, (scoreByReason.get(reason) ?? 0) + weight);
+    }
+    return [...scoreByReason.entries()]
+      .map(([reason_code, count]) => ({ reason_code, count }))
+      .sort((a, b) => b.count - a.count || a.reason_code.localeCompare(b.reason_code))
+      .slice(0, 5);
+  }, [constraints, mistakes]);
 
   useEffect(() => {
     void reloadAgentList({ ensureInitialSelection: true });
@@ -3451,51 +3476,107 @@ export function AgentProfilePage(): JSX.Element {
             {!trustLoading && !trustError && !trust ? <div className="placeholder">{t("common.not_available")}</div> : null}
 
             {trust ? (
-              <div className="kvGrid">
-                <div className="kvKey">{t("agent_profile.trust_score")}</div>
-                <div className="kvVal mono">{trust.trust_score.toFixed(3)}</div>
+              <>
+                <div className="kvGrid">
+                  <div className="kvKey">{t("agent_profile.trust_score")}</div>
+                  <div className="kvVal mono">{trust.trust_score.toFixed(3)}</div>
 
-                <div className="kvKey">{t("agent_profile.success_rate_7d")}</div>
-                <div className="kvVal mono">{formatPct01(trust.success_rate_7d)}</div>
+                  <div className="kvKey">{t("agent_profile.success_rate_7d")}</div>
+                  <div className="kvVal mono">{formatPct01(trust.success_rate_7d)}</div>
 
-                <div className="kvKey">{t("agent_profile.policy_violations_7d")}</div>
-                <div className="kvVal mono">{trust.policy_violations_7d}</div>
+                  <div className="kvKey">{t("agent_profile.policy_violations_7d")}</div>
+                  <div className="kvVal mono">{trust.policy_violations_7d}</div>
 
-                <div className="kvKey">{t("agent_profile.time_in_service_days")}</div>
-                <div className="kvVal mono">{trust.time_in_service_days}</div>
+                  <div className="kvKey">{t("agent_profile.time_in_service_days")}</div>
+                  <div className="kvVal mono">{trust.time_in_service_days}</div>
 
-                <div className="kvKey">{t("agent_profile.growth.delta_trust_7d")}</div>
-                <div className="kvVal">
-                  <span className="mono">{trustDelta7d == null ? "—" : formatSigned(trustDelta7d)}</span>
-                  <span className={statePillClass(trustTrend)} style={{ marginLeft: 8 }}>
-                    {t(`agent_profile.growth.trend.${trustTrend}`)}
-                  </span>
+                  <div className="kvKey">{t("agent_profile.growth.delta_trust_7d")}</div>
+                  <div className="kvVal">
+                    <span className="mono">{trustDelta7d == null ? "—" : formatSigned(trustDelta7d)}</span>
+                    <span className={statePillClass(trustTrend)} style={{ marginLeft: 8 }}>
+                      {t(`agent_profile.growth.trend.${trustTrend}`)}
+                    </span>
+                  </div>
+
+                  <div className="kvKey">{t("agent_profile.growth.delta_autonomy_7d")}</div>
+                  <div className="kvVal">
+                    <span className="mono">{autonomyDelta7d == null ? "—" : formatSignedPct01(autonomyDelta7d)}</span>
+                    <span className={statePillClass(autonomyTrend)} style={{ marginLeft: 8 }}>
+                      {t(`agent_profile.growth.trend.${autonomyTrend}`)}
+                    </span>
+                  </div>
+
+                  <div className="kvKey">{t("agent_profile.growth.trust_growth_pct_7d")}</div>
+                  <div className="kvVal">
+                    <span className="mono">{trustGrowthPct == null ? "—" : formatSignedPercent(trustGrowthPct)}</span>
+                    <span className={statePillClass(trustGrowthTrend)} style={{ marginLeft: 8 }}>
+                      {t(`agent_profile.growth.trend.${trustGrowthTrend}`)}
+                    </span>
+                  </div>
+
+                  <div className="kvKey">{t("agent_profile.growth.autonomy_growth_pct_7d")}</div>
+                  <div className="kvVal">
+                    <span className="mono">{autonomyGrowthPct == null ? "—" : formatSignedPercent(autonomyGrowthPct)}</span>
+                    <span className={statePillClass(autonomyGrowthTrend)} style={{ marginLeft: 8 }}>
+                      {t(`agent_profile.growth.trend.${autonomyGrowthTrend}`)}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="kvKey">{t("agent_profile.growth.delta_autonomy_7d")}</div>
-                <div className="kvVal">
-                  <span className="mono">{autonomyDelta7d == null ? "—" : formatSignedPct01(autonomyDelta7d)}</span>
-                  <span className={statePillClass(autonomyTrend)} style={{ marginLeft: 8 }}>
-                    {t(`agent_profile.growth.trend.${autonomyTrend}`)}
-                  </span>
-                </div>
+                <div className="detailSection">
+                  <div className="detailSectionTitle">{t("agent_profile.violations.title")}</div>
+                  <div className="muted">{t("agent_profile.violations.explainer")}</div>
 
-                <div className="kvKey">{t("agent_profile.growth.trust_growth_pct_7d")}</div>
-                <div className="kvVal">
-                  <span className="mono">{trustGrowthPct == null ? "—" : formatSignedPercent(trustGrowthPct)}</span>
-                  <span className={statePillClass(trustGrowthTrend)} style={{ marginLeft: 8 }}>
-                    {t(`agent_profile.growth.trend.${trustGrowthTrend}`)}
-                  </span>
-                </div>
+                  <div className="kvGrid" style={{ marginTop: 10 }}>
+                    <div className="kvKey">{t("agent_profile.violations.severity_label")}</div>
+                    <div className="kvVal">
+                      <span className={statePillClass(violationSeverity)}>
+                        {t(`agent_profile.violations.severity.${violationSeverity}`)}
+                      </span>
+                    </div>
 
-                <div className="kvKey">{t("agent_profile.growth.autonomy_growth_pct_7d")}</div>
-                <div className="kvVal">
-                  <span className="mono">{autonomyGrowthPct == null ? "—" : formatSignedPercent(autonomyGrowthPct)}</span>
-                  <span className={statePillClass(autonomyGrowthTrend)} style={{ marginLeft: 8 }}>
-                    {t(`agent_profile.growth.trend.${autonomyGrowthTrend}`)}
-                  </span>
+                    <div className="kvKey">{t("agent_profile.violations.total_7d")}</div>
+                    <div className="kvVal mono">{policyViolations7d}</div>
+                  </div>
+
+                  <div className="detailSectionTitle" style={{ marginTop: 10 }}>
+                    {t("agent_profile.violations.top_reasons")}
+                  </div>
+                  {violationTopReasons.length ? (
+                    <ul className="constraintList">
+                      {violationTopReasons.map((row) => (
+                        <li key={row.reason_code} className="constraintRow">
+                          <div className="constraintTop">
+                            <span className="mono">{row.reason_code}</span>
+                            <span className="mono">
+                              {t("agent_profile.violations.count", { count: row.count })}
+                            </span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="muted" style={{ marginTop: 6 }}>
+                      {t("agent_profile.violations.top_reasons_empty")}
+                    </div>
+                  )}
+
+                  <div className="detailSectionTitle" style={{ marginTop: 10 }}>
+                    {t("agent_profile.violations.remediation_title")}
+                  </div>
+                  <ul className="constraintList">
+                    <li className="constraintRow">
+                      <div className="muted">{t("agent_profile.violations.remediation.1")}</div>
+                    </li>
+                    <li className="constraintRow">
+                      <div className="muted">{t("agent_profile.violations.remediation.2")}</div>
+                    </li>
+                    <li className="constraintRow">
+                      <div className="muted">{t("agent_profile.violations.remediation.3")}</div>
+                    </li>
+                  </ul>
                 </div>
-              </div>
+              </>
             ) : null}
 
             <details className="advancedDetails">
