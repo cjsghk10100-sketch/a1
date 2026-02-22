@@ -308,6 +308,45 @@ export function parseRunFailPayload(args: {
   return { payload, errorCode: null };
 }
 
+export function parseToolCallSucceedPayload(args: {
+  outputJsonInput: string;
+}): {
+  payload: { output?: unknown };
+  errorCode: string | null;
+} {
+  const rawOutput = args.outputJsonInput.trim();
+  const payload: { output?: unknown } = {};
+  if (rawOutput) {
+    try {
+      payload.output = JSON.parse(rawOutput) as unknown;
+    } catch {
+      return { payload, errorCode: "invalid_json" };
+    }
+  }
+  return { payload, errorCode: null };
+}
+
+export function parseToolCallFailPayload(args: {
+  messageInput: string;
+  errorJsonInput: string;
+}): {
+  payload: { message?: string; error?: unknown };
+  errorCode: string | null;
+} {
+  const message = args.messageInput.trim();
+  const rawError = args.errorJsonInput.trim();
+  const payload: { message?: string; error?: unknown } = {};
+  if (message) payload.message = message;
+  if (rawError) {
+    try {
+      payload.error = JSON.parse(rawError) as unknown;
+    } catch {
+      return { payload, errorCode: "invalid_json" };
+    }
+  }
+  return { payload, errorCode: null };
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -2452,17 +2491,14 @@ export function WorkPage(): JSX.Element {
                                     if (toolCallsStepIdRef.current === step_id) {
                                       setToolCallActionError(null);
                                     }
-                                    const rawOutput = toolCallSucceedOutputJson.trim();
-                                    let payload: { output?: unknown } = {};
-                                    if (rawOutput) {
-                                      try {
-                                        payload = { output: JSON.parse(rawOutput) as unknown };
-                                      } catch {
-                                        if (toolCallsStepIdRef.current === step_id) {
-                                          setToolCallActionError("invalid_json");
-                                        }
-                                        return;
+                                    const parsed = parseToolCallSucceedPayload({
+                                      outputJsonInput: toolCallSucceedOutputJson,
+                                    });
+                                    if (parsed.errorCode) {
+                                      if (toolCallsStepIdRef.current === step_id) {
+                                        setToolCallActionError(parsed.errorCode);
                                       }
+                                      return;
                                     }
 
                                     const requestId = toolCallActionRequestRef.current + 1;
@@ -2471,7 +2507,7 @@ export function WorkPage(): JSX.Element {
                                       setToolCallActionId(tc.tool_call_id);
                                     }
                                     try {
-                                      await succeedToolCall(tc.tool_call_id, payload);
+                                      await succeedToolCall(tc.tool_call_id, parsed.payload);
                                       await reloadToolCalls(step_id);
                                       const run_id = tc.run_id?.trim();
                                       if (run_id) await reloadSteps(run_id);
@@ -2507,20 +2543,15 @@ export function WorkPage(): JSX.Element {
                                     if (toolCallsStepIdRef.current === step_id) {
                                       setToolCallActionError(null);
                                     }
-                                    const message = toolCallFailMessage.trim();
-
-                                    const rawError = toolCallFailErrorJson.trim();
-                                    const payload: { message?: string; error?: unknown } = {};
-                                    if (message) payload.message = message;
-                                    if (rawError) {
-                                      try {
-                                        payload.error = JSON.parse(rawError) as unknown;
-                                      } catch {
-                                        if (toolCallsStepIdRef.current === step_id) {
-                                          setToolCallActionError("invalid_json");
-                                        }
-                                        return;
+                                    const parsed = parseToolCallFailPayload({
+                                      messageInput: toolCallFailMessage,
+                                      errorJsonInput: toolCallFailErrorJson,
+                                    });
+                                    if (parsed.errorCode) {
+                                      if (toolCallsStepIdRef.current === step_id) {
+                                        setToolCallActionError(parsed.errorCode);
                                       }
+                                      return;
                                     }
 
                                     const requestId = toolCallActionRequestRef.current + 1;
@@ -2529,7 +2560,7 @@ export function WorkPage(): JSX.Element {
                                       setToolCallActionId(tc.tool_call_id);
                                     }
                                     try {
-                                      await failToolCall(tc.tool_call_id, payload);
+                                      await failToolCall(tc.tool_call_id, parsed.payload);
                                       await reloadToolCalls(step_id);
                                       const run_id = tc.run_id?.trim();
                                       if (run_id) await reloadSteps(run_id);
