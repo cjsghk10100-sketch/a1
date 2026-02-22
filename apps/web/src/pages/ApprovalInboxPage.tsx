@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { ApprovalDecision, ApprovalRow, ApprovalStatus } from "../api/approvals";
 import { decideApproval, getApproval, listApprovals } from "../api/approvals";
@@ -47,8 +47,14 @@ export function ApprovalInboxPage(): JSX.Element {
 
   const [reason, setReason] = useState<string>("");
   const [deciding, setDeciding] = useState<boolean>(false);
+  const selectedIdRef = useRef<string | null>(selectedId);
+  const decideRequestRef = useRef<number>(0);
 
   const statusFilter: ApprovalStatus | undefined = activeTab === "all" ? undefined : activeTab;
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,20 +109,29 @@ export function ApprovalInboxPage(): JSX.Element {
   }, [selectedId]);
 
   async function decide(decision: ApprovalDecision): Promise<void> {
-    if (!selectedId) return;
+    const approvalId = selectedIdRef.current;
+    if (!approvalId) return;
+    const requestId = decideRequestRef.current + 1;
+    decideRequestRef.current = requestId;
     setDeciding(true);
     setDetailError(null);
 
     try {
-      await decideApproval({ approvalId: selectedId, decision, reason: reason.trim() || undefined });
-      const refreshed = await getApproval(selectedId);
-      setDetail(refreshed);
+      await decideApproval({ approvalId, decision, reason: reason.trim() || undefined });
+      const refreshed = await getApproval(approvalId);
       const approvals = await listApprovals({ status: statusFilter, limit: 100 });
+      if (decideRequestRef.current !== requestId) return;
       setItems(approvals);
-      setReason("");
+      if (selectedIdRef.current === approvalId) {
+        setDetail(refreshed);
+        setReason("");
+      }
     } catch (e) {
+      if (decideRequestRef.current !== requestId) return;
+      if (selectedIdRef.current !== approvalId) return;
       setDetailError(e instanceof ApiError ? `${e.status}` : "unknown");
     } finally {
+      if (decideRequestRef.current !== requestId) return;
       setDeciding(false);
     }
   }
