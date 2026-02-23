@@ -843,19 +843,33 @@ export function WorkPage(): JSX.Element {
       return;
     }
 
+    const scopedStepId = resolveRunScopedStepId({
+      runId: stepsRunIdRef.current,
+      stepId: id,
+      steps,
+    });
+    if (!scopedStepId) {
+      if (toolCallsRequestRef.current === requestId) {
+        setToolCalls([]);
+        setToolCallsState("idle");
+        setToolCallsError(null);
+      }
+      return;
+    }
+
     if (toolCallsRequestRef.current === requestId) {
       setToolCallsState("loading");
       setToolCallsError(null);
     }
     try {
-      const res = await listToolCalls({ step_id: id, limit: 50 });
+      const res = await listToolCalls({ step_id: scopedStepId, limit: 50 });
       if (toolCallsRequestRef.current !== requestId) return;
-      if (toolCallsStepIdRef.current !== id) return;
+      if (toolCallsStepIdRef.current !== scopedStepId) return;
       setToolCalls(res);
       setToolCallsState("idle");
     } catch (e) {
       if (toolCallsRequestRef.current !== requestId) return;
-      if (toolCallsStepIdRef.current !== id) return;
+      if (toolCallsStepIdRef.current !== scopedStepId) return;
       setToolCallsError(toErrorCode(e));
       setToolCallsState("error");
     }
@@ -874,19 +888,33 @@ export function WorkPage(): JSX.Element {
       return;
     }
 
+    const scopedStepId = resolveRunScopedStepId({
+      runId: stepsRunIdRef.current,
+      stepId: id,
+      steps,
+    });
+    if (!scopedStepId) {
+      if (artifactsRequestRef.current === requestId) {
+        setArtifacts([]);
+        setArtifactsState("idle");
+        setArtifactsError(null);
+      }
+      return;
+    }
+
     if (artifactsRequestRef.current === requestId) {
       setArtifactsState("loading");
       setArtifactsError(null);
     }
     try {
-      const res = await listArtifacts({ step_id: id, limit: 50 });
+      const res = await listArtifacts({ step_id: scopedStepId, limit: 50 });
       if (artifactsRequestRef.current !== requestId) return;
-      if (artifactsStepIdRef.current !== id) return;
+      if (artifactsStepIdRef.current !== scopedStepId) return;
       setArtifacts(res);
       setArtifactsState("idle");
     } catch (e) {
       if (artifactsRequestRef.current !== requestId) return;
-      if (artifactsStepIdRef.current !== id) return;
+      if (artifactsStepIdRef.current !== scopedStepId) return;
       setArtifactsError(toErrorCode(e));
       setArtifactsState("error");
     }

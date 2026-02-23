@@ -53,6 +53,16 @@ describe("resolveRunScopedStepId", () => {
     ).toBeUndefined();
   });
 
+  it("returns undefined when step list is empty", () => {
+    expect(
+      resolveRunScopedStepId({
+        runId: "run_1",
+        stepId: "step_1",
+        steps: [],
+      }),
+    ).toBeUndefined();
+  });
+
   it("trims run and step before matching", () => {
     expect(
       resolveRunScopedStepId({
