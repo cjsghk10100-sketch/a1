@@ -12,7 +12,10 @@ vi.mock("react-i18next", () => ({
 
 function renderPage() {
   render(
-    <MemoryRouter initialEntries={["/desktop-bootstrap"]}>
+    <MemoryRouter
+      initialEntries={["/desktop-bootstrap"]}
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
       <Routes>
         <Route path="/desktop-bootstrap" element={<DesktopBootstrapPage />} />
         <Route path="/timeline" element={<div>timeline_marker</div>} />

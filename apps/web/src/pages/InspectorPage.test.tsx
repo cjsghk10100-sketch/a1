@@ -66,7 +66,7 @@ describe("InspectorPage", () => {
       .mockImplementationOnce(async () => [runFixture("run_b", "Run B")]);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <InspectorPage />
       </MemoryRouter>,
     );
