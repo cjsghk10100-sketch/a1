@@ -721,6 +721,7 @@ export function AgentProfilePage(): JSX.Element {
   const skillPackagesRequestSeqRef = useRef<number>(0);
   const onboardingStatusRequestSeqRef = useRef<number>(0);
   const tokensRequestSeqRef = useRef<number>(0);
+  const actionRegistryRequestSeqRef = useRef<number>(0);
 
   const [autonomyRecommendationId, setAutonomyRecommendationId] = useState<string>("");
   const [autonomyRecommendation, setAutonomyRecommendation] = useState<AutonomyRecommendationV1 | null>(null);
@@ -796,6 +797,16 @@ export function AgentProfilePage(): JSX.Element {
 
   function isLatestTokensRequest(requestSeq: number): boolean {
     return tokensRequestSeqRef.current === requestSeq;
+  }
+
+  function beginActionRegistryRequest(): number {
+    const next = actionRegistryRequestSeqRef.current + 1;
+    actionRegistryRequestSeqRef.current = next;
+    return next;
+  }
+
+  function isLatestActionRegistryRequest(requestSeq: number): boolean {
+    return actionRegistryRequestSeqRef.current === requestSeq;
   }
 
   const activeTokens = useMemo(() => tokens.filter((tok) => isTokenActive(tok)), [tokens]);
@@ -1772,6 +1783,23 @@ export function AgentProfilePage(): JSX.Element {
     }
   }
 
+  async function reloadActionRegistry(): Promise<void> {
+    const requestSeq = beginActionRegistryRequest();
+    setActionRegistryLoading(true);
+    setActionRegistryError(null);
+    try {
+      const rows = await listActionRegistry();
+      if (!isLatestActionRegistryRequest(requestSeq)) return;
+      setActionRegistryRows(rows);
+    } catch (e) {
+      if (!isLatestActionRegistryRequest(requestSeq)) return;
+      setActionRegistryError(toErrorCode(e));
+    } finally {
+      if (!isLatestActionRegistryRequest(requestSeq)) return;
+      setActionRegistryLoading(false);
+    }
+  }
+
   async function reloadOnboardingStatus(agentOverride?: string): Promise<void> {
     const requestSeq = beginOnboardingStatusRequest();
     const nextAgentId = (agentOverride ?? agentId).trim();
@@ -2094,26 +2122,8 @@ export function AgentProfilePage(): JSX.Element {
   }
 
   useEffect(() => {
-    let cancelled = false;
-    setActionRegistryLoading(true);
-    setActionRegistryError(null);
-
-    void (async () => {
-      try {
-        const rows = await listActionRegistry();
-        if (cancelled) return;
-        setActionRegistryRows(rows);
-      } catch (e) {
-        if (cancelled) return;
-        setActionRegistryError(toErrorCode(e));
-      } finally {
-        if (!cancelled) setActionRegistryLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    void reloadActionRegistry();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -2505,20 +2515,7 @@ export function AgentProfilePage(): JSX.Element {
                 type="button"
                 className="ghostButton"
                 disabled={actionRegistryLoading}
-                onClick={() => {
-                  void (async () => {
-                    setActionRegistryLoading(true);
-                    setActionRegistryError(null);
-                    try {
-                      const rows = await listActionRegistry();
-                      setActionRegistryRows(rows);
-                    } catch (e) {
-                      setActionRegistryError(toErrorCode(e));
-                    } finally {
-                      setActionRegistryLoading(false);
-                    }
-                  })();
-                }}
+                onClick={() => void reloadActionRegistry()}
               >
                 {t("common.refresh")}
               </button>
