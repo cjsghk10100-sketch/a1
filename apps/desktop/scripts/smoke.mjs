@@ -60,6 +60,41 @@ async function fetchJson(url, options = {}) {
   return { status: res.status, json };
 }
 
+async function ensureOwnerSession(baseUrl, workspaceId) {
+  const bootstrap = await fetchJson(`${baseUrl}/v1/auth/bootstrap-owner`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      workspace_id: workspaceId,
+      display_name: "Desktop Smoke Owner",
+    }),
+  });
+
+  if (bootstrap.status === 201) {
+    return bootstrap.json?.session?.access_token;
+  }
+
+  if (bootstrap.status !== 409) {
+    throw new Error(`smoke_auth_bootstrap_failed:${bootstrap.status}`);
+  }
+
+  const login = await fetchJson(`${baseUrl}/v1/auth/login`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      workspace_id: workspaceId,
+    }),
+  });
+  if (login.status !== 200) {
+    throw new Error(`smoke_auth_login_failed:${login.status}`);
+  }
+  return login.json?.session?.access_token;
+}
+
 async function waitForHealth(baseUrl) {
   await waitFor(async () => {
     const res = await fetch(`${baseUrl}/health`, { method: "GET" });
@@ -76,10 +111,10 @@ async function waitForBootstrap(webPort) {
   }, 45_000);
 }
 
-async function createSmokeRun(baseUrl, workspaceId) {
+async function createSmokeRun(baseUrl, workspaceId, accessToken) {
   const headers = {
     "content-type": "application/json",
-    "x-workspace-id": workspaceId,
+    authorization: `Bearer ${accessToken}`,
   };
   const room = await fetchJson(`${baseUrl}/v1/rooms`, {
     method: "POST",
@@ -185,7 +220,9 @@ async function main() {
   try {
     await waitForHealth(apiBaseUrl);
     await waitForBootstrap(webPort);
-    const { runId, headers } = await createSmokeRun(apiBaseUrl, workspaceId);
+    const accessToken = await ensureOwnerSession(apiBaseUrl, workspaceId);
+    if (!accessToken) throw new Error("smoke_auth_token_missing");
+    const { runId, headers } = await createSmokeRun(apiBaseUrl, workspaceId, accessToken);
     await waitForRunSucceeded(apiBaseUrl, runId, headers);
     // eslint-disable-next-line no-console
     console.log(`[desktop-smoke] ok (mode=${mode}, api=${apiPort}, web=${webPort}, run=${runId})`);

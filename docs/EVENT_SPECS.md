@@ -23,7 +23,7 @@ Required fields:
 - `occurred_at` (RFC3339 timestamp)
 - `workspace_id` (string)
 - `actor` (identity)
-  - `actor_type`: `user | service`
+  - `actor_type`: `user | service | agent`
   - `actor_id`: string
 - `stream` (ordering + fanout)
   - `stream_type`: `room | thread | workspace`
@@ -92,6 +92,10 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `lifecycle.state.changed` (v1)
 - `discord.channel.mapped` (v1)
 - `discord.message.ingested` (v1)
+- `engine.registered` (v1)
+- `engine.token.issued` (v1)
+- `engine.token.revoked` (v1)
+- `engine.deactivated` (v1)
 
 ## Implemented Non-Event Runtime Contracts
 
@@ -102,9 +106,21 @@ Some runtime safety contracts are projection/API level (not standalone events):
   - `claimed_by_actor_id`
   - `lease_expires_at`
   - `lease_heartbeat_at`
+- Run attempt history on `run_attempts`:
+  - `run_attempt_id`
+  - `attempt_no`
+  - `claimed_at`
+  - `released_at`
+  - `release_reason`
+  - `engine_id`
 - Lease endpoints:
   - `POST /v1/runs/:id/lease/heartbeat`
   - `POST /v1/runs/:id/lease/release`
+- Engine trust-boundary endpoints:
+  - `POST /v1/engines/register`
+  - `POST /v1/engines/:engineId/tokens/issue`
+  - `POST /v1/engines/:engineId/tokens/:tokenId/revoke`
+  - `POST /v1/engines/:engineId/deactivate`
 
 These contracts are intentionally non-event to avoid noise while preserving run ownership safety.
 

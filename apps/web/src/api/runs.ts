@@ -49,6 +49,23 @@ export interface StepRow {
   last_event_id: string | null;
 }
 
+export interface RunAttemptRow {
+  run_attempt_id: string;
+  run_id: string;
+  workspace_id: string;
+  room_id: string | null;
+  attempt_no: number;
+  claim_token: string;
+  claimed_by_actor_id: string;
+  actor_principal_id: string | null;
+  engine_id: string | null;
+  claimed_at: string;
+  released_at: string | null;
+  release_reason: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export async function getRun(runId: string): Promise<RunRow> {
   const res = await apiGet<{ run: RunRow }>(`/v1/runs/${runId}`);
   return res.run;
@@ -57,6 +74,11 @@ export async function getRun(runId: string): Promise<RunRow> {
 export async function listRunSteps(runId: string): Promise<StepRow[]> {
   const res = await apiGet<{ steps: StepRow[] }>(`/v1/runs/${runId}/steps`);
   return res.steps;
+}
+
+export async function listRunAttempts(runId: string): Promise<RunAttemptRow[]> {
+  const res = await apiGet<{ attempts: RunAttemptRow[] }>(`/v1/runs/${runId}/attempts`);
+  return res.attempts;
 }
 
 export async function listRuns(params?: {

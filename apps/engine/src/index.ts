@@ -15,6 +15,7 @@ type ClaimedRun = {
   claimed_by_actor_id: string;
   lease_expires_at: string;
   lease_heartbeat_at: string;
+  attempt_no?: number;
 };
 
 type ClaimResponse = {
@@ -35,6 +36,8 @@ type EngineConfig = {
   workspaceId: string;
   roomId?: string;
   actorId: string;
+  engineId?: string;
+  engineToken?: string;
   pollMs: number;
   maxClaimsPerCycle: number;
   runOnce: boolean;
@@ -61,11 +64,15 @@ function readBoolEnv(name: string, fallback: boolean): boolean {
 
 function getConfig(): EngineConfig {
   const roomId = process.env.ENGINE_ROOM_ID?.trim();
+  const engineId = process.env.ENGINE_ID?.trim();
+  const engineToken = process.env.ENGINE_AUTH_TOKEN?.trim();
   return {
     apiBaseUrl: process.env.ENGINE_API_BASE_URL?.trim() || "http://127.0.0.1:3000",
     workspaceId: process.env.ENGINE_WORKSPACE_ID?.trim() || "ws_dev",
     roomId: roomId && roomId.length > 0 ? roomId : undefined,
     actorId: process.env.ENGINE_ACTOR_ID?.trim() || "external_engine",
+    engineId: engineId && engineId.length > 0 ? engineId : undefined,
+    engineToken: engineToken && engineToken.length > 0 ? engineToken : undefined,
     pollMs: readIntEnv("ENGINE_POLL_MS", 1200),
     maxClaimsPerCycle: readIntEnv("ENGINE_MAX_CLAIMS_PER_CYCLE", 1),
     runOnce: readBoolEnv("ENGINE_RUN_ONCE", false),
@@ -80,6 +87,18 @@ function buildUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, "")}${path}`;
 }
 
+function requestHeaders(cfg: EngineConfig, includeJson = true): Record<string, string> {
+  const headers: Record<string, string> = {
+    "x-workspace-id": cfg.workspaceId,
+  };
+  if (includeJson) headers["content-type"] = "application/json";
+  if (cfg.engineId && cfg.engineToken) {
+    headers["x-engine-id"] = cfg.engineId;
+    headers["x-engine-token"] = cfg.engineToken;
+  }
+  return headers;
+}
+
 async function apiPost<T>(
   cfg: EngineConfig,
   path: string,
@@ -88,10 +107,7 @@ async function apiPost<T>(
 ): Promise<T> {
   const res = await fetch(buildUrl(cfg.apiBaseUrl, path), {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-workspace-id": cfg.workspaceId,
-    },
+    headers: requestHeaders(cfg, true),
     body: JSON.stringify(payload),
     signal,
   });
@@ -147,6 +163,44 @@ async function safeFailRun(cfg: EngineConfig, runId: string, err: unknown): Prom
   }
 }
 
+type EngineRegisterResponse = {
+  engine: {
+    engine_id: string;
+    actor_id: string;
+  };
+  token: {
+    engine_token: string;
+  };
+};
+
+async function ensureEngineIdentity(cfg: EngineConfig): Promise<EngineConfig> {
+  if (cfg.engineId && cfg.engineToken) return cfg;
+
+  const registered = await apiPost<EngineRegisterResponse>(cfg, "/v1/engines/register", {
+    actor_id: cfg.actorId,
+    engine_name: `Engine ${cfg.actorId}`,
+    token_label: "auto_bootstrap",
+    scopes: {
+      action_types: ["run.claim", "run.lease.heartbeat", "run.lease.release"],
+      rooms: cfg.roomId ? [cfg.roomId] : ["*"],
+    },
+  });
+
+  const engineId = registered.engine.engine_id;
+  const engineToken = registered.token.engine_token;
+  if (!engineId || !engineToken) {
+    throw new Error("engine_bootstrap_missing_token");
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(`[engine] registered engine id=${engineId} actor=${registered.engine.actor_id}`);
+  return {
+    ...cfg,
+    engineId,
+    engineToken,
+  };
+}
+
 async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
   const shouldFail = getRunInputFlag(run, "simulate_fail") === true;
   let heartbeatError: Error | null = null;
@@ -161,13 +215,11 @@ async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
   };
   const heartbeat = async () => {
     await apiPost<{ ok: true }>(cfg, `/v1/runs/${run.run_id}/lease/heartbeat`, {
-      actor_id: cfg.actorId,
       claim_token: run.claim_token,
     });
   };
   const releaseLease = async () => {
     await apiPost<{ ok: true }>(cfg, `/v1/runs/${run.run_id}/lease/release`, {
-      actor_id: cfg.actorId,
       claim_token: run.claim_token,
     });
   };
@@ -271,9 +323,7 @@ async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
 }
 
 async function claimRun(cfg: EngineConfig): Promise<ClaimResponse> {
-  const payload: { actor_id: string; room_id?: string } = {
-    actor_id: cfg.actorId,
-  };
+  const payload: { room_id?: string } = {};
   if (cfg.roomId) payload.room_id = cfg.roomId;
   return apiPost<ClaimResponse>(cfg, "/v1/runs/claim", payload);
 }
@@ -296,10 +346,11 @@ async function runCycle(cfg: EngineConfig): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  const cfg = getConfig();
+  const initialCfg = getConfig();
+  const cfg = await ensureEngineIdentity(initialCfg);
   // eslint-disable-next-line no-console
   console.log(
-    `[engine] started (api=${cfg.apiBaseUrl}, workspace=${cfg.workspaceId}, room=${cfg.roomId ?? "*"}, actor=${cfg.actorId}, poll=${cfg.pollMs}ms)`,
+    `[engine] started (api=${cfg.apiBaseUrl}, workspace=${cfg.workspaceId}, room=${cfg.roomId ?? "*"}, actor=${cfg.actorId}, engine_id=${cfg.engineId ?? "-"}, poll=${cfg.pollMs}ms)`,
   );
 
   if (cfg.runOnce) {

@@ -159,6 +159,8 @@ Optional engine env vars:
 - `ENGINE_WORKSPACE_ID` (default `ws_dev`)
 - `ENGINE_ROOM_ID` (optional; when set, only claims queued runs from that room)
 - `ENGINE_ACTOR_ID` (default `external_engine`)
+- `ENGINE_ID` (optional; if omitted engine auto-registers and receives a token)
+- `ENGINE_AUTH_TOKEN` (optional; pair with `ENGINE_ID` for fixed identity)
 - `ENGINE_POLL_MS` (default `1200`)
 - `ENGINE_MAX_CLAIMS_PER_CYCLE` (default `1`)
 - `ENGINE_RUN_ONCE` (default `false`)
@@ -166,11 +168,22 @@ Optional engine env vars:
 Debugging claim endpoint directly:
 
 ```bash
-# claim one queued run (workspace scope, optional room_id filter)
+# 1) register engine and get one-time token
+ENGINE_JSON=$(curl -sS -X POST http://localhost:3000/v1/engines/register \
+  -H "content-type: application/json" \
+  -H "x-workspace-id: ws_dev" \
+  -d '{"actor_id":"engine_bridge","engine_name":"Debug Engine"}')
+
+ENGINE_ID=$(echo "$ENGINE_JSON" | jq -r '.engine.engine_id')
+ENGINE_TOKEN=$(echo "$ENGINE_JSON" | jq -r '.token.engine_token')
+
+# 2) claim one queued run
 curl -sS -X POST http://localhost:3000/v1/runs/claim \
   -H "content-type: application/json" \
   -H "x-workspace-id: ws_dev" \
-  -d '{"actor_id":"engine_bridge"}'
+  -H "x-engine-id: $ENGINE_ID" \
+  -H "x-engine-token: $ENGINE_TOKEN" \
+  -d '{}'
 ```
 
 Claimed runs can be executed by your external engine via existing run/step/tool/artifact endpoints.
@@ -190,3 +203,24 @@ Optional tuning:
 - `POST /v1/secrets/:id/access`
 
 If the key is not set, API/server startup and existing endpoints still work; vault endpoints return `501`.
+
+## Ops Hardening Commands
+
+Hash-chain batch verification:
+
+```bash
+DATABASE_URL="$DATABASE_URL" pnpm -C apps/api audit:verify-chain
+```
+
+Secrets master-key rotation:
+
+```bash
+CURRENT_SECRETS_MASTER_KEY='old-key' \
+NEXT_SECRETS_MASTER_KEY='new-key' \
+DATABASE_URL="$DATABASE_URL" \
+pnpm -C apps/api secrets:rotate-key
+```
+
+Backup/recovery runbook:
+
+- `docs/RUNBOOK_backup_recovery.md`

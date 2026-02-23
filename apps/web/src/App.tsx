@@ -9,6 +9,7 @@ import { AgentProfilePage } from "./pages/AgentProfilePage";
 import { DesktopBootstrapPage } from "./pages/DesktopBootstrapPage";
 import { InspectorPage } from "./pages/InspectorPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
+import { OpsPage } from "./pages/OpsPage";
 import { TimelinePage } from "./pages/TimelinePage";
 import { WorkPage } from "./pages/WorkPage";
 
@@ -128,6 +129,9 @@ export function App(): JSX.Element {
           >
             {t("nav.approvals")}
           </NavLink>
+          <NavLink className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")} to="/ops">
+            {t("nav.ops")}
+          </NavLink>
           <NavLink className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")} to="/agents">
             {t("nav.agents")}
           </NavLink>
@@ -148,6 +152,7 @@ export function App(): JSX.Element {
           <Route path="/timeline" element={<TimelinePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/approvals" element={<ApprovalInboxPage />} />
+          <Route path="/ops" element={<OpsPage />} />
           <Route path="/agents" element={<AgentProfilePage />} />
           <Route path="/inspector" element={<InspectorPage />} />
           <Route path="*" element={<div className="placeholder">{t("page.not_found")}</div>} />

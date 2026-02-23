@@ -134,6 +134,8 @@ const components = {
     env: {
       PORT: String(apiPort),
       RUN_WORKER_EMBEDDED: runnerMode === "embedded" ? "1" : "0",
+      AUTH_REQUIRE_SESSION: "1",
+      AUTH_ALLOW_LEGACY_WORKSPACE_HEADER: runnerMode === "external" ? "1" : "0",
     },
     ready_url: `http://127.0.0.1:${apiPort}/health`,
     ready_timeout_ms: apiTimeoutMs,

@@ -55,6 +55,7 @@ export interface RunLeaseV1 {
   claimed_by_actor_id: string;
   lease_expires_at: string;
   lease_heartbeat_at: string;
+  attempt_no?: number;
 }
 
 export interface RunClaimedRecordV1 extends RunLeaseV1 {
@@ -73,6 +74,27 @@ export interface RunClaimedRecordV1 extends RunLeaseV1 {
 export interface RunClaimResponseV1 {
   claimed: boolean;
   run: RunClaimedRecordV1 | null;
+}
+
+export interface RunAttemptRecordV1 {
+  run_attempt_id: string;
+  run_id: RunId;
+  workspace_id: string;
+  room_id: string | null;
+  attempt_no: number;
+  claim_token: string;
+  claimed_by_actor_id: string;
+  actor_principal_id?: string | null;
+  engine_id?: string | null;
+  claimed_at: string;
+  released_at?: string | null;
+  release_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunAttemptListResponseV1 {
+  attempts: RunAttemptRecordV1[];
 }
 
 export interface RunLeaseHeartbeatResponseV1 {

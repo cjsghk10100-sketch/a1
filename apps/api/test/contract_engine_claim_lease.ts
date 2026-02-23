@@ -226,6 +226,27 @@ async function main(): Promise<void> {
     assert.equal(lease.rows[0].lease_expires_at, null);
     assert.equal(lease.rows[0].lease_heartbeat_at, null);
 
+    const attempts = await db.query<{
+      attempt_no: number;
+      claimed_by_actor_id: string;
+      release_reason: string | null;
+      engine_id: string | null;
+    }>(
+      `SELECT
+         attempt_no,
+         claimed_by_actor_id,
+         release_reason,
+         engine_id
+       FROM run_attempts
+       WHERE run_id = $1
+       ORDER BY attempt_no ASC`,
+      [runId],
+    );
+    assert.equal(attempts.rowCount, 1);
+    assert.equal(attempts.rows[0].claimed_by_actor_id, actorId);
+    assert.equal(attempts.rows[0].release_reason, "run_completed");
+    assert.ok(Boolean(attempts.rows[0].engine_id));
+
     const started = await db.query<{ actor_id: string }>(
       `SELECT actor_id
        FROM evt_events
