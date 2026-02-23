@@ -393,6 +393,18 @@ export function parseRunTagsCsv(rawInput: string): string[] | undefined {
   return tags.length ? tags : undefined;
 }
 
+export function resolveRunThreadIdForCreate(args: {
+  roomId: string;
+  threadId: string;
+  threads: Array<Pick<ThreadRow, "thread_id" | "room_id">>;
+}): string | undefined {
+  const roomId = args.roomId.trim();
+  const threadId = args.threadId.trim();
+  if (!roomId || !threadId) return undefined;
+  const belongsToRoom = args.threads.some((thread) => thread.thread_id === threadId && thread.room_id === roomId);
+  return belongsToRoom ? threadId : undefined;
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -929,9 +941,14 @@ export function WorkPage(): JSX.Element {
     let createdRun: string | null = null;
 
     try {
+      const threadIdForCreate = resolveRunThreadIdForCreate({
+        roomId: nextRoomId,
+        threadId,
+        threads,
+      });
       const res = await createRun({
         room_id: nextRoomId,
-        thread_id: threadId.trim() ? threadId.trim() : undefined,
+        thread_id: threadIdForCreate,
         title: createRunTitle.trim() ? createRunTitle.trim() : undefined,
         goal: createRunGoal.trim() ? createRunGoal.trim() : undefined,
         input: parsedInput.value,
