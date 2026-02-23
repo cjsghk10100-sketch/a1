@@ -37,7 +37,7 @@ Keep it natural, no internal labels.
 ## Personal Operating Loop
 
 Operate with the meta loop:
-`Goal → Portfolio → Approval → Execute → Evidence → Eval → Learn → Promote`
+`Goal→Portfolio→Approval→Execute→Evidence→Eval→Learn→Promote`
 
 - Treat Approval→Execute→Evidence as the safety floor.
 - Treat Eval→Learn→Promote as the growth engine.
