@@ -134,7 +134,20 @@
 4. 실행 반영: SOP/체크리스트/크론으로 구체화
 5. 검증: 결과 지표 확인 후 유지/수정/폐기
 
-## 8) 연결 문서
+
+## 8) 모델 분업 라우팅 규칙 (실운영)
+- Coding: 구현/리팩터/테스트 생성 작업
+- Research: 자료 조사/비교/리스크 탐색
+- Summarization: 장문 요약/핵심 추출/보고 포맷팅
+- Validation: 사실 검증/회귀 점검/증거 교차확인
+
+라우팅 원칙:
+1. 작업 시작 시 유형을 위 4개 중 하나로 분류한다.
+2. 분류 결과를 실행 로그에 남긴다.
+3. 결과물은 반드시 Evidence와 연결한다.
+4. 분류가 애매하면 Validation 트랙으로 우선 보낸다.
+
+## 9) 연결 문서
 - 공통 헌법: `memory/ops/COMMON_CONSTITUTION_V1.md`
 - 실행 정책: `memory/ops/EXECUTION_POLICY_V1.md`
 - 증거 표준: `memory/ops/EVIDENCE_STANDARD_V1.md`

@@ -61,3 +61,5 @@
 - 증거 표준: `memory/ops/EVIDENCE_STANDARD_V1.md`
 - 병목 감소: `memory/ops/BOTTLENECK_REDUCTION_V1.md`
 - 일일 템플릿: `memory/ops/DAILY_DECISION_EXEC_STATUS_TEMPLATE.md`
+- 메모리 승격 규칙: `memory/ops/MEMORY_PROMOTION_RULES_V1.md`
+- 메모리 주입 정책: `memory/ops/MEMORY_INJECTION_POLICY_V1.md`
