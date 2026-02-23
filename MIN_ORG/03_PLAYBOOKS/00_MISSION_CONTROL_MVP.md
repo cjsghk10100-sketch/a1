@@ -135,7 +135,13 @@
 5. 검증: 결과 지표 확인 후 유지/수정/폐기
 
 
-## 8) 모델 분업 라우팅 규칙 (실운영)
+## 8) 웹 수집 표준화 (markdown.new)
+- URL 기반 수집은 기본 경로로 `https://markdown.new/<원본URL>` 변환을 우선 시도한다.
+- 변환 실패/품질 저하 시 기존 수집 경로(`web_fetch`)로 fallback 한다.
+- 결과 저장 시 원본 URL과 변환 URL을 함께 기록해 추적 가능성을 유지한다.
+- 1주 A/B 테스트 지표(토큰/지연/오류/핵심 누락률)를 기록하고 기준 충족 시 기본 경로로 승격한다.
+
+## 9) 모델 분업 라우팅 규칙 (실운영)
 - Coding: 구현/리팩터/테스트 생성 작업
 - Research: 자료 조사/비교/리스크 탐색
 - Summarization: 장문 요약/핵심 추출/보고 포맷팅
@@ -147,7 +153,7 @@
 3. 결과물은 반드시 Evidence와 연결한다.
 4. 분류가 애매하면 Validation 트랙으로 우선 보낸다.
 
-## 9) 연결 문서
+## 10) 연결 문서
 - 공통 헌법: `memory/ops/COMMON_CONSTITUTION_V1.md`
 - 실행 정책: `memory/ops/EXECUTION_POLICY_V1.md`
 - 증거 표준: `memory/ops/EVIDENCE_STANDARD_V1.md`
