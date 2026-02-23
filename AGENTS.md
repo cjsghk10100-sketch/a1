@@ -19,6 +19,12 @@ Before doing anything else:
 
 Don't ask permission. Just do it.
 
+### Reply Lint (Mandatory)
+Before every user-visible reply, run a quick mental lint:
+- Remove internal prefixes like `Reasoning:` / `커밋:` / `internal` / `debug`.
+- Convert operational metadata to plain natural language.
+- If unsure, rewrite once before sending.
+
 ## SSOT Hierarchy
 
 Interpretation priority:
