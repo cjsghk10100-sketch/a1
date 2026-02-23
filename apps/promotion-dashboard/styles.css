@@ -1,0 +1,22 @@
+:root { --bg:#0f1220; --card:#171b2e; --text:#e8ecff; --muted:#9aa3c7; --accent:#6ea8fe; }
+* { box-sizing: border-box; }
+body { margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg); color:var(--text); padding:20px; }
+header { margin-bottom:16px; }
+h1 { margin:0 0 6px; }
+p { color:var(--muted); margin:0; }
+.card { background:var(--card); border:1px solid #2b3255; border-radius:12px; padding:14px; margin-bottom:14px; }
+.grid { display:grid; grid-template-columns: 2fr 1fr; gap:12px; }
+form { display:grid; grid-template-columns: repeat(6,1fr); gap:8px; }
+input, select, button { background:#0d1020; color:var(--text); border:1px solid #313a67; border-radius:8px; padding:8px; }
+button { cursor:pointer; }
+table { width:100%; border-collapse: collapse; font-size:14px; }
+th, td { border-bottom:1px solid #2a3156; padding:8px; text-align:left; }
+tr:hover { background:#1d2442; }
+.badge { padding:2px 8px; border-radius:999px; font-size:12px; }
+.status-PENDING_APPROVAL { background:#3b2c10; color:#ffc76a; }
+.status-APPROVED { background:#11351f; color:#79e2a0; }
+.status-REJECTED { background:#3a1313; color:#ff8f8f; }
+.status-APPLIED { background:#102b42; color:#86c5ff; }
+.status-DRAFT { background:#2d2d2d; color:#ccc; }
+.filters { display:flex; gap:8px; flex-wrap:wrap; }
+@media (max-width: 900px){ .grid{grid-template-columns:1fr;} form{grid-template-columns:1fr 1fr;} }

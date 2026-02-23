@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Promotion Dashboard MVP</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Promotion Dashboard MVP</h1>
+    <p>승격 대기/승인/반려 상태판 (로컬 저장)</p>
+  </header>
+
+  <section class="card">
+    <h2>새 승격 제안 추가</h2>
+    <form id="proposal-form">
+      <input name="proposal_id" placeholder="proposal_id (예: PR-001)" required />
+      <input name="target_path" placeholder="target_path" required />
+      <input name="summary" placeholder="summary" required />
+      <select name="risk_level">
+        <option>L0</option><option selected>L1</option><option>L2</option><option>L3</option>
+      </select>
+      <select name="status">
+        <option>DRAFT</option>
+        <option selected>PENDING_APPROVAL</option>
+        <option>APPROVED</option>
+        <option>REJECTED</option>
+        <option>APPLIED</option>
+      </select>
+      <button type="submit">추가</button>
+    </form>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Queue</h2>
+      <table id="queue-table">
+        <thead>
+          <tr><th>ID</th><th>Target</th><th>Summary</th><th>Risk</th><th>Status</th><th>Created</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Details</h2>
+      <div id="details">행을 선택하면 상세가 보여요.</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>빠른 필터</h2>
+    <div class="filters">
+      <button data-filter="ALL">ALL</button>
+      <button data-filter="PENDING_APPROVAL">PENDING</button>
+      <button data-filter="APPROVED">APPROVED</button>
+      <button data-filter="REJECTED">REJECTED</button>
+      <button data-filter="APPLIED">APPLIED</button>
+      <button id="reset">샘플로 초기화</button>
+    </div>
+  </section>
+
+  <script src="./app.js"></script>
+</body>
+</html>
