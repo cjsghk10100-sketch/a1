@@ -3511,9 +3511,10 @@ export function AgentProfilePage(): JSX.Element {
                         <button
                           type="button"
                           className="primaryButton"
-                          disabled={skillPackagesLoading || skillPackagesActionId === pkg.skill_package_id}
+                          disabled={skillPackagesLoading || Boolean(skillPackagesActionId)}
                           onClick={() => {
                             void (async () => {
+                              if (skillPackagesActionId) return;
                               setSkillPackagesActionId(pkg.skill_package_id);
                               setSkillPackagesActionError(null);
                               try {
@@ -3522,7 +3523,9 @@ export function AgentProfilePage(): JSX.Element {
                               } catch (e) {
                                 setSkillPackagesActionError(toErrorCode(e));
                               } finally {
-                                setSkillPackagesActionId(null);
+                                setSkillPackagesActionId((current) =>
+                                  current === pkg.skill_package_id ? null : current,
+                                );
                               }
                             })();
                           }}
@@ -3537,11 +3540,12 @@ export function AgentProfilePage(): JSX.Element {
                           className="dangerButton"
                           disabled={
                             skillPackagesLoading ||
-                            skillPackagesActionId === pkg.skill_package_id ||
+                            Boolean(skillPackagesActionId) ||
                             !skillPackagesQuarantineReason.trim()
                           }
                           onClick={() => {
                             void (async () => {
+                              if (skillPackagesActionId) return;
                               const reason = skillPackagesQuarantineReason.trim();
                               if (!reason) return;
                               setSkillPackagesActionId(pkg.skill_package_id);
@@ -3552,7 +3556,9 @@ export function AgentProfilePage(): JSX.Element {
                               } catch (e) {
                                 setSkillPackagesActionError(toErrorCode(e));
                               } finally {
-                                setSkillPackagesActionId(null);
+                                setSkillPackagesActionId((current) =>
+                                  current === pkg.skill_package_id ? null : current,
+                                );
                               }
                             })();
                           }}
