@@ -1,11 +1,12 @@
-# EXECUTION POLICY (v0.1)
+# EXECUTION_POLICY_V1
 
-> Runtime 적용본(SSOT)은 `memory/ops/EXECUTION_POLICY_V1.md` 참조
+> Runtime SSOT for execution control.
+> Source-aligned with: `MIN_ORG/01_CONSTITUTION/20_EXECUTION_POLICY.md`
 
 ## 0) 절대 규칙
 - 승인 없이는 실행 금지
-- 실행자는 승인 레코드(approval_id)와 요청 해시(request_hash)가 일치해야만 실행
-- 실행 결과는 반드시 evidence_id로 연결
+- 실행자는 승인 레코드(`approval_id`)와 요청 해시(`request_hash`)가 일치해야만 실행
+- 실행 결과는 반드시 `evidence_id`로 연결
 
 ## 1) 승인 레벨
 - L0: 무부작용(읽기/조회) — 승인 없이 가능
@@ -13,10 +14,8 @@
 - L2: 금전/주문/포지션 변경 — 사람 승인 필수
 - L3: 되돌릴 수 없는 실행(키 변경/삭제/배포/권한 부여) — 사람 + 2단계 확인(쿨다운) 필수
 
-## 2) 실행 전 체크(Executor가 강제)
+## 2) 실행 전 체크(Executor 강제)
 - 입력값 검증
 - 리스크 한도(노출/손실) 확인
 - 실행 환경(버전/커밋/설정) 스냅샷 기록
 - 킬스위치 작동 확인(가능하면)
-
-끝.

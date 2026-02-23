@@ -50,5 +50,7 @@
 ## 연계 문서
 - 헌법: `memory/ops/COMMON_CONSTITUTION_V1.md`
 - 메모리 SSOT: `memory/ops/MEMORY_RUNTIME_SSOT.md`
+- 실행 정책: `memory/ops/EXECUTION_POLICY_V1.md`
+- 증거 표준: `memory/ops/EVIDENCE_STANDARD_V1.md`
 - 병목 감소: `memory/ops/BOTTLENECK_REDUCTION_V1.md`
 - 일일 템플릿: `memory/ops/DAILY_DECISION_EXEC_STATUS_TEMPLATE.md`

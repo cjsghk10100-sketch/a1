@@ -22,6 +22,11 @@
 6. **안전 우선**: 외부 전송/파괴적 변경은 명시적 확인 후 수행한다.
 
 ### 1.1 SSOT 계층 정의
+### 1.2 MIN_ORG 동기화 규칙
+- `MIN_ORG/` 문서는 이식/복구용 원문 저장소로 유지한다.
+- 런타임 적용본은 `memory/ops/`를 기준으로 사용한다.
+- 내용 변경 시 `memory/ops/`를 먼저 수정하고 `MIN_ORG/`는 링크/출처만 갱신한다.
+
 - **최상위(규범) SSOT**: `memory/ops/COMMON_CONSTITUTION_V1.md`
 - **운영(메모리 런타임) SSOT**: `memory/ops/MEMORY_RUNTIME_SSOT.md`
 - **현재 상태 SSOT**: `memory/state.md`

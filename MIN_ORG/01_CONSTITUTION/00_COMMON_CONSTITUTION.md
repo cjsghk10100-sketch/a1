@@ -1,5 +1,7 @@
 # MIN_ORG COMMON CONSTITUTION (v0.1)
 
+> Runtime 적용본(SSOT)은 `memory/ops/COMMON_CONSTITUTION_V1.md` 참조
+
 목표: "내가 없어도 돌아가고, 실행할수록 강해지는 반자동 에이전트 조직"을 만든다.
 핵심: 기능이 아니라, 반복 가능한 결과(재현성/로그/지표)로 증명한다.
 

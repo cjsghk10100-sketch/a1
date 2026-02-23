@@ -1,6 +1,7 @@
-# EVIDENCE STANDARD (v0.1)
+# EVIDENCE_STANDARD_V1
 
-> Runtime 적용본(SSOT)은 `memory/ops/EVIDENCE_STANDARD_V1.md` 참조
+> Runtime SSOT for evidence bundle.
+> Source-aligned with: `MIN_ORG/01_CONSTITUTION/30_EVIDENCE_STANDARD.md`
 
 원칙: Evidence Or It Didn't Happen
 
@@ -16,7 +17,5 @@
 - rollback: 되돌리는 방법 또는 불가 사유
 
 ## 2) 연결 규칙
-- 모든 Execution은 approval_id, run_id, evidence_id를 가진다.
-- UI는 evidence_id만으로 재현 가능한 상태여야 한다.
-
-끝.
+- 모든 Execution은 `approval_id`, `run_id`, `evidence_id`를 가진다.
+- UI는 `evidence_id`만으로 재현 가능한 상태여야 한다.
