@@ -78,6 +78,7 @@ function renderAll(){
   const pending = state.filter(x=>x.status==='PENDING_APPROVAL');
   const approved = state.filter(x=>x.status==='APPROVED');
   const rejected = state.filter(x=>x.status==='REJECTED');
+  const applied = state.filter(x=>x.status==='APPLIED');
 
   renderTable('#pending-table', pending, r=>`
     <td>${r.proposal_id}</td><td>${r.target_path}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.risk_level||'L1'}</td>
@@ -87,6 +88,9 @@ function renderAll(){
     <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
 
   renderTable('#rejected-table', rejected, r=>`
+    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
+
+  renderTable('#applied-table', applied, r=>`
     <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
 }
 
@@ -119,6 +123,10 @@ function decide(status){
   save();
   renderAll();
   selectProposal(selectedId);
+  if (status === 'APPLIED') {
+    exportMarkdown();
+    alert('반영 완료 처리됨: PROMOTION_DASHBOARD.md 파일이 다운로드됩니다. 내려받은 파일을 memory/reference/PROMOTION_DASHBOARD.md에 덮어쓰면 실제 반영 완료.');
+  }
 }
 
 document.getElementById('proposal-form').addEventListener('submit', e=>{
@@ -141,7 +149,7 @@ document.getElementById('apply-btn').addEventListener('click', ()=>decide('APPLI
 document.getElementById('refresh-tmp').addEventListener('click', loadTmpFiles);
 document.getElementById('reset').addEventListener('click', ()=>{ localStorage.removeItem(KEY); location.reload(); });
 
-document.getElementById('export-md').addEventListener('click', ()=>{
+function exportMarkdown(){
   const header = '| proposal_id | target | summary | risk | status | created_at |\n|---|---|---|---|---|---|\n';
   const body = state.map(r=>`| ${r.proposal_id||'-'} | ${r.target_path||'-'} | ${r.summary||'-'} | ${r.risk_level||'L1'} | ${r.status||'DRAFT'} | ${r.created_at||'-'} |`).join('\n');
   const content = `# PROMOTION_DASHBOARD\n\n## Queue\n${header}${body}\n\n## Recent Approvals\n| proposal_id | approved_by | approved_at | commit_ref |\n|---|---|---|---|\n${state.filter(x=>x.status==='APPROVED').map(r=>`| ${r.proposal_id} | me | ${fmt(r.decided_at)} | - |`).join('\n') || '| - | - | - | - |'}\n\n## Recent Rejects\n| proposal_id | reason | reviewer | at |\n|---|---|---|---|\n${state.filter(x=>x.status==='REJECTED').map(r=>`| ${r.proposal_id} | ${r.reason||'-'} | me | ${fmt(r.decided_at)} |`).join('\n') || '| - | - | - | - |'}\n`;
@@ -150,6 +158,8 @@ document.getElementById('export-md').addEventListener('click', ()=>{
   a.href = URL.createObjectURL(blob);
   a.download = 'PROMOTION_DASHBOARD.md';
   a.click();
-});
+}
+
+document.getElementById('export-md').addEventListener('click', exportMarkdown);
 
 bootstrap();
