@@ -164,4 +164,6 @@
 - ROI 학습 로그: `memory/reference/ROI_LEARNING_LOG.md`
 - 공급망 보안 체크리스트: `MIN_ORG/03_PLAYBOOKS/SUPPLY_CHAIN_SECURITY_CHECKLIST_V1.md`
 - 임시 파일 정책: `memory/ops/TEMP_FILE_POLICY_V1.md`
+- 승격 대시보드 MVP: `MIN_ORG/03_PLAYBOOKS/10_PROMOTION_DASHBOARD_MVP.md`
+- 승격 대시보드 상태판: `memory/reference/PROMOTION_DASHBOARD.md`
 
