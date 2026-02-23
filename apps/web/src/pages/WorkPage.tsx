@@ -704,19 +704,33 @@ export function WorkPage(): JSX.Element {
       return;
     }
 
+    const scopedThreadId = resolveRoomScopedThreadId({
+      roomId: roomIdRef.current,
+      threadId: id,
+      threads,
+    });
+    if (!scopedThreadId) {
+      if (messagesRequestRef.current === requestId) {
+        setMessages([]);
+        setMessagesState("idle");
+        setMessagesError(null);
+      }
+      return;
+    }
+
     if (messagesRequestRef.current === requestId) {
       setMessagesState("loading");
       setMessagesError(null);
     }
     try {
-      const res = await listThreadMessages(id, { limit: 80 });
+      const res = await listThreadMessages(scopedThreadId, { limit: 80 });
       if (messagesRequestRef.current !== requestId) return;
-      if (threadIdRef.current !== id) return;
+      if (threadIdRef.current !== scopedThreadId) return;
       setMessages(res);
       setMessagesState("idle");
     } catch (e) {
       if (messagesRequestRef.current !== requestId) return;
-      if (threadIdRef.current !== id) return;
+      if (threadIdRef.current !== scopedThreadId) return;
       setMessagesError(toErrorCode(e));
       setMessagesState("error");
     }

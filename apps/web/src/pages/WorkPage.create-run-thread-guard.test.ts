@@ -53,6 +53,16 @@ describe("resolveRoomScopedThreadId", () => {
     ).toBeUndefined();
   });
 
+  it("returns undefined when thread list is empty", () => {
+    expect(
+      resolveRoomScopedThreadId({
+        roomId: "room_a",
+        threadId: "th_1",
+        threads: [],
+      }),
+    ).toBeUndefined();
+  });
+
   it("trims identifiers before matching", () => {
     expect(
       resolveRoomScopedThreadId({
