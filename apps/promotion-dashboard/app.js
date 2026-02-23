@@ -6,6 +6,32 @@ const sample = [
   { proposal_id:'PR-002', target_path:'MIN_ORG/03_PLAYBOOKS/00_MISSION_CONTROL_MVP.md', summary:'markdown.new 수집 경로 추가', risk_level:'L1', status:'PENDING_APPROVAL', created_at:new Date().toISOString(), reason:'' }
 ];
 
+async function loadTmpFiles(){
+  const tbody = document.querySelector('#tmp-table tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  try {
+    const res = await fetch('./tmp_files.json?v=' + Date.now());
+    const j = await res.json();
+    const files = j.files || [];
+    if (!files.length) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="4">tmp 폴더 파일이 없습니다.</td>';
+      tbody.appendChild(tr);
+      return;
+    }
+    files.slice(0,200).forEach(f => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${f.path}</td><td>${f.zone}</td><td>${f.size}</td><td>${f.modified_at}</td>`;
+      tbody.appendChild(tr);
+    });
+  } catch {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="4">tmp_files.json을 읽지 못했습니다.</td>';
+    tbody.appendChild(tr);
+  }
+}
+
 async function bootstrap(){
   const seeded = localStorage.getItem(KEY);
   if (seeded) {
@@ -28,6 +54,7 @@ async function bootstrap(){
   }
   save();
   render();
+  await loadTmpFiles();
 }
 
 function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
@@ -94,6 +121,10 @@ document.querySelectorAll('[data-filter]').forEach(btn=>{
 document.getElementById('reset').addEventListener('click', ()=>{
   localStorage.removeItem(KEY);
   location.reload();
+});
+
+document.getElementById('refresh-tmp').addEventListener('click', async ()=>{
+  await loadTmpFiles();
 });
 
 document.getElementById('export-md').addEventListener('click', ()=>{

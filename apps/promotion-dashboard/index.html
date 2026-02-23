@@ -59,7 +59,18 @@
       <button data-filter="APPLIED">APPLIED</button>
       <button id="reset">데이터 리셋</button>
       <button id="export-md">Markdown 내보내기</button>
+      <button id="refresh-tmp">임시파일 새로고침</button>
     </div>
+  </section>
+
+  <section class="card">
+    <h2>Temp Files (tmp/)</h2>
+    <table id="tmp-table">
+      <thead>
+        <tr><th>Path</th><th>Zone</th><th>Size</th><th>Modified</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </section>
 
   <script src="./app.js"></script>
