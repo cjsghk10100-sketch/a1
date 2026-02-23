@@ -1,11 +1,52 @@
-const KEY = 'promotion_dashboard_v3';
+const KEY = 'promotion_dashboard_v4';
+const LOG_KEY = 'promotion_dashboard_rollback_logs_v1';
 let state = [];
+let rollbackLogs = [];
 let selectedId = null;
 
 const sample = [
-  { proposal_id:'PR-001', target_path:'memory/ops/COMMON_CONSTITUTION_V1.md', summary:'메타 루프 조항 추가', risk_level:'L1', status:'APPLIED', created_at:new Date().toISOString(), evidence:'1212 문서 기반 상위루프 정합성', reason:'반영 완료', decided_at:new Date().toISOString() },
-  { proposal_id:'PR-002', target_path:'MIN_ORG/03_PLAYBOOKS/00_MISSION_CONTROL_MVP.md', summary:'markdown.new 수집 경로 추가', risk_level:'L1', status:'PENDING_APPROVAL', created_at:new Date().toISOString(), evidence:'토큰 절감/수집 안정성 개선', reason:'', decided_at:'' }
+  { proposal_id:'PR-001', target_path:'memory/ops/COMMON_CONSTITUTION_V1.md', summary:'메타 루프 조항 추가', risk_level:'L1', status:'APPLIED', created_at:new Date().toISOString(), evidence:'1212 문서 기반 상위루프 정합성', reason:'반영 완료', decided_at:new Date().toISOString(), success_rate:97, drift:-2, repro:0.94 },
+  { proposal_id:'PR-002', target_path:'MIN_ORG/03_PLAYBOOKS/00_MISSION_CONTROL_MVP.md', summary:'markdown.new 수집 경로 추가', risk_level:'L1', status:'PENDING_APPROVAL', created_at:new Date(Date.now()-26*3600*1000).toISOString(), evidence:'토큰 절감/수집 안정성 개선', reason:'', decided_at:'', success_rate:92, drift:-6, repro:0.88 }
 ];
+
+function toNum(v, d){ const n = Number(v); return Number.isFinite(n)?n:d; }
+function fmt(s){ if(!s) return '-'; try{return new Date(s).toLocaleString();}catch{return s;} }
+function hoursSince(s){ try { return (Date.now() - new Date(s).getTime())/3600000; } catch { return 0; } }
+
+function kpiClass(metric, value){
+  if(metric==='success') return value>=95?'kpi-good':(value>=85?'kpi-warn':'kpi-bad');
+  if(metric==='drift') return value>=-5?'kpi-good':(value>=-15?'kpi-warn':'kpi-bad');
+  if(metric==='repro') return value>=0.9?'kpi-good':(value>=0.75?'kpi-warn':'kpi-bad');
+  return 'kpi-warn';
+}
+
+function kpiBadges(r){
+  const s = toNum(r.success_rate, 0);
+  const d = toNum(r.drift, 0);
+  const rp = toNum(r.repro, 0);
+  return `<span class="kpi ${kpiClass('success',s)}">성공률 ${s}%</span><span class="kpi ${kpiClass('drift',d)}">드리프트 ${d}%</span><span class="kpi ${kpiClass('repro',rp)}">재현성 ${rp}</span>`;
+}
+
+function slaBadge(r){
+  const h = hoursSince(r.created_at);
+  if(h > 24) return `<span class="sla-over">ESCALATE (${h.toFixed(1)}h)</span>`;
+  return `<span class="sla-ok">OK (${h.toFixed(1)}h)</span>`;
+}
+
+function save(){
+  localStorage.setItem(KEY, JSON.stringify(state));
+  localStorage.setItem(LOG_KEY, JSON.stringify(rollbackLogs));
+}
+
+function loadRollbackLogs(){
+  try{ rollbackLogs = JSON.parse(localStorage.getItem(LOG_KEY)||'[]'); }catch{ rollbackLogs=[]; }
+}
+
+function renderRollbackLogs(){
+  const box = document.getElementById('rollback-logs');
+  if(!rollbackLogs.length){ box.textContent='롤백 로그 없음'; return; }
+  box.textContent = rollbackLogs.slice(0,20).map(x=>`[${x.at}] ${x.proposal_id} - ${x.reason || '사유 없음'}`).join('\n');
+}
 
 async function loadTmpFiles(){
   const tbody = document.querySelector('#tmp-table tbody');
@@ -45,24 +86,24 @@ async function bootstrap(){
     try {
       const res = await fetch('./data.json');
       const j = await res.json();
-      state = (j.queue && j.queue.length) ? j.queue.map(x=>({ ...x, evidence:x.evidence||'', reason:x.reason||'', decided_at:x.decided_at||'' })) : structuredClone(sample);
+      state = (j.queue && j.queue.length) ? j.queue.map(x=>({ ...x, evidence:x.evidence||'', reason:x.reason||'', decided_at:x.decided_at||'', success_rate:toNum(x.success_rate,90), drift:toNum(x.drift,-5), repro:toNum(x.repro,0.85) })) : structuredClone(sample);
     } catch {
       state = structuredClone(sample);
     }
   }
+  loadRollbackLogs();
   save();
   renderAll();
+  renderRollbackLogs();
   await loadTmpFiles();
 }
 
-function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
-
-function renderTable(selector, rows, rowBuilder){
+function renderTable(selector, rows, rowBuilder, colspan=6){
   const tbody = document.querySelector(selector+' tbody');
   tbody.innerHTML='';
   if(!rows.length){
     const tr=document.createElement('tr');
-    tr.innerHTML='<td colspan="6">항목 없음</td>';
+    tr.innerHTML=`<td colspan="${colspan}">항목 없음</td>`;
     tbody.appendChild(tr);
     return;
   }
@@ -81,20 +122,18 @@ function renderAll(){
   const applied = state.filter(x=>x.status==='APPLIED');
 
   renderTable('#pending-table', pending, r=>`
-    <td>${r.proposal_id}</td><td>${r.target_path}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.risk_level||'L1'}</td>
-    <td><span class="badge status-${r.status}">${r.status}</span></td>`);
+    <td>${r.proposal_id}</td><td>${r.target_path}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${kpiBadges(r)}</td><td>${slaBadge(r)}</td><td>${r.risk_level||'L1'}</td>
+    <td><span class="badge status-${r.status}">${r.status}</span></td>`, 8);
 
   renderTable('#approved-table', approved, r=>`
-    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
+    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${kpiBadges(r)}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`, 6);
 
   renderTable('#rejected-table', rejected, r=>`
-    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
+    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${kpiBadges(r)}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`, 6);
 
   renderTable('#applied-table', applied, r=>`
-    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
+    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${kpiBadges(r)}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`, 6);
 }
-
-function fmt(s){ if(!s) return '-'; try{return new Date(s).toLocaleString();}catch{return s;} }
 
 function selectProposal(id){
   selectedId = id;
@@ -105,6 +144,8 @@ function selectProposal(id){
     <p><b>Target:</b> ${r.target_path}</p>
     <p><b>Summary:</b> ${r.summary}</p>
     <p><b>근거:</b> ${r.evidence||'-'}</p>
+    <p><b>KPI:</b> ${kpiBadges(r)}</p>
+    <p><b>SLA:</b> ${slaBadge(r)}</p>
     <p><b>Risk:</b> ${r.risk_level||'-'}</p>
     <p><b>Status:</b> <span class="badge status-${r.status}">${r.status}</span></p>
     <p><b>Created:</b> ${fmt(r.created_at)}</p>
@@ -113,7 +154,7 @@ function selectProposal(id){
 }
 
 function decide(status){
-  if(!selectedId){ alert('먼저 승격 대기 행을 선택해줘.'); return; }
+  if(!selectedId){ alert('먼저 항목을 선택해줘.'); return; }
   const r = state.find(x=>x.proposal_id===selectedId);
   if(!r){ return; }
   const reason = document.getElementById('decision-reason').value.trim();
@@ -129,6 +170,21 @@ function decide(status){
   }
 }
 
+function doRollback(){
+  if(!selectedId){ alert('먼저 항목을 선택해줘.'); return; }
+  const r = state.find(x=>x.proposal_id===selectedId);
+  if(!r){ return; }
+  const reason = document.getElementById('decision-reason').value.trim() || '운영자 롤백';
+  r.status = 'REJECTED';
+  r.reason = `[ROLLBACK] ${reason}`;
+  r.decided_at = new Date().toISOString();
+  rollbackLogs.unshift({proposal_id:r.proposal_id, at:fmt(new Date().toISOString()), reason});
+  save();
+  renderAll();
+  renderRollbackLogs();
+  selectProposal(selectedId);
+}
+
 document.getElementById('proposal-form').addEventListener('submit', e=>{
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -137,6 +193,9 @@ document.getElementById('proposal-form').addEventListener('submit', e=>{
   item.status = 'PENDING_APPROVAL';
   item.reason = '';
   item.decided_at = '';
+  item.success_rate = toNum(item.success_rate, 90);
+  item.drift = toNum(item.drift, -5);
+  item.repro = toNum(item.repro, 0.85);
   state.unshift(item);
   save();
   e.target.reset();
@@ -146,8 +205,9 @@ document.getElementById('proposal-form').addEventListener('submit', e=>{
 document.getElementById('approve-btn').addEventListener('click', ()=>decide('APPROVED'));
 document.getElementById('reject-btn').addEventListener('click', ()=>decide('REJECTED'));
 document.getElementById('apply-btn').addEventListener('click', ()=>decide('APPLIED'));
+document.getElementById('rollback-btn').addEventListener('click', doRollback);
 document.getElementById('refresh-tmp').addEventListener('click', loadTmpFiles);
-document.getElementById('reset').addEventListener('click', ()=>{ localStorage.removeItem(KEY); location.reload(); });
+document.getElementById('reset').addEventListener('click', ()=>{ localStorage.removeItem(KEY); localStorage.removeItem(LOG_KEY); location.reload(); });
 
 function exportMarkdown(){
   const header = '| proposal_id | target | summary | risk | status | created_at |\n|---|---|---|---|---|---|\n';

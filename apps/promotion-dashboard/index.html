@@ -23,6 +23,9 @@
         <option>L0</option><option selected>L1</option><option>L2</option><option>L3</option>
       </select>
       <input name="evidence" placeholder="승격 근거 (왜 시스템에 도움되는지)" required />
+      <input name="success_rate" placeholder="성공률(%) 예:95" />
+      <input name="drift" placeholder="드리프트(%) 예:-3" />
+      <input name="repro" placeholder="재현성(0~1) 예:0.92" />
       <button type="submit">추가</button>
     </form>
   </section>
@@ -31,7 +34,7 @@
     <div class="card">
       <h2>승격 대기 (PENDING_APPROVAL)</h2>
       <table id="pending-table">
-        <thead><tr><th>ID</th><th>Target</th><th>Summary</th><th>근거</th><th>Risk</th><th>Action</th></tr></thead>
+        <thead><tr><th>ID</th><th>Target</th><th>Summary</th><th>근거</th><th>KPI</th><th>SLA</th><th>Risk</th><th>Action</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -44,7 +47,10 @@
         <button id="approve-btn">승인</button>
         <button id="reject-btn">반려</button>
         <button id="apply-btn">반영 완료</button>
+        <button id="rollback-btn">롤백</button>
       </div>
+      <h3>Rollback Logs</h3>
+      <div id="rollback-logs" class="log-box">롤백 로그 없음</div>
     </div>
   </section>
 
@@ -52,14 +58,14 @@
     <div class="card">
       <h2>승인됨 (APPROVED)</h2>
       <table id="approved-table">
-        <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>사유</th><th>At</th></tr></thead>
+        <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>KPI</th><th>사유</th><th>At</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
     <div class="card">
       <h2>반려됨 (REJECTED)</h2>
       <table id="rejected-table">
-        <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>사유</th><th>At</th></tr></thead>
+        <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>KPI</th><th>사유</th><th>At</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -68,7 +74,7 @@
   <section class="card">
     <h2>반영 완료 (APPLIED)</h2>
     <table id="applied-table">
-      <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>사유</th><th>At</th></tr></thead>
+      <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>KPI</th><th>사유</th><th>At</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>
