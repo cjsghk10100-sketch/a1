@@ -9,7 +9,13 @@ const sample = [
 async function bootstrap(){
   const seeded = localStorage.getItem(KEY);
   if (seeded) {
-    state = JSON.parse(seeded);
+    try {
+      const parsed = JSON.parse(seeded);
+      state = (Array.isArray(parsed) && parsed.length) ? parsed : structuredClone(sample);
+    } catch {
+      state = structuredClone(sample);
+    }
+    save();
     render();
     return;
   }
