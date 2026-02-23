@@ -14,6 +14,12 @@ OUT=$(python3 scripts/apply_promotions.py)
 APPLIED=$(echo "$OUT" | sed -n 's/Applied \([0-9][0-9]*\) promotion file(s)./\1/p')
 APPLIED=${APPLIED:-0}
 
+# Count pending approvals from dashboard markdown
+PENDING=0
+if [ -f memory/reference/PROMOTION_DASHBOARD.md ]; then
+  PENDING=$(grep -E "\| .* \| .* \| .* \| .* \| PENDING_APPROVAL \|" memory/reference/PROMOTION_DASHBOARD.md | wc -l | tr -d ' ')
+fi
+
 if [ "$APPLIED" -gt 0 ]; then
   TODAY=$(date +%F)
   DAILY="memory/daily/${TODAY}.md"
@@ -21,4 +27,8 @@ if [ "$APPLIED" -gt 0 ]; then
   echo "- [PROMOTE] 자동 루틴 적용: promoted/inbox -> applied (${APPLIED}건)" >> "$DAILY"
 fi
 
-echo "$OUT"
+if [ "$APPLIED" -gt 0 ] || [ "$PENDING" -gt 0 ]; then
+  echo "ALERT applied=${APPLIED} pending=${PENDING}"
+else
+  echo "NO_ALERT"
+fi
