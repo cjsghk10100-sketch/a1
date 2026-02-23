@@ -113,6 +113,7 @@ Current endpoints (selected):
   - `POST /v1/policy/evaluate`
 - Runs:
   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/:id`
+  - `POST /v1/runs/claim` (external-engine safe claim of queued run)
   - `POST /v1/runs/:id/start`, `POST /v1/runs/:id/steps`, `GET /v1/runs/:id/steps`
   - `POST /v1/runs/:id/complete`, `POST /v1/runs/:id/fail`
 - Tools/artifacts:

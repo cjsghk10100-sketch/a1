@@ -1,0 +1,13 @@
+{
+  "name": "@agentapp/desktop",
+  "private": true,
+  "version": "0.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "electron src/main.cjs",
+    "typecheck": "node --check src/main.cjs"
+  },
+  "devDependencies": {
+    "electron": "^30.5.1"
+  }
+}

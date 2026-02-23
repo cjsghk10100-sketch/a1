@@ -6,6 +6,10 @@
     "node": ">=20"
   },
   "scripts": {
+    "desktop:dev": "pnpm -C apps/desktop dev",
+    "desktop:dev:embedded": "DESKTOP_RUNNER_MODE=embedded pnpm -C apps/desktop dev",
+    "desktop:dev:external": "DESKTOP_RUNNER_MODE=external pnpm -C apps/desktop dev",
+    "desktop:dev:env": "set -a; [ -f .env.desktop ] && . ./.env.desktop; set +a; pnpm -C apps/desktop dev",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome lint .",
     "format": "biome check --write .",

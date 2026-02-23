@@ -4,9 +4,29 @@ import type { FastifyInstance } from "fastify";
 
 import { newRunId, newStepId, type RunEventV1, type RunStatus } from "@agentapp/shared";
 
-import type { DbPool } from "../../db/pool.js";
+import type { DbClient, DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { applyRunEvent } from "../../projectors/runProjector.js";
+
+// Keep lock namespace aligned with runtime worker to prevent duplicate start/claim races.
+const RUN_LOCK_NAMESPACE = 215;
+
+type RunRow = {
+  run_id: string;
+  workspace_id: string;
+  room_id: string | null;
+  thread_id: string | null;
+  correlation_id: string;
+  last_event_id: string | null;
+  status: string;
+};
+
+type ClaimableRunRow = RunRow & {
+  title: string | null;
+  goal: string | null;
+  input: Record<string, unknown> | null;
+  tags: string[] | null;
+};
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -22,6 +42,56 @@ function normalizeRunStatus(raw: unknown): RunStatus | null {
   return raw === "queued" || raw === "running" || raw === "succeeded" || raw === "failed"
     ? raw
     : null;
+}
+
+async function tryAcquireRunLock(pool: DbPool, run_id: string): Promise<DbClient | null> {
+  const client = await pool.connect();
+  try {
+    const lock = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock($1::int, hashtext($2)::int) AS locked",
+      [RUN_LOCK_NAMESPACE, run_id],
+    );
+    if (lock.rows[0]?.locked) return client;
+    client.release();
+    return null;
+  } catch (err) {
+    client.release();
+    throw err;
+  }
+}
+
+async function releaseRunLock(client: DbClient, run_id: string): Promise<void> {
+  try {
+    await client.query("SELECT pg_advisory_unlock($1::int, hashtext($2)::int)", [
+      RUN_LOCK_NAMESPACE,
+      run_id,
+    ]);
+  } finally {
+    client.release();
+  }
+}
+
+async function listQueuedRunIds(
+  pool: DbPool,
+  input: { workspace_id: string; room_id?: string | null; limit: number },
+): Promise<string[]> {
+  const args: unknown[] = [input.workspace_id];
+  let where = "workspace_id = $1 AND status = 'queued'";
+  if (input.room_id) {
+    args.push(input.room_id);
+    where += ` AND room_id = $${args.length}`;
+  }
+  args.push(input.limit);
+
+  const res = await pool.query<{ run_id: string }>(
+    `SELECT run_id
+     FROM proj_runs
+     WHERE ${where}
+     ORDER BY created_at ASC
+     LIMIT $${args.length}`,
+    args,
+  );
+  return res.rows.map((row) => row.run_id);
 }
 
 export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -101,57 +171,151 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
   });
 
   app.post<{
+    Body: {
+      room_id?: string;
+      actor_id?: string;
+    };
+  }>("/v1/runs/claim", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const room_id = req.body.room_id?.trim() || null;
+    const actor_id = req.body.actor_id?.trim() || "external_engine";
+
+    const candidateIds = await listQueuedRunIds(pool, {
+      workspace_id,
+      room_id,
+      limit: 100,
+    });
+
+    for (const run_id of candidateIds) {
+      const lockClient = await tryAcquireRunLock(pool, run_id);
+      if (!lockClient) continue;
+
+      try {
+        const existing = await lockClient.query<ClaimableRunRow>(
+          `SELECT
+             run_id,
+             workspace_id,
+             room_id,
+             thread_id,
+             correlation_id,
+             last_event_id,
+             status,
+             title,
+             goal,
+             input,
+             tags
+           FROM proj_runs
+           WHERE run_id = $1`,
+          [run_id],
+        );
+        if (existing.rowCount !== 1) continue;
+        const run = existing.rows[0];
+
+        if (run.workspace_id !== workspace_id) continue;
+        if (room_id && run.room_id !== room_id) continue;
+        if (run.status !== "queued") continue;
+
+        const occurred_at = new Date().toISOString();
+        const causation_id = run.last_event_id ?? undefined;
+
+        const event = await appendToStream(pool, {
+          event_id: randomUUID(),
+          event_type: "run.started",
+          event_version: 1,
+          occurred_at,
+          workspace_id,
+          room_id: run.room_id ?? undefined,
+          thread_id: run.thread_id ?? undefined,
+          run_id: run.run_id,
+          actor: { actor_type: "service", actor_id },
+          stream:
+            run.room_id != null
+              ? { stream_type: "room", stream_id: run.room_id }
+              : { stream_type: "workspace", stream_id: workspace_id },
+          correlation_id: run.correlation_id,
+          causation_id,
+          data: { run_id: run.run_id },
+          policy_context: {},
+          model_context: {},
+          display: {},
+        });
+
+        await applyRunEvent(pool, event as RunEventV1);
+        return reply.code(200).send({
+          claimed: true,
+          run: {
+            run_id: run.run_id,
+            workspace_id: run.workspace_id,
+            room_id: run.room_id,
+            thread_id: run.thread_id,
+            status: "running",
+            title: run.title,
+            goal: run.goal,
+            input: run.input,
+            tags: run.tags ?? [],
+            correlation_id: run.correlation_id,
+          },
+        });
+      } finally {
+        await releaseRunLock(lockClient, run_id);
+      }
+    }
+
+    return reply.code(200).send({ claimed: false, run: null });
+  });
+
+  app.post<{
     Params: { runId: string };
   }>("/v1/runs/:runId/start", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
-
-    const existing = await pool.query<{
-      run_id: string;
-      workspace_id: string;
-      room_id: string | null;
-      thread_id: string | null;
-      correlation_id: string;
-      last_event_id: string | null;
-      status: string;
-    }>(
-      "SELECT run_id, workspace_id, room_id, thread_id, correlation_id, last_event_id, status FROM proj_runs WHERE run_id = $1",
-      [req.params.runId],
-    );
-    if (existing.rowCount !== 1 || existing.rows[0].workspace_id !== workspace_id) {
-      return reply.code(404).send({ error: "run_not_found" });
+    const lockClient = await tryAcquireRunLock(pool, req.params.runId);
+    if (!lockClient) {
+      return reply.code(409).send({ error: "run_locked" });
     }
 
-    if (existing.rows[0].status !== "queued") {
-      return reply.code(409).send({ error: "run_not_queued" });
+    try {
+      const existing = await lockClient.query<RunRow>(
+        "SELECT run_id, workspace_id, room_id, thread_id, correlation_id, last_event_id, status FROM proj_runs WHERE run_id = $1",
+        [req.params.runId],
+      );
+      if (existing.rowCount !== 1 || existing.rows[0].workspace_id !== workspace_id) {
+        return reply.code(404).send({ error: "run_not_found" });
+      }
+
+      if (existing.rows[0].status !== "queued") {
+        return reply.code(409).send({ error: "run_not_queued" });
+      }
+
+      const occurred_at = new Date().toISOString();
+      const causation_id = existing.rows[0].last_event_id ?? undefined;
+
+      const event = await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "run.started",
+        event_version: 1,
+        occurred_at,
+        workspace_id,
+        room_id: existing.rows[0].room_id ?? undefined,
+        thread_id: existing.rows[0].thread_id ?? undefined,
+        run_id: existing.rows[0].run_id,
+        actor: { actor_type: "service", actor_id: "api" },
+        stream:
+          existing.rows[0].room_id != null
+            ? { stream_type: "room", stream_id: existing.rows[0].room_id }
+            : { stream_type: "workspace", stream_id: workspace_id },
+        correlation_id: existing.rows[0].correlation_id,
+        causation_id,
+        data: { run_id: existing.rows[0].run_id },
+        policy_context: {},
+        model_context: {},
+        display: {},
+      });
+
+      await applyRunEvent(pool, event as RunEventV1);
+      return reply.code(200).send({ ok: true });
+    } finally {
+      await releaseRunLock(lockClient, req.params.runId);
     }
-
-    const occurred_at = new Date().toISOString();
-    const causation_id = existing.rows[0].last_event_id ?? undefined;
-
-    const event = await appendToStream(pool, {
-      event_id: randomUUID(),
-      event_type: "run.started",
-      event_version: 1,
-      occurred_at,
-      workspace_id,
-      room_id: existing.rows[0].room_id ?? undefined,
-      thread_id: existing.rows[0].thread_id ?? undefined,
-      run_id: existing.rows[0].run_id,
-      actor: { actor_type: "service", actor_id: "api" },
-      stream:
-        existing.rows[0].room_id != null
-          ? { stream_type: "room", stream_id: existing.rows[0].room_id }
-          : { stream_type: "workspace", stream_id: workspace_id },
-      correlation_id: existing.rows[0].correlation_id,
-      causation_id,
-      data: { run_id: existing.rows[0].run_id },
-      policy_context: {},
-      model_context: {},
-      display: {},
-    });
-
-    await applyRunEvent(pool, event as RunEventV1);
-    return reply.code(200).send({ ok: true });
   });
 
   app.post<{
@@ -437,4 +601,3 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     return reply.code(200).send({ steps: res.rows });
   });
 }
-
