@@ -2270,7 +2270,7 @@ export function WorkPage(): JSX.Element {
                   value={createStepKind}
                   onChange={(e) => setCreateStepKind(e.target.value)}
                   placeholder={t("work.steps.field.kind_placeholder")}
-                  disabled={!stepsRunId.trim() || createStepState === "loading"}
+                  disabled={!scopedRunIdForSteps || createStepState === "loading"}
                 />
               </div>
               <div>
@@ -2283,7 +2283,7 @@ export function WorkPage(): JSX.Element {
                   value={createStepTitle}
                   onChange={(e) => setCreateStepTitle(e.target.value)}
                   placeholder={t("work.steps.field.title_placeholder")}
-                  disabled={!stepsRunId.trim() || createStepState === "loading"}
+                  disabled={!scopedRunIdForSteps || createStepState === "loading"}
                 />
               </div>
             </div>
@@ -2297,7 +2297,7 @@ export function WorkPage(): JSX.Element {
               value={createStepInputJson}
               onChange={(e) => setCreateStepInputJson(e.target.value)}
               placeholder={t("work.steps.field.input_json_placeholder")}
-              disabled={!stepsRunId.trim() || createStepState === "loading"}
+              disabled={!scopedRunIdForSteps || createStepState === "loading"}
             />
 
             <div className="decisionActions" style={{ marginTop: 10 }}>
@@ -2305,7 +2305,7 @@ export function WorkPage(): JSX.Element {
                 type="button"
                 className="primaryButton"
                 disabled={
-                  !stepsRunId.trim() ||
+                  !scopedRunIdForSteps ||
                   selectedRunForSteps?.status !== "running" ||
                   createStepState === "loading" ||
                   !createStepKind.trim()
@@ -2391,7 +2391,7 @@ export function WorkPage(): JSX.Element {
 
             {stepsError ? <div className="errorBox">{t("error.load_failed", { code: stepsError })}</div> : null}
             {stepsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
-            {stepsRunId.trim() && stepsState !== "loading" && !stepsError && steps.length === 0 ? (
+            {scopedRunIdForSteps && stepsState !== "loading" && !stepsError && steps.length === 0 ? (
               <div className="placeholder">{t("work.steps.empty")}</div>
             ) : null}
 
@@ -2426,7 +2426,7 @@ export function WorkPage(): JSX.Element {
                 className="select"
                 value={toolCallsStepId}
                 onChange={(e) => setToolCallsStepId(e.target.value)}
-                disabled={!stepsRunId.trim() || stepsState === "loading"}
+                disabled={!scopedRunIdForSteps || stepsState === "loading"}
               >
                 <option value="">{t("work.toolcalls.step_placeholder")}</option>
                 {steps.map((s) => (
@@ -2469,7 +2469,7 @@ export function WorkPage(): JSX.Element {
                   value={createToolCallName}
                   onChange={(e) => setCreateToolCallName(e.target.value)}
                   placeholder={t("work.toolcalls.field.tool_name_placeholder")}
-                  disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+                  disabled={!scopedStepIdForToolCalls || createToolCallState === "loading"}
                 />
               </div>
               <div>
@@ -2482,7 +2482,7 @@ export function WorkPage(): JSX.Element {
                   value={createToolCallTitle}
                   onChange={(e) => setCreateToolCallTitle(e.target.value)}
                   placeholder={t("work.toolcalls.field.title_placeholder")}
-                  disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+                  disabled={!scopedStepIdForToolCalls || createToolCallState === "loading"}
                 />
               </div>
             </div>
@@ -2496,7 +2496,7 @@ export function WorkPage(): JSX.Element {
               value={createToolCallAgentId}
               onChange={(e) => setCreateToolCallAgentId(e.target.value)}
               placeholder={t("work.toolcalls.field.agent_id_placeholder")}
-              disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+              disabled={!scopedStepIdForToolCalls || createToolCallState === "loading"}
             />
 
             <label className="fieldLabel" htmlFor="createToolCallInputJson">
@@ -2508,7 +2508,7 @@ export function WorkPage(): JSX.Element {
               value={createToolCallInputJson}
               onChange={(e) => setCreateToolCallInputJson(e.target.value)}
               placeholder={t("work.toolcalls.field.input_json_placeholder")}
-              disabled={!toolCallsStepId.trim() || createToolCallState === "loading"}
+              disabled={!scopedStepIdForToolCalls || createToolCallState === "loading"}
             />
 
             <div className="decisionActions" style={{ marginTop: 10 }}>
@@ -2516,7 +2516,7 @@ export function WorkPage(): JSX.Element {
                 type="button"
                 className="primaryButton"
                 disabled={
-                  !toolCallsStepId.trim() ||
+                  !scopedStepIdForToolCalls ||
                   selectedRunForSteps?.status !== "running" ||
                   selectedStepForToolCalls?.status === "succeeded" ||
                   selectedStepForToolCalls?.status === "failed" ||
@@ -2611,7 +2611,7 @@ export function WorkPage(): JSX.Element {
                 value={toolCallSucceedOutputJson}
                 onChange={(e) => setToolCallSucceedOutputJson(e.target.value)}
                 placeholder={t("work.toolcalls.results.succeed_output_placeholder")}
-                disabled={!toolCallsStepId.trim() || toolCallsState === "loading" || toolCallActionId != null}
+                disabled={!scopedStepIdForToolCalls || toolCallsState === "loading" || toolCallActionId != null}
               />
 
               <label className="fieldLabel" htmlFor="toolCallFailMessage">
@@ -2623,7 +2623,7 @@ export function WorkPage(): JSX.Element {
                 value={toolCallFailMessage}
                 onChange={(e) => setToolCallFailMessage(e.target.value)}
                 placeholder={t("work.toolcalls.results.fail_message_placeholder")}
-                disabled={!toolCallsStepId.trim() || toolCallsState === "loading" || toolCallActionId != null}
+                disabled={!scopedStepIdForToolCalls || toolCallsState === "loading" || toolCallActionId != null}
               />
 
               <label className="fieldLabel" htmlFor="toolCallFailErrorJson">
@@ -2635,7 +2635,7 @@ export function WorkPage(): JSX.Element {
                 value={toolCallFailErrorJson}
                 onChange={(e) => setToolCallFailErrorJson(e.target.value)}
                 placeholder={t("work.toolcalls.results.fail_error_placeholder")}
-                disabled={!toolCallsStepId.trim() || toolCallsState === "loading" || toolCallActionId != null}
+                disabled={!scopedStepIdForToolCalls || toolCallsState === "loading" || toolCallActionId != null}
               />
             </details>
 
@@ -2645,7 +2645,7 @@ export function WorkPage(): JSX.Element {
 
             {toolCallsError ? <div className="errorBox">{t("error.load_failed", { code: toolCallsError })}</div> : null}
             {toolCallsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
-            {toolCallsStepId.trim() && toolCallsState !== "loading" && !toolCallsError && toolCalls.length === 0 ? (
+            {scopedStepIdForToolCalls && toolCallsState !== "loading" && !toolCallsError && toolCalls.length === 0 ? (
               <div className="placeholder">{t("work.toolcalls.empty")}</div>
             ) : null}
 
@@ -2820,7 +2820,7 @@ export function WorkPage(): JSX.Element {
                 className="select"
                 value={artifactsStepId}
                 onChange={(e) => setArtifactsStepId(e.target.value)}
-                disabled={!stepsRunId.trim() || stepsState === "loading"}
+                disabled={!scopedRunIdForSteps || stepsState === "loading"}
               >
                 <option value="">{t("work.artifacts.step_placeholder")}</option>
                 {steps.map((s) => (
@@ -2850,7 +2850,7 @@ export function WorkPage(): JSX.Element {
                   value={createArtifactKind}
                   onChange={(e) => setCreateArtifactKind(e.target.value)}
                   placeholder={t("work.artifacts.field.kind_placeholder")}
-                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                  disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
                 />
               </div>
               <div>
@@ -2863,7 +2863,7 @@ export function WorkPage(): JSX.Element {
                   value={createArtifactTitle}
                   onChange={(e) => setCreateArtifactTitle(e.target.value)}
                   placeholder={t("work.artifacts.field.title_placeholder")}
-                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                  disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
                 />
               </div>
             </div>
@@ -2877,7 +2877,7 @@ export function WorkPage(): JSX.Element {
               value={createArtifactMimeType}
               onChange={(e) => setCreateArtifactMimeType(e.target.value)}
               placeholder={t("work.artifacts.field.mime_type_placeholder")}
-              disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+              disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
             />
 
             <label className="fieldLabel" htmlFor="createArtifactContentType">
@@ -2888,7 +2888,7 @@ export function WorkPage(): JSX.Element {
               className="select"
               value={createArtifactContentType}
               onChange={(e) => setCreateArtifactContentType(e.target.value as ArtifactContentType)}
-              disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+              disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
             >
               <option value="none">{t("work.artifacts.content_type.none")}</option>
               <option value="text">{t("work.artifacts.content_type.text")}</option>
@@ -2907,7 +2907,7 @@ export function WorkPage(): JSX.Element {
                   value={createArtifactText}
                   onChange={(e) => setCreateArtifactText(e.target.value)}
                   placeholder={t("work.artifacts.field.content_text_placeholder")}
-                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                  disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
                 />
               </>
             ) : null}
@@ -2923,7 +2923,7 @@ export function WorkPage(): JSX.Element {
                   value={createArtifactJson}
                   onChange={(e) => setCreateArtifactJson(e.target.value)}
                   placeholder={t("work.artifacts.field.content_json_placeholder")}
-                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                  disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
                 />
               </>
             ) : null}
@@ -2939,7 +2939,7 @@ export function WorkPage(): JSX.Element {
                   value={createArtifactUri}
                   onChange={(e) => setCreateArtifactUri(e.target.value)}
                   placeholder={t("work.artifacts.field.content_uri_placeholder")}
-                  disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                  disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
                 />
               </>
             ) : null}
@@ -2956,7 +2956,7 @@ export function WorkPage(): JSX.Element {
                 value={createArtifactMetadataJson}
                 onChange={(e) => setCreateArtifactMetadataJson(e.target.value)}
                 placeholder={t("work.artifacts.field.metadata_placeholder")}
-                disabled={!artifactsStepId.trim() || createArtifactState === "loading"}
+                disabled={!scopedStepIdForArtifacts || createArtifactState === "loading"}
               />
             </details>
 
@@ -2964,7 +2964,7 @@ export function WorkPage(): JSX.Element {
               <button
                 type="button"
                 className="primaryButton"
-                disabled={!artifactsStepId.trim() || createArtifactState === "loading" || !createArtifactKind.trim()}
+                disabled={!scopedStepIdForArtifacts || createArtifactState === "loading" || !createArtifactKind.trim()}
                 onClick={() => {
                   void (async () => {
                     const step_id = artifactsStepId.trim();
@@ -3061,7 +3061,7 @@ export function WorkPage(): JSX.Element {
 
             {artifactsError ? <div className="errorBox">{t("error.load_failed", { code: artifactsError })}</div> : null}
             {artifactsState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
-            {artifactsStepId.trim() && artifactsState !== "loading" && !artifactsError && artifacts.length === 0 ? (
+            {scopedStepIdForArtifacts && artifactsState !== "loading" && !artifactsError && artifacts.length === 0 ? (
               <div className="placeholder">{t("work.artifacts.empty")}</div>
             ) : null}
 
@@ -3102,10 +3102,10 @@ export function WorkPage(): JSX.Element {
             </button>
           </div>
 
-          {!threadId.trim() ? <div className="placeholder">{t("work.thread.select_prompt")}</div> : null}
+          {!scopedThreadIdForMessages ? <div className="placeholder">{t("work.thread.select_prompt")}</div> : null}
           {messagesError ? <div className="errorBox">{t("error.load_failed", { code: messagesError })}</div> : null}
           {messagesState === "loading" ? <div className="placeholder">{t("common.loading")}</div> : null}
-          {threadId.trim() && messagesState !== "loading" && !messagesError && messagesAsc.length === 0 ? (
+          {scopedThreadIdForMessages && messagesState !== "loading" && !messagesError && messagesAsc.length === 0 ? (
             <div className="placeholder">{t("work.message.empty")}</div>
           ) : null}
 
@@ -3254,12 +3254,12 @@ export function WorkPage(): JSX.Element {
                 value={composeContent}
                 onChange={(e) => setComposeContent(e.target.value)}
                 placeholder={t("work.message.compose_placeholder")}
-                disabled={!threadId.trim() || sendState === "loading"}
+                disabled={!scopedThreadIdForMessages || sendState === "loading"}
               />
               <button
                 type="button"
                 className="primaryButton"
-                disabled={!threadId.trim() || sendState === "loading" || !composeContent.trim() || !senderId.trim()}
+                disabled={!scopedThreadIdForMessages || sendState === "loading" || !composeContent.trim() || !senderId.trim()}
                 onClick={() => {
                   void (async () => {
                     const content_md = composeContent.trim();
