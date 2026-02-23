@@ -21,7 +21,13 @@ function normalizeRunnerMode(rawMode: unknown): RunnerMode {
 export function DesktopBootstrapPage(): JSX.Element {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const runtimeMode = normalizeRunnerMode(import.meta.env.VITE_DESKTOP_RUNNER_MODE);
+  const runtimeModeConfiguredRaw = String(import.meta.env.VITE_DESKTOP_RUNNER_MODE ?? "").trim();
+  const runtimeMode = normalizeRunnerMode(runtimeModeConfiguredRaw || "embedded");
+  const runtimeModeConfiguredNormalized = runtimeModeConfiguredRaw.toLowerCase();
+  const runtimeModeHasFallback =
+    runtimeModeConfiguredRaw.length > 0 &&
+    runtimeModeConfiguredNormalized !== "embedded" &&
+    runtimeModeConfiguredNormalized !== "external";
   const runtimeApiBase = String(import.meta.env.VITE_DEV_API_BASE_URL || "http://localhost:3000");
   const runtimeApiPort = String(import.meta.env.VITE_DESKTOP_API_PORT || "3000");
   const runtimeWebPort = String(import.meta.env.VITE_DESKTOP_WEB_PORT || "5173");
@@ -45,6 +51,7 @@ export function DesktopBootstrapPage(): JSX.Element {
   const copyRuntimeContext = useCallback(async () => {
     const payload = [
       `runner_mode=${runtimeMode}`,
+      ...(runtimeModeHasFallback ? [`runner_mode_configured=${runtimeModeConfiguredRaw}`] : []),
       `api_base=${runtimeApiBase}`,
       `api_port=${runtimeApiPort}`,
       `web_port=${runtimeWebPort}`,
@@ -74,6 +81,8 @@ export function DesktopBootstrapPage(): JSX.Element {
     }
   }, [
     runtimeMode,
+    runtimeModeHasFallback,
+    runtimeModeConfiguredRaw,
     runtimeApiBase,
     runtimeApiPort,
     runtimeWebPort,
@@ -148,6 +157,15 @@ export function DesktopBootstrapPage(): JSX.Element {
         <div>
           {t("desktop.bootstrap.runtime_mode")}: <span className="mono">{runtimeMode}</span>
         </div>
+        {runtimeModeHasFallback ? (
+          <>
+            <div>
+              {t("desktop.bootstrap.runtime_mode_configured")}:{" "}
+              <span className="mono">{runtimeModeConfiguredRaw}</span>
+            </div>
+            <div>{t("desktop.bootstrap.runtime_mode_fallback", { mode: runtimeMode })}</div>
+          </>
+        ) : null}
         <div>
           {t("desktop.bootstrap.runtime_api_base")}: <span className="mono">{runtimeApiBase}</span>
         </div>

@@ -224,6 +224,9 @@ describe("DesktopBootstrapPage", () => {
       });
 
       expect(screen.getAllByText(/pnpm desktop:dev:embedded/).length).toBeGreaterThan(0);
+      expect(screen.getByText(/^desktop\.bootstrap\.runtime_mode_configured/)).toBeTruthy();
+      expect(screen.getByText("desktop.bootstrap.runtime_mode_fallback")).toBeTruthy();
+      expect(screen.getByText("bogus_mode")).toBeTruthy();
 
       const copyButtons = screen.getAllByRole("button", { name: "desktop.bootstrap.copy_context" });
       fireEvent.click(copyButtons[copyButtons.length - 1]!);
@@ -232,6 +235,7 @@ describe("DesktopBootstrapPage", () => {
         expect(writeText).toHaveBeenCalledTimes(1);
       });
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining("runner_mode=embedded"));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining("runner_mode_configured=bogus_mode"));
       expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining("engine_workspace="));
     } finally {
       if (originalMode === undefined) {
