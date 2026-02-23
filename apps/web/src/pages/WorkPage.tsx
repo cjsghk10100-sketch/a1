@@ -797,19 +797,34 @@ export function WorkPage(): JSX.Element {
       return;
     }
 
+    const room = roomIdRef.current.trim();
+    const scopedRunId = resolveRoomScopedRunId({
+      roomId: room,
+      runId: id,
+      runs,
+    });
+    if (!scopedRunId) {
+      if (stepsRequestRef.current === requestId) {
+        setSteps([]);
+        setStepsState("idle");
+        setStepsError(null);
+      }
+      return;
+    }
+
     if (stepsRequestRef.current === requestId) {
       setStepsState("loading");
       setStepsError(null);
     }
     try {
-      const res = await listRunSteps(id);
+      const res = await listRunSteps(scopedRunId);
       if (stepsRequestRef.current !== requestId) return;
-      if (stepsRunIdRef.current !== id) return;
+      if (stepsRunIdRef.current !== scopedRunId) return;
       setSteps(res);
       setStepsState("idle");
     } catch (e) {
       if (stepsRequestRef.current !== requestId) return;
-      if (stepsRunIdRef.current !== id) return;
+      if (stepsRunIdRef.current !== scopedRunId) return;
       setStepsError(toErrorCode(e));
       setStepsState("error");
     }

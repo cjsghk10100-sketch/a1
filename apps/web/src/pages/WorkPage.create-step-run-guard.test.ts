@@ -53,6 +53,16 @@ describe("resolveRoomScopedRunId", () => {
     ).toBeUndefined();
   });
 
+  it("returns undefined when run list is empty", () => {
+    expect(
+      resolveRoomScopedRunId({
+        roomId: "room_a",
+        runId: "run_1",
+        runs: [],
+      }),
+    ).toBeUndefined();
+  });
+
   it("trims identifiers before matching", () => {
     expect(
       resolveRoomScopedRunId({
