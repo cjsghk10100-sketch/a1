@@ -2,6 +2,9 @@
 
 메모리 런타임 단일 진실원(SSOT)
 
+> 본 문서는 운영(메모리 런타임) SSOT이며,
+> 최상위(규범) SSOT는 `memory/ops/COMMON_CONSTITUTION_V1.md`이다.
+
 ## 계층
 1. `memory/state.md` : 현재 상태(덮어쓰기)
 2. `memory/daily/YYYY-MM-DD.md` : 일간 원본 로그(append)

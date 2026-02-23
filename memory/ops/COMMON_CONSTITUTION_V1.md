@@ -21,6 +21,13 @@
 5. **실패 공개**: 실패는 은폐하지 않고 구조화해 재발을 막는다.
 6. **안전 우선**: 외부 전송/파괴적 변경은 명시적 확인 후 수행한다.
 
+### 1.1 SSOT 계층 정의
+- **최상위(규범) SSOT**: `memory/ops/COMMON_CONSTITUTION_V1.md`
+- **운영(메모리 런타임) SSOT**: `memory/ops/MEMORY_RUNTIME_SSOT.md`
+- **현재 상태 SSOT**: `memory/state.md`
+
+해석 우선순위는 **헌법 > 런타임 SSOT > 상태 파일** 순서를 따른다.
+
 ---
 
 ## 2. 표준 루프
