@@ -162,4 +162,5 @@
 - 증거 표준: `memory/ops/EVIDENCE_STANDARD_V1.md`
 - 메모리 SSOT: `memory/ops/MEMORY_RUNTIME_SSOT.md`
 - ROI 학습 로그: `memory/reference/ROI_LEARNING_LOG.md`
+- 공급망 보안 체크리스트: `MIN_ORG/03_PLAYBOOKS/SUPPLY_CHAIN_SECURITY_CHECKLIST_V1.md`
 
