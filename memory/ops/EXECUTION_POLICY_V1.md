@@ -27,5 +27,7 @@
 
 ## 4) 웹 입력 표준화 규칙 (markdown.new)
 - URL 수집은 `https://markdown.new/<원본URL>` 경로를 우선 시도한다.
-- 변환 실패/품질 저하 시 기존 수집 경로로 자동 fallback 한다.
-- 수집 결과에는 원본 URL과 변환 URL을 함께 저장한다.
+- 내부망/로그인 필요/민감 데이터 페이지는 `markdown.new` 경유를 금지한다.
+- 본문 품질 체크(길이/제목/날짜/출처) 실패 시 기존 수집 경로로 자동 fallback 한다.
+- 동일 URL 재수집은 TTL 24h 캐시를 기본으로 한다.
+- 수집 결과에는 `original_url`, `markdown_url`, `fetched_at`, `fallback_used`를 필수 저장한다.

@@ -137,8 +137,11 @@
 
 ## 8) 웹 수집 표준화 (markdown.new)
 - URL 기반 수집은 기본 경로로 `https://markdown.new/<원본URL>` 변환을 우선 시도한다.
-- 변환 실패/품질 저하 시 기존 수집 경로(`web_fetch`)로 fallback 한다.
+- 내부망/로그인 필요/민감 데이터 페이지는 `markdown.new` 경유를 금지한다.
+- 본문 품질 체크(길이/제목/날짜/출처) 실패 시 기존 수집 경로(`web_fetch`)로 fallback 한다.
 - 결과 저장 시 원본 URL과 변환 URL을 함께 기록해 추적 가능성을 유지한다.
+- 동일 URL 재수집은 TTL 24h 캐시를 기본으로 하여 중복 수집 비용을 줄인다.
+- Evidence에는 `original_url`, `markdown_url`, `fetched_at`, `fallback_used` 4개 필드를 필수 저장한다.
 - 1주 A/B 테스트 지표(토큰/지연/오류/핵심 누락률)를 기록하고 기준 충족 시 기본 경로로 승격한다.
 
 ## 9) 모델 분업 라우팅 규칙 (실운영)
