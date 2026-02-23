@@ -629,6 +629,46 @@ export function WorkPage(): JSX.Element {
     return steps.find((s) => s.step_id === id) ?? null;
   }, [steps, artifactsStepId]);
 
+  const scopedThreadIdForMessages = useMemo(() => {
+    return (
+      resolveRoomScopedThreadId({
+        roomId,
+        threadId,
+        threads,
+      }) ?? ""
+    );
+  }, [roomId, threadId, threads]);
+
+  const scopedRunIdForSteps = useMemo(() => {
+    return (
+      resolveRoomScopedRunId({
+        roomId,
+        runId: stepsRunId,
+        runs,
+      }) ?? ""
+    );
+  }, [roomId, stepsRunId, runs]);
+
+  const scopedStepIdForToolCalls = useMemo(() => {
+    return (
+      resolveRunScopedStepId({
+        runId: stepsRunId,
+        stepId: toolCallsStepId,
+        steps,
+      }) ?? ""
+    );
+  }, [stepsRunId, toolCallsStepId, steps]);
+
+  const scopedStepIdForArtifacts = useMemo(() => {
+    return (
+      resolveRunScopedStepId({
+        runId: stepsRunId,
+        stepId: artifactsStepId,
+        steps,
+      }) ?? ""
+    );
+  }, [stepsRunId, artifactsStepId, steps]);
+
   async function reloadRooms(): Promise<void> {
     const requestId = roomsRequestRef.current + 1;
     roomsRequestRef.current = requestId;
@@ -2198,16 +2238,16 @@ export function WorkPage(): JSX.Element {
               <button
                 type="button"
                 className="ghostButton"
-                onClick={() => void reloadSteps(stepsRunId)}
-                disabled={!stepsRunId.trim() || stepsState === "loading"}
+                onClick={() => void reloadSteps(scopedRunIdForSteps)}
+                disabled={!scopedRunIdForSteps || stepsState === "loading"}
               >
                 {t("common.refresh")}
               </button>
               <button
                 type="button"
                 className="ghostButton"
-                onClick={() => navigate(`/inspector?run_id=${encodeURIComponent(stepsRunId)}`)}
-                disabled={!stepsRunId.trim()}
+                onClick={() => navigate(`/inspector?run_id=${encodeURIComponent(scopedRunIdForSteps)}`)}
+                disabled={!scopedRunIdForSteps}
               >
                 {t("work.steps.open_inspector")}
               </button>
@@ -2398,8 +2438,8 @@ export function WorkPage(): JSX.Element {
               <button
                 type="button"
                 className="ghostButton"
-                onClick={() => void reloadToolCalls(toolCallsStepId)}
-                disabled={!toolCallsStepId.trim() || toolCallsState === "loading"}
+                onClick={() => void reloadToolCalls(scopedStepIdForToolCalls)}
+                disabled={!scopedStepIdForToolCalls || toolCallsState === "loading"}
               >
                 {t("common.refresh")}
               </button>
@@ -2792,8 +2832,8 @@ export function WorkPage(): JSX.Element {
               <button
                 type="button"
                 className="ghostButton"
-                onClick={() => void reloadArtifacts(artifactsStepId)}
-                disabled={!artifactsStepId.trim() || artifactsState === "loading"}
+                onClick={() => void reloadArtifacts(scopedStepIdForArtifacts)}
+                disabled={!scopedStepIdForArtifacts || artifactsState === "loading"}
               >
                 {t("common.refresh")}
               </button>
@@ -3055,8 +3095,8 @@ export function WorkPage(): JSX.Element {
             <button
               type="button"
               className="ghostButton"
-              onClick={() => void reloadMessages(threadId)}
-              disabled={!threadId.trim() || messagesState === "loading"}
+              onClick={() => void reloadMessages(scopedThreadIdForMessages)}
+              disabled={!scopedThreadIdForMessages || messagesState === "loading"}
             >
               {t("common.refresh")}
             </button>
