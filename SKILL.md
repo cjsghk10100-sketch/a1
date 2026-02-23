@@ -2,6 +2,11 @@
 
 이 문서는 이 워크스페이스의 스킬 실행 허브입니다.
 
+## SSOT 계층
+1. `memory/ops/COMMON_CONSTITUTION_V1.md` (최상위 규범 SSOT)
+2. `memory/ops/MEMORY_RUNTIME_SSOT.md` (운영 SSOT)
+3. `memory/state.md` (현재 상태 SSOT)
+
 ## 1층: Core Runtime Skills
 - 메모리 관리 (daily/monthly/weekly/state)
 - 결정→실행→증거 기록 루프
