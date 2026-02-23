@@ -1255,17 +1255,19 @@ export function WorkPage(): JSX.Element {
                                   const nextRoomId = roomId.trim();
                                   if (!nextRoomId) return;
 
-                                  setRunActionId(r.run_id);
-                                  setRunActionError(null);
-                                  try {
-                                    await startRun(r.run_id);
-                                    await reloadRuns(nextRoomId);
-                                    selectStepsRunForRoom(nextRoomId, r.run_id);
-                                  } catch (e) {
-                                    setRunActionError(toErrorCode(e));
-                                  } finally {
-                                    setRunActionId(null);
-                                  }
+                                    setRunActionId(r.run_id);
+                                    setRunActionError(null);
+                                    try {
+                                      await startRun(r.run_id);
+                                      await reloadRuns(nextRoomId);
+                                      if (roomIdRef.current === nextRoomId) {
+                                        selectStepsRunForRoom(nextRoomId, r.run_id);
+                                      }
+                                    } catch (e) {
+                                      setRunActionError(toErrorCode(e));
+                                    } finally {
+                                      setRunActionId(null);
+                                    }
                                 })();
                               }}
                             >
@@ -1303,7 +1305,9 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await completeRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
-                                      selectStepsRunForRoom(nextRoomId, r.run_id);
+                                      if (roomIdRef.current === nextRoomId) {
+                                        selectStepsRunForRoom(nextRoomId, r.run_id);
+                                      }
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
                                     } finally {
@@ -1342,7 +1346,9 @@ export function WorkPage(): JSX.Element {
                                     try {
                                       await failRun(r.run_id, payload);
                                       await reloadRuns(nextRoomId);
-                                      selectStepsRunForRoom(nextRoomId, r.run_id);
+                                      if (roomIdRef.current === nextRoomId) {
+                                        selectStepsRunForRoom(nextRoomId, r.run_id);
+                                      }
                                     } catch (e) {
                                       setRunActionError(toErrorCode(e));
                                     } finally {
