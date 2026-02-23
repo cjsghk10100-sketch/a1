@@ -1,22 +1,29 @@
-# EXECUTION POLICY (v0.1)
+# EXECUTION POLICY (v0.2)
 
-> Runtime 적용본(SSOT)은 `memory/ops/EXECUTION_POLICY_V1.md` 참조
+Runtime 적용본(SSOT): `memory/ops/EXECUTION_POLICY_V1.md`
 
-## 0) 절대 규칙
+## 목적
+에이전트 조직의 모든 작업이 8단계 루프를 완주하도록 강제한다.
+
+## Core Loop
+`Goal → Portfolio → Approval → Execute → Evidence → Eval → Learn → Promote/Demote`
+
+## 절대 규칙
 - 승인 없이는 실행 금지
-- 실행자는 승인 레코드(approval_id)와 요청 해시(request_hash)가 일치해야만 실행
-- 실행 결과는 반드시 evidence_id로 연결
+- 증거 없이는 완료 금지
+- 단계 생략 금지
+- SSOT 충돌 시 즉시 반려
 
-## 1) 승인 레벨
+## 승인 레벨
 - L0: 무부작용(읽기/조회) — 승인 없이 가능
-- L1: 경미(로컬 파일 생성/로그) — 자동 승인 가능(정책으로)
+- L1: 경미(로컬 파일 생성/로그) — 자동 승인 가능
 - L2: 금전/주문/포지션 변경 — 사람 승인 필수
-- L3: 되돌릴 수 없는 실행(키 변경/삭제/배포/권한 부여) — 사람 + 2단계 확인(쿨다운) 필수
+- L3: 비가역 실행 — 사람 + 2단계 확인 필수
 
-## 2) 실행 전 체크(Executor가 강제)
+## 실행 전 체크
 - 입력값 검증
-- 리스크 한도(노출/손실) 확인
-- 실행 환경(버전/커밋/설정) 스냅샷 기록
-- 킬스위치 작동 확인(가능하면)
+- 리스크 한도 확인
+- 실행 환경 스냅샷 기록
+- 킬스위치 작동 확인
 
 끝.
