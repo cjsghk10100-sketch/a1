@@ -383,6 +383,16 @@ export function buildArtifactContent(args: {
   return { content: undefined, errorCode: null };
 }
 
+export function parseRunTagsCsv(rawInput: string): string[] | undefined {
+  const raw = rawInput.trim();
+  if (!raw) return undefined;
+  const tags = raw
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => Boolean(tag));
+  return tags.length ? tags : undefined;
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -914,14 +924,7 @@ export function WorkPage(): JSX.Element {
     }
 
     const correlation_id = createRunCorrelationId.trim() || undefined;
-
-    const rawTags = createRunTagsCsv.trim();
-    const tags = rawTags
-      ? rawTags
-          .split(",")
-          .map((tag) => tag.trim())
-          .filter((tag) => Boolean(tag))
-      : undefined;
+    const tags = parseRunTagsCsv(createRunTagsCsv);
 
     let createdRun: string | null = null;
 
