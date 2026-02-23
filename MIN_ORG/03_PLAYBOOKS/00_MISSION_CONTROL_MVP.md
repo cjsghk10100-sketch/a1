@@ -191,3 +191,9 @@
 - Codex Plan Mode 프롬프트: `MIN_ORG/03_PLAYBOOKS/CODEX_PLAN_MODE_PROMPT_FINAL.md`
 
 - PR DoD 체크리스트: `MIN_ORG/03_PLAYBOOKS/PR_DOD_CHECKLIST.md`
+
+
+## 12) 이관 적용 원칙 (고정)
+- 새 작업은 신구조 경로에서 시작한다.
+- 기존 자산은 주간 배치로 검증 통과분만 순차 이관한다.
+- 이관 전까지 구구조 파일은 링크/참조로 유지한다.
