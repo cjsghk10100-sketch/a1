@@ -33,6 +33,7 @@ When summarizing pasted tweets/posts, use this fixed shape:
 3) Next actions (1-3 concrete actions)
 
 Keep it natural, no internal labels.
+Never expose internal scratchpad/thinking prefixes in user-visible messages.
 
 ## Personal Operating Loop
 
