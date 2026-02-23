@@ -405,6 +405,18 @@ export function resolveRoomScopedThreadId(args: {
   return belongsToRoom ? threadId : undefined;
 }
 
+export function resolveRoomScopedRunId(args: {
+  roomId: string;
+  runId: string;
+  runs: Array<Pick<RunRow, "run_id" | "room_id">>;
+}): string | undefined {
+  const roomId = args.roomId.trim();
+  const runId = args.runId.trim();
+  if (!roomId || !runId) return undefined;
+  const belongsToRoom = args.runs.some((run) => run.run_id === runId && run.room_id === roomId);
+  return belongsToRoom ? runId : undefined;
+}
+
 export function resolveRunScopedStepId(args: {
   runId: string;
   stepId: string;
@@ -2203,9 +2215,10 @@ export function WorkPage(): JSX.Element {
                 }
                 onClick={() => {
                   void (async () => {
-                    const run_id = stepsRunId.trim();
+                    const nextRoomId = roomId.trim();
+                    const selectedRunId = stepsRunId.trim();
                     const kind = createStepKind.trim();
-                    if (!run_id || !kind) return;
+                    if (!nextRoomId || !selectedRunId || !kind) return;
                     const toolCallsSelectionAnchor = toolCallsStepIdRef.current.trim();
                     const artifactsSelectionAnchor = artifactsStepIdRef.current.trim();
                     const requestId = createStepRequestRef.current + 1;
@@ -2214,6 +2227,19 @@ export function WorkPage(): JSX.Element {
                     setCreateStepState("loading");
                     setCreateStepError(null);
                     setCreatedStepId(null);
+
+                    const run_id = resolveRoomScopedRunId({
+                      roomId: nextRoomId,
+                      runId: selectedRunId,
+                      runs,
+                    });
+                    if (!run_id) {
+                      if (createStepRequestRef.current === requestId) {
+                        setCreateStepError("run_room_mismatch");
+                        setCreateStepState("error");
+                      }
+                      return;
+                    }
 
                     const parsedInput = parseOptionalJsonInput(createStepInputJson);
                     if (parsedInput.errorCode) {
