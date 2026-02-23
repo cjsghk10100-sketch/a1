@@ -71,3 +71,7 @@
 - 승인 범위 초과 실행
 - 증거 누락 상태의 pass 판정
 - 수치 없는 평가를 학습으로 승격
+
+
+## Reference
+- `MIN_ORG/01_CONSTITUTION/DATA_OBJECTS.md`
