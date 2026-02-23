@@ -393,7 +393,7 @@ export function parseRunTagsCsv(rawInput: string): string[] | undefined {
   return tags.length ? tags : undefined;
 }
 
-export function resolveRunThreadIdForCreate(args: {
+export function resolveRoomScopedThreadId(args: {
   roomId: string;
   threadId: string;
   threads: Array<Pick<ThreadRow, "thread_id" | "room_id">>;
@@ -941,7 +941,7 @@ export function WorkPage(): JSX.Element {
     let createdRun: string | null = null;
 
     try {
-      const threadIdForCreate = resolveRunThreadIdForCreate({
+      const threadIdForCreate = resolveRoomScopedThreadId({
         roomId: nextRoomId,
         threadId,
         threads,
@@ -3091,8 +3091,18 @@ export function WorkPage(): JSX.Element {
                   void (async () => {
                     const content_md = composeContent.trim();
                     const sender_id = senderId.trim();
-                    const targetThreadId = threadId.trim();
-                    if (!targetThreadId || !content_md) return;
+                    const currentRoomId = roomIdRef.current.trim();
+                    const targetThreadId = resolveRoomScopedThreadId({
+                      roomId: currentRoomId,
+                      threadId,
+                      threads,
+                    });
+                    if (!content_md) return;
+                    if (!targetThreadId) {
+                      setSendError("thread_room_mismatch");
+                      setSendState("error");
+                      return;
+                    }
                     if (!sender_id) {
                       setSendError("sender_id_required");
                       setSendState("error");

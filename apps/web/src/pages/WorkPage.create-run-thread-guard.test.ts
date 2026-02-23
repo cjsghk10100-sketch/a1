@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveRunThreadIdForCreate } from "./WorkPage";
+import { resolveRoomScopedThreadId } from "./WorkPage";
 
-describe("resolveRunThreadIdForCreate", () => {
+describe("resolveRoomScopedThreadId", () => {
+  it("returns undefined for blank room id", () => {
+    expect(
+      resolveRoomScopedThreadId({
+        roomId: "   ",
+        threadId: "th_1",
+        threads: [{ room_id: "room_a", thread_id: "th_1" }],
+      }),
+    ).toBeUndefined();
+  });
+
   it("returns undefined for blank thread id", () => {
     expect(
-      resolveRunThreadIdForCreate({
+      resolveRoomScopedThreadId({
         roomId: "room_a",
         threadId: "   ",
         threads: [{ room_id: "room_a", thread_id: "th_1" }],
@@ -15,7 +25,7 @@ describe("resolveRunThreadIdForCreate", () => {
 
   it("returns thread id when it belongs to selected room", () => {
     expect(
-      resolveRunThreadIdForCreate({
+      resolveRoomScopedThreadId({
         roomId: "room_a",
         threadId: "th_1",
         threads: [{ room_id: "room_a", thread_id: "th_1" }],
@@ -25,7 +35,7 @@ describe("resolveRunThreadIdForCreate", () => {
 
   it("returns undefined when thread belongs to another room", () => {
     expect(
-      resolveRunThreadIdForCreate({
+      resolveRoomScopedThreadId({
         roomId: "room_a",
         threadId: "th_1",
         threads: [{ room_id: "room_b", thread_id: "th_1" }],
@@ -35,7 +45,7 @@ describe("resolveRunThreadIdForCreate", () => {
 
   it("returns undefined when thread id is not present in thread list", () => {
     expect(
-      resolveRunThreadIdForCreate({
+      resolveRoomScopedThreadId({
         roomId: "room_a",
         threadId: "th_missing",
         threads: [{ room_id: "room_a", thread_id: "th_1" }],
@@ -45,7 +55,7 @@ describe("resolveRunThreadIdForCreate", () => {
 
   it("trims identifiers before matching", () => {
     expect(
-      resolveRunThreadIdForCreate({
+      resolveRoomScopedThreadId({
         roomId: " room_a ",
         threadId: " th_1 ",
         threads: [{ room_id: "room_a", thread_id: "th_1" }],
