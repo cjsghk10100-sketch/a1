@@ -156,7 +156,24 @@
 3. 결과물은 반드시 Evidence와 연결한다.
 4. 분류가 애매하면 Validation 트랙으로 우선 보낸다.
 
-## 10) 연결 문서
+## 10) 능동 알림 SOP
+### 트리거
+- 승인 필요 요청 생성
+- PENDING_APPROVAL 24h 이상 정체
+- 실패 재발(동일 유형 2회 이상)
+- ROI 개선 후보 탐지
+
+### 알림 포맷
+1. 상황 요약
+2. 필요한 사용자 결정/입력
+3. 선택지 A/B(필요 시 C=보류)
+4. 미응답 시 기본 동작
+
+### 소음 제어
+- 동일 사안 반복 알림은 dedup 키로 억제
+- 비긴급 정보는 정기 리포트로 병합
+
+## 11) 연결 문서
 - 공통 헌법: `memory/ops/COMMON_CONSTITUTION_V1.md`
 - 실행 정책: `memory/ops/EXECUTION_POLICY_V1.md`
 - 증거 표준: `memory/ops/EVIDENCE_STANDARD_V1.md`
