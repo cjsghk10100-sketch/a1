@@ -3,3 +3,4 @@
 ## Long-term
 
 - 2026-02-24: 사용자(민)가 서기에게 공용 헌법을 스스로 수정할 수 있는 권한을 명시적으로 부여함. 단, 1원칙 분해·검증·중복금지 규칙을 따르는 범위에서 반영.
+- 2026-02-24: 사용자 큐레이션 앱 성장 도구 10종(SensorTower/Mobbin/RevenueCat/Superwall/Supabase/AppsFlyer/Mixpanel/Reddit/Polar/Resend)을 장기 학습 기준으로 채택. 세션 변경 후에도 ROI 학습 루프 기준으로 유지.
