@@ -1,6 +1,10 @@
 const KEY = 'promotion_dashboard_v2';
 let state = [];
 let filter = 'ALL';
+const sample = [
+  { proposal_id:'PR-001', target_path:'memory/ops/COMMON_CONSTITUTION_V1.md', summary:'메타 루프 조항 추가', risk_level:'L1', status:'APPLIED', created_at:new Date().toISOString(), reason:'샘플 데이터' },
+  { proposal_id:'PR-002', target_path:'MIN_ORG/03_PLAYBOOKS/00_MISSION_CONTROL_MVP.md', summary:'markdown.new 수집 경로 추가', risk_level:'L1', status:'PENDING_APPROVAL', created_at:new Date().toISOString(), reason:'' }
+];
 
 async function bootstrap(){
   const seeded = localStorage.getItem(KEY);
@@ -12,9 +16,9 @@ async function bootstrap(){
   try {
     const res = await fetch('./data.json');
     const j = await res.json();
-    state = j.queue || [];
+    state = (j.queue && j.queue.length) ? j.queue : structuredClone(sample);
   } catch {
-    state = [];
+    state = structuredClone(sample);
   }
   save();
   render();
