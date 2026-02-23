@@ -48,6 +48,7 @@
 - 시간 부족: partial 상태와 잔여 작업 명시
 
 ## 연계 문서
+- 크론 아키텍처 기준: `references/cron/openclaw_cron_architecture_OUR_v1.2.md`
 - 헌법: `memory/ops/COMMON_CONSTITUTION_V1.md`
 - 메모리 SSOT: `memory/ops/MEMORY_RUNTIME_SSOT.md`
 - 실행 정책: `memory/ops/EXECUTION_POLICY_V1.md`
