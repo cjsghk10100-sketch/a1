@@ -37,6 +37,8 @@ gate and approvals.
 
 - `apps/api`: Fastify API + event store writer + projectors (Postgres)
 - `apps/web`: Web UI (React) - thin consumer of backend contracts
+- `apps/desktop`: Electron launcher with runtime supervisor (API/Web/Engine auto-start + health diagnostics)
+- `apps/engine`: external run claim/execute loop for queued runs
 - `packages/shared`: shared ids/types/contracts
 - `infra`: local dev deps (e.g. Postgres via Docker Compose)
 
@@ -59,6 +61,7 @@ Read model:
 - Policy gate: pure decision boundary for actions (`allow|deny|require_approval`).
 - Approval: request/decision record used by policy enforcement.
 - Run: an execution unit (created/started/completed/failed).
+- Run claim lease: lock token + heartbeat TTL used by external engines to prevent stuck ownership.
 - Step: a unit of work within a run.
 - Tool call: an invocation and outcome of a tool.
 - Artifact: a produced output (text/json/uri) attached to a step.
@@ -114,6 +117,7 @@ Current endpoints (selected):
 - Runs:
   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/:id`
   - `POST /v1/runs/claim` (external-engine safe claim of queued run)
+  - `POST /v1/runs/:id/lease/heartbeat`, `POST /v1/runs/:id/lease/release`
   - `POST /v1/runs/:id/start`, `POST /v1/runs/:id/steps`, `GET /v1/runs/:id/steps`
   - `POST /v1/runs/:id/complete`, `POST /v1/runs/:id/fail`
 - Tools/artifacts:
@@ -130,6 +134,16 @@ Key screens (thin consumers of backend contracts):
 - Notifications: per-room read cursor (local-only) + unread fetch via events query
 - Approval Inbox: list/detail + decide approve/deny/hold
 - Inspector: run/correlation drilldown across runs/steps/toolcalls/artifacts/events
+
+## Desktop
+
+Desktop runtime (Electron) supports:
+
+- bootstrapping API + web automatically on launch
+- embedded worker mode (`DESKTOP_RUNNER_MODE=embedded`) or external engine mode (`DESKTOP_RUNNER_MODE=external`)
+- startup diagnostics page (`/desktop-bootstrap`) with recovery commands
+- runtime supervisor with restart backoff and fatal/degraded state visibility
+- renderer bridge (`window.desktopRuntime`) for global runtime status badge
 
 ## Events
 
@@ -158,6 +172,7 @@ Core observability pillars:
 - Immutable event history with correlation/causation ids.
 - Inspector: run and correlation drilldowns + event detail view.
 - Notifications read cursor enables “what changed since I last looked” workflows.
+- Desktop runtime status surfaces process health and restart attempts directly in UI.
 
 Growth observability (vNext):
 - Trust score trend

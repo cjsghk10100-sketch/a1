@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -116,6 +117,10 @@ type ClaimResponse = {
     input: Record<string, unknown> | null;
     tags: string[];
     correlation_id: string;
+    claim_token: string;
+    claimed_by_actor_id: string;
+    lease_expires_at: string;
+    lease_heartbeat_at: string;
   };
 };
 
@@ -145,9 +150,10 @@ async function main(): Promise<void> {
   await db.connect();
 
   try {
-    const ws1 = { "x-workspace-id": "ws_contract_run_claim_1" };
-    const ws2 = { "x-workspace-id": "ws_contract_run_claim_2" };
-    const actorId = "engine_bridge";
+    const runIdSuffix = randomUUID().slice(0, 8);
+    const ws1 = { "x-workspace-id": `ws_contract_run_claim_1_${runIdSuffix}` };
+    const ws2 = { "x-workspace-id": `ws_contract_run_claim_2_${runIdSuffix}` };
+    const actorId = `engine_bridge_${runIdSuffix}`;
 
     const roomA = await createRoom(baseUrl, ws1, "Run Claim Room A");
     const roomB = await createRoom(baseUrl, ws1, "Run Claim Room B");
@@ -172,6 +178,10 @@ async function main(): Promise<void> {
     assert.equal(claimA1.run.status, "running");
     assert.ok(claimA1.run.correlation_id.length > 0);
     assert.ok(claimA1.run.run_id === runA1 || claimA1.run.run_id === runA2);
+    assert.equal(claimA1.run.claimed_by_actor_id, actorId);
+    assert.ok(claimA1.run.claim_token.length > 0);
+    assert.ok(new Date(claimA1.run.lease_expires_at).getTime() > Date.now());
+    assert.ok(new Date(claimA1.run.lease_heartbeat_at).getTime() > 0);
 
     const claimA2Res = await requestJson(
       baseUrl,
@@ -185,6 +195,8 @@ async function main(): Promise<void> {
     assertClaimedRun(claimA2);
     assert.equal(claimA2.run.room_id, roomA);
     assert.notEqual(claimA2.run.run_id, claimA1.run.run_id);
+    assert.equal(claimA2.run.claimed_by_actor_id, actorId);
+    assert.ok(claimA2.run.claim_token.length > 0);
 
     const claimA3Res = await requestJson(
       baseUrl,
@@ -204,6 +216,7 @@ async function main(): Promise<void> {
     assertClaimedRun(claimB);
     assert.equal(claimB.run.run_id, runB1);
     assert.equal(claimB.run.room_id, roomB);
+    assert.equal(claimB.run.claimed_by_actor_id, actorId);
 
     const claimWs1EmptyRes = await requestJson(baseUrl, "POST", "/v1/runs/claim", { actor_id: actorId }, ws1);
     assert.equal(claimWs1EmptyRes.status, 200);
@@ -216,6 +229,73 @@ async function main(): Promise<void> {
     const claimWs2 = claimWs2Res.json as ClaimResponse;
     assertClaimedRun(claimWs2);
     assert.equal(claimWs2.run.run_id, runWs2);
+
+    const badHeartbeat = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimA1.run.run_id}/lease/heartbeat`,
+      {
+        actor_id: actorId,
+        claim_token: "wrong_token",
+      },
+      ws1,
+    );
+    assert.equal(badHeartbeat.status, 409);
+    assert.deepEqual(badHeartbeat.json, { error: "lease_token_mismatch" });
+
+    const goodHeartbeat = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimA1.run.run_id}/lease/heartbeat`,
+      {
+        actor_id: actorId,
+        claim_token: claimA1.run.claim_token,
+      },
+      ws1,
+    );
+    assert.equal(goodHeartbeat.status, 200);
+    const heartbeatJson = goodHeartbeat.json as { ok: true; lease_expires_at: string };
+    assert.equal(heartbeatJson.ok, true);
+    assert.ok(new Date(heartbeatJson.lease_expires_at).getTime() > Date.now());
+
+    const badRelease = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimA1.run.run_id}/lease/release`,
+      {
+        actor_id: actorId,
+        claim_token: "wrong_token",
+      },
+      ws1,
+    );
+    assert.equal(badRelease.status, 409);
+    assert.deepEqual(badRelease.json, { error: "lease_token_mismatch" });
+
+    const goodRelease = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimA1.run.run_id}/lease/release`,
+      {
+        actor_id: actorId,
+        claim_token: claimA1.run.claim_token,
+      },
+      ws1,
+    );
+    assert.equal(goodRelease.status, 200);
+    assert.deepEqual(goodRelease.json, { ok: true, released: true });
+
+    const releaseAgain = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimA1.run.run_id}/lease/release`,
+      {
+        actor_id: actorId,
+        claim_token: claimA1.run.claim_token,
+      },
+      ws1,
+    );
+    assert.equal(releaseAgain.status, 200);
+    assert.deepEqual(releaseAgain.json, { ok: true, released: false });
 
     for (const claimedRunId of [claimA1.run.run_id, claimA2.run.run_id, claimB.run.run_id, claimWs2.run.run_id]) {
       const actorRow = await db.query<{ actor_id: string }>(
@@ -251,6 +331,35 @@ async function main(): Promise<void> {
     const startRes = await requestJson(baseUrl, "POST", `/v1/runs/${lockedRun}/start`, {}, ws1);
     assert.equal(startRes.status, 200);
     assert.deepEqual(startRes.json, { ok: true });
+
+    const completeAfterClaim = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimA2.run.run_id}/complete`,
+      { summary: "done" },
+      ws1,
+    );
+    assert.equal(completeAfterClaim.status, 200);
+    const leaseCleared = await db.query<{
+      claim_token: string | null;
+      claimed_by_actor_id: string | null;
+      lease_expires_at: string | null;
+      lease_heartbeat_at: string | null;
+    }>(
+      `SELECT
+        claim_token,
+        claimed_by_actor_id,
+        lease_expires_at::text,
+        lease_heartbeat_at::text
+      FROM proj_runs
+      WHERE run_id = $1`,
+      [claimA2.run.run_id],
+    );
+    assert.equal(leaseCleared.rowCount, 1);
+    assert.equal(leaseCleared.rows[0].claim_token, null);
+    assert.equal(leaseCleared.rows[0].claimed_by_actor_id, null);
+    assert.equal(leaseCleared.rows[0].lease_expires_at, null);
+    assert.equal(leaseCleared.rows[0].lease_heartbeat_at, null);
   } finally {
     await db.end();
     await app.close();

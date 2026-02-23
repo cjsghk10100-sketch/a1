@@ -47,6 +47,33 @@ export function DesktopBootstrapPage(): JSX.Element {
   const [status, setStatus] = useState<BootstrapStatus>("checking");
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<CopyState>("idle");
+  const [runtimeStatus, setRuntimeStatus] = useState<DesktopRuntimeStatus | null>(null);
+
+  useEffect(() => {
+    const bridge = window.desktopRuntime;
+    if (!bridge) return;
+    let disposed = false;
+
+    void bridge
+      .getStatus()
+      .then((next) => {
+        if (disposed) return;
+        setRuntimeStatus(next);
+      })
+      .catch(() => {
+        if (disposed) return;
+      });
+
+    const unsubscribe = bridge.subscribe((next) => {
+      if (disposed) return;
+      setRuntimeStatus(next);
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
 
   const copyRuntimeContext = useCallback(async () => {
     const payload = [
@@ -62,6 +89,16 @@ export function DesktopBootstrapPage(): JSX.Element {
             `engine_actor=${runtimeEngineActorId}`,
             `engine_poll_ms=${runtimeEnginePollMs}`,
             `engine_max_claims_per_cycle=${runtimeEngineBatchLimit}`,
+          ]
+        : []),
+      ...(runtimeStatus
+        ? [
+            `runtime_phase=${runtimeStatus.phase}`,
+            `runtime_restart_attempts=${runtimeStatus.restart_attempts_total}`,
+            `runtime_degraded_component=${runtimeStatus.degraded_component ?? "none"}`,
+            `runtime_fatal_component=${runtimeStatus.fatal_component ?? "none"}`,
+            `runtime_last_error_component=${runtimeStatus.last_error_component ?? "none"}`,
+            `runtime_last_error_code=${runtimeStatus.last_error_code ?? "none"}`,
           ]
         : []),
       `error_code=${errorCode ?? "none"}`,
@@ -95,6 +132,7 @@ export function DesktopBootstrapPage(): JSX.Element {
     recoveryCommandDb,
     recoveryCommandMigrate,
     recoveryCommandRestart,
+    runtimeStatus,
   ]);
 
   const checkHealth = useCallback(
@@ -175,6 +213,35 @@ export function DesktopBootstrapPage(): JSX.Element {
         <div>
           {t("desktop.bootstrap.runtime_web_port")}: <span className="mono">{runtimeWebPort}</span>
         </div>
+        {runtimeStatus ? (
+          <>
+            <div>
+              {t("desktop.runtime.phase")}: <span className="mono">{runtimeStatus.phase}</span>
+            </div>
+            <div>
+              {t("desktop.runtime.restart_attempts")}:{" "}
+              <span className="mono">{runtimeStatus.restart_attempts_total}</span>
+            </div>
+            {runtimeStatus.degraded_component ? (
+              <div>
+                {t("desktop.runtime.degraded_component")}:{" "}
+                <span className="mono">{runtimeStatus.degraded_component}</span>
+              </div>
+            ) : null}
+            {runtimeStatus.fatal_component ? (
+              <div>
+                {t("desktop.runtime.fatal_component")}:{" "}
+                <span className="mono">{runtimeStatus.fatal_component}</span>
+              </div>
+            ) : null}
+            {runtimeStatus.last_error_code ? (
+              <div>
+                {t("desktop.runtime.last_error")}:{" "}
+                <span className="mono">{runtimeStatus.last_error_code}</span>
+              </div>
+            ) : null}
+          </>
+        ) : null}
         {runtimeMode === "external" ? (
           <>
             <div>

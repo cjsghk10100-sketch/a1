@@ -3,11 +3,17 @@
   "private": true,
   "version": "0.0.0",
   "type": "commonjs",
+  "main": "src/main.cjs",
   "scripts": {
     "dev": "electron src/main.cjs",
-    "typecheck": "node --check src/main.cjs"
+    "dist": "electron-builder --config electron-builder.yml --publish never",
+    "dist:mac": "electron-builder --config electron-builder.yml --mac dmg zip --arm64 --publish never",
+    "smoke:embedded": "node scripts/smoke.mjs --mode=embedded",
+    "smoke:external": "node scripts/smoke.mjs --mode=external",
+    "typecheck": "node --check src/main.cjs && node --check src/preload.cjs && node --check scripts/smoke.mjs"
   },
   "devDependencies": {
-    "electron": "^30.5.1"
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3"
   }
 }

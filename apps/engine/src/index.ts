@@ -11,6 +11,10 @@ type ClaimedRun = {
   input: JsonRecord | null;
   tags: string[];
   correlation_id: string;
+  claim_token: string;
+  claimed_by_actor_id: string;
+  lease_expires_at: string;
+  lease_heartbeat_at: string;
 };
 
 type ClaimResponse = {
@@ -35,6 +39,8 @@ type EngineConfig = {
   maxClaimsPerCycle: number;
   runOnce: boolean;
 };
+
+const LEASE_HEARTBEAT_INTERVAL_MS = 10_000;
 
 function readIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -143,79 +149,125 @@ async function safeFailRun(cfg: EngineConfig, runId: string, err: unknown): Prom
 
 async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
   const shouldFail = getRunInputFlag(run, "simulate_fail") === true;
+  let heartbeatError: Error | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-  const { step_id } = await apiPost<{ step_id: string }>(cfg, `/v1/runs/${run.run_id}/steps`, {
-    kind: "engine.task",
-    title: `Engine execution for ${run.run_id}`,
-    input: makeStepInput(run),
-  });
+  const assertLeaseHealthy = () => {
+    if (heartbeatError) throw heartbeatError;
+  };
+  const post = async <T>(path: string, payload: unknown): Promise<T> => {
+    assertLeaseHealthy();
+    return apiPost<T>(cfg, path, payload);
+  };
+  const heartbeat = async () => {
+    await apiPost<{ ok: true }>(cfg, `/v1/runs/${run.run_id}/lease/heartbeat`, {
+      actor_id: cfg.actorId,
+      claim_token: run.claim_token,
+    });
+  };
+  const releaseLease = async () => {
+    await apiPost<{ ok: true }>(cfg, `/v1/runs/${run.run_id}/lease/release`, {
+      actor_id: cfg.actorId,
+      claim_token: run.claim_token,
+    });
+  };
 
-  const toolInvoke = await apiPost<ToolInvokeResponse>(cfg, `/v1/steps/${step_id}/toolcalls`, {
-    tool_name: "engine.execute",
-    title: "External engine execution",
-    input: {
-      mode: "runner",
-      run_id: run.run_id,
-    },
-    actor_type: "service",
-    actor_id: cfg.actorId,
-  });
+  try {
+    await heartbeat();
+    heartbeatTimer = setInterval(() => {
+      void heartbeat().catch((err) => {
+        if (heartbeatError) return;
+        heartbeatError = err instanceof Error ? err : new Error(String(err));
+        // eslint-disable-next-line no-console
+        console.warn(`[engine] lease heartbeat failed for ${run.run_id}: ${heartbeatError.message}`);
+      });
+    }, LEASE_HEARTBEAT_INTERVAL_MS);
+    heartbeatTimer.unref?.();
 
-  if (!("tool_call_id" in toolInvoke)) {
-    const reason = toolInvoke.reason || toolInvoke.reason_code || "tool_policy_blocked";
-    await apiPost(cfg, `/v1/runs/${run.run_id}/fail`, {
-      message: "tool invocation blocked",
-      error: {
-        code: "ENGINE_TOOL_BLOCKED",
-        decision: toolInvoke.decision,
-        reason,
+    const { step_id } = await post<{ step_id: string }>(`/v1/runs/${run.run_id}/steps`, {
+      kind: "engine.task",
+      title: `Engine execution for ${run.run_id}`,
+      input: makeStepInput(run),
+    });
+
+    const toolInvoke = await post<ToolInvokeResponse>(`/v1/steps/${step_id}/toolcalls`, {
+      tool_name: "engine.execute",
+      title: "External engine execution",
+      input: {
+        mode: "runner",
+        run_id: run.run_id,
+      },
+      actor_type: "service",
+      actor_id: cfg.actorId,
+    });
+
+    if (!("tool_call_id" in toolInvoke)) {
+      const reason = toolInvoke.reason || toolInvoke.reason_code || "tool_policy_blocked";
+      await post(`/v1/runs/${run.run_id}/fail`, {
+        message: "tool invocation blocked",
+        error: {
+          code: "ENGINE_TOOL_BLOCKED",
+          decision: toolInvoke.decision,
+          reason,
+        },
+      });
+      // eslint-disable-next-line no-console
+      console.warn(`[engine] run ${run.run_id} blocked by tool policy: ${reason}`);
+      return;
+    }
+
+    if (shouldFail) {
+      await post(`/v1/toolcalls/${toolInvoke.tool_call_id}/fail`, {
+        message: "simulated failure",
+        error: { code: "SIMULATED_FAILURE", run_id: run.run_id },
+      });
+      await post(`/v1/runs/${run.run_id}/fail`, {
+        message: "simulated run failure",
+        error: { code: "SIMULATED_FAILURE", run_id: run.run_id },
+      });
+      // eslint-disable-next-line no-console
+      console.warn(`[engine] run ${run.run_id} failed intentionally (simulate_fail=true)`);
+      return;
+    }
+
+    const output = makeToolOutput(run);
+
+    await post(`/v1/toolcalls/${toolInvoke.tool_call_id}/succeed`, {
+      output,
+    });
+
+    await post(`/v1/steps/${step_id}/artifacts`, {
+      kind: "engine.result",
+      title: "External engine output",
+      content: {
+        type: "json",
+        json: output,
+      },
+      metadata: {
+        actor_id: cfg.actorId,
+        external_engine: true,
       },
     });
-    // eslint-disable-next-line no-console
-    console.warn(`[engine] run ${run.run_id} blocked by tool policy: ${reason}`);
-    return;
-  }
 
-  if (shouldFail) {
-    await apiPost(cfg, `/v1/toolcalls/${toolInvoke.tool_call_id}/fail`, {
-      message: "simulated failure",
-      error: { code: "SIMULATED_FAILURE", run_id: run.run_id },
+    await post(`/v1/runs/${run.run_id}/complete`, {
+      summary: "Completed by external engine runner",
+      output,
     });
-    await apiPost(cfg, `/v1/runs/${run.run_id}/fail`, {
-      message: "simulated run failure",
-      error: { code: "SIMULATED_FAILURE", run_id: run.run_id },
-    });
+
     // eslint-disable-next-line no-console
-    console.warn(`[engine] run ${run.run_id} failed intentionally (simulate_fail=true)`);
-    return;
+    console.log(`[engine] run completed: ${run.run_id}`);
+  } finally {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
+    try {
+      await releaseLease();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(`[engine] failed to release lease for ${run.run_id}: ${message}`);
+    }
   }
-
-  const output = makeToolOutput(run);
-
-  await apiPost(cfg, `/v1/toolcalls/${toolInvoke.tool_call_id}/succeed`, {
-    output,
-  });
-
-  await apiPost(cfg, `/v1/steps/${step_id}/artifacts`, {
-    kind: "engine.result",
-    title: "External engine output",
-    content: {
-      type: "json",
-      json: output,
-    },
-    metadata: {
-      actor_id: cfg.actorId,
-      external_engine: true,
-    },
-  });
-
-  await apiPost(cfg, `/v1/runs/${run.run_id}/complete`, {
-    summary: "Completed by external engine runner",
-    output,
-  });
-
-  // eslint-disable-next-line no-console
-  console.log(`[engine] run completed: ${run.run_id}`);
 }
 
 async function claimRun(cfg: EngineConfig): Promise<ClaimResponse> {

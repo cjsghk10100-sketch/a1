@@ -42,3 +42,10 @@
 - [x] TASK-060 Incidents + RCA + close blockers
 - [x] TASK-061 Survival ledgers + daily rollup
 - [x] TASK-062 Lifecycle automation (ACTIVE→PROBATION→…)
+
+## Desktop Runtime Hardening
+- [x] TASK-323 Desktop runtime supervisor + global degraded badge
+- [x] TASK-324 Desktop packaging baseline (macOS arm64 zip/dmg)
+- [x] TASK-325 Run claim lease/heartbeat stabilization
+- [x] TASK-326 Desktop smoke automation (embedded/external)
+- [x] TASK-327 Docs sync and contract freeze

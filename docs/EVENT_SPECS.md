@@ -93,6 +93,21 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `discord.channel.mapped` (v1)
 - `discord.message.ingested` (v1)
 
+## Implemented Non-Event Runtime Contracts
+
+Some runtime safety contracts are projection/API level (not standalone events):
+
+- Run claim lease metadata on `proj_runs`:
+  - `claim_token`
+  - `claimed_by_actor_id`
+  - `lease_expires_at`
+  - `lease_heartbeat_at`
+- Lease endpoints:
+  - `POST /v1/runs/:id/lease/heartbeat`
+  - `POST /v1/runs/:id/lease/release`
+
+These contracts are intentionally non-event to avoid noise while preserving run ownership safety.
+
 ## Planned Event Families (vNext)
 
 These are expected as the OS hardening + growth substrate lands. Names are stable, payloads are subject to additive iteration:

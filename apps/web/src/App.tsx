@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
@@ -31,10 +31,19 @@ function LangButton(props: { lang: SupportedLanguage; current: SupportedLanguage
   );
 }
 
+function runtimeBadgeClass(phase: string): string {
+  if (phase === "healthy") return "runtimeBadge runtimeBadgeHealthy";
+  if (phase === "degraded" || phase === "starting") return "runtimeBadge runtimeBadgeDegraded";
+  if (phase === "fatal") return "runtimeBadge runtimeBadgeFatal";
+  return "runtimeBadge runtimeBadgeStopped";
+}
+
 export function App(): JSX.Element {
   const { t, i18n } = useTranslation();
 
   const current = normalizeLanguage(i18n.resolvedLanguage ?? i18n.language) ?? "en";
+  const [desktopRuntimeAvailable, setDesktopRuntimeAvailable] = useState(false);
+  const [desktopRuntimeStatus, setDesktopRuntimeStatus] = useState<DesktopRuntimeStatus | null>(null);
 
   useEffect(() => {
     document.title = t("app.title");
@@ -44,10 +53,62 @@ export function App(): JSX.Element {
     document.documentElement.lang = current;
   }, [current]);
 
+  useEffect(() => {
+    const bridge = window.desktopRuntime;
+    if (!bridge) return;
+
+    setDesktopRuntimeAvailable(true);
+    let disposed = false;
+
+    void bridge
+      .getStatus()
+      .then((status) => {
+        if (disposed) return;
+        setDesktopRuntimeStatus(status);
+      })
+      .catch(() => {
+        if (disposed) return;
+      });
+
+    const unsubscribe = bridge.subscribe((status) => {
+      if (disposed) return;
+      setDesktopRuntimeStatus(status);
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  const runtimePhase = desktopRuntimeStatus?.phase ?? "starting";
+  const runtimeBadgeTitle = useMemo(() => {
+    if (!desktopRuntimeStatus) return t("desktop.runtime.badge.starting");
+    const parts = [t(`desktop.runtime.badge.${desktopRuntimeStatus.phase}`)];
+    if (desktopRuntimeStatus.degraded_component) {
+      parts.push(`${t("desktop.runtime.degraded_component")}: ${desktopRuntimeStatus.degraded_component}`);
+    }
+    if (desktopRuntimeStatus.fatal_component) {
+      parts.push(`${t("desktop.runtime.fatal_component")}: ${desktopRuntimeStatus.fatal_component}`);
+    }
+    if (desktopRuntimeStatus.last_error_code) {
+      parts.push(`${t("desktop.runtime.last_error")}: ${desktopRuntimeStatus.last_error_code}`);
+    }
+    parts.push(`${t("desktop.runtime.restart_attempts")}: ${desktopRuntimeStatus.restart_attempts_total}`);
+    return parts.join(" | ");
+  }, [desktopRuntimeStatus, t]);
+
   return (
     <div className="appShell">
       <header className="appHeader">
-        <div className="appTitle">{t("app.title")}</div>
+        <div className="appTitleWrap">
+          <div className="appTitle">{t("app.title")}</div>
+          {desktopRuntimeAvailable ? (
+            <span className={runtimeBadgeClass(runtimePhase)} title={runtimeBadgeTitle}>
+              {t(`desktop.runtime.badge.${runtimePhase}`)}
+            </span>
+          ) : null}
+        </div>
         <nav className="appNav">
           <NavLink className={({ isActive }) => (isActive ? "navLink navLinkActive" : "navLink")} to="/work">
             {t("nav.work")}

@@ -109,6 +109,10 @@ async function applyRunCompleted(tx: DbClient, event: RunCompletedV1): Promise<v
     SET
       status = 'succeeded',
       output = $2::jsonb,
+      claim_token = NULL,
+      claimed_by_actor_id = NULL,
+      lease_expires_at = NULL,
+      lease_heartbeat_at = NULL,
       ended_at = COALESCE(ended_at, $3),
       updated_at = $3,
       last_event_id = $4
@@ -133,6 +137,10 @@ async function applyRunFailed(tx: DbClient, event: RunFailedV1): Promise<void> {
     SET
       status = 'failed',
       error = $2::jsonb,
+      claim_token = NULL,
+      claimed_by_actor_id = NULL,
+      lease_expires_at = NULL,
+      lease_heartbeat_at = NULL,
       ended_at = COALESCE(ended_at, $3),
       updated_at = $3,
       last_event_id = $4
@@ -212,4 +220,3 @@ export async function applyRunEvent(pool: DbPool, envelope: RunEventV1): Promise
     client.release();
   }
 }
-

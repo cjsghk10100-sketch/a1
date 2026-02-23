@@ -50,6 +50,42 @@ export interface StepCreatedDataV1 {
   input?: Record<string, unknown>;
 }
 
+export interface RunLeaseV1 {
+  claim_token: string;
+  claimed_by_actor_id: string;
+  lease_expires_at: string;
+  lease_heartbeat_at: string;
+}
+
+export interface RunClaimedRecordV1 extends RunLeaseV1 {
+  run_id: RunId;
+  workspace_id: string;
+  room_id: string | null;
+  thread_id: string | null;
+  status: "running";
+  title: string | null;
+  goal: string | null;
+  input: Record<string, unknown> | null;
+  tags: string[];
+  correlation_id: string;
+}
+
+export interface RunClaimResponseV1 {
+  claimed: boolean;
+  run: RunClaimedRecordV1 | null;
+}
+
+export interface RunLeaseHeartbeatResponseV1 {
+  ok: true;
+  lease_expires_at: string;
+  lease_heartbeat_at: string;
+}
+
+export interface RunLeaseReleaseResponseV1 {
+  ok: true;
+  released: boolean;
+}
+
 export type RunCreatedV1 = EventEnvelopeV1<"run.created", RunCreatedDataV1>;
 export type RunStartedV1 = EventEnvelopeV1<"run.started", RunStartedDataV1>;
 export type RunCompletedV1 = EventEnvelopeV1<"run.completed", RunCompletedDataV1>;
@@ -57,4 +93,3 @@ export type RunFailedV1 = EventEnvelopeV1<"run.failed", RunFailedDataV1>;
 export type StepCreatedV1 = EventEnvelopeV1<"step.created", StepCreatedDataV1>;
 
 export type RunEventV1 = RunCreatedV1 | RunStartedV1 | RunCompletedV1 | RunFailedV1 | StepCreatedV1;
-

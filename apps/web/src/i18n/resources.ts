@@ -59,6 +59,16 @@ export const resources = {
       "desktop.bootstrap.copy_context_fail": "Failed to copy runtime context.",
       "desktop.bootstrap.recovery_cmd_restart_hint":
         "If ports/mode were customized, restart desktop with the command above.",
+      "desktop.runtime.phase": "Runtime phase",
+      "desktop.runtime.degraded_component": "Degraded component",
+      "desktop.runtime.fatal_component": "Fatal component",
+      "desktop.runtime.last_error": "Last error",
+      "desktop.runtime.restart_attempts": "Restart attempts",
+      "desktop.runtime.badge.starting": "Starting",
+      "desktop.runtime.badge.healthy": "Healthy",
+      "desktop.runtime.badge.degraded": "Degraded",
+      "desktop.runtime.badge.fatal": "Fatal",
+      "desktop.runtime.badge.stopped": "Stopped",
 
       "timeline.room": "Room",
       "timeline.room_select_placeholder": "Select a room…",
@@ -728,6 +738,16 @@ export const resources = {
       "desktop.bootstrap.copy_context_fail": "런타임 컨텍스트 복사에 실패했습니다.",
       "desktop.bootstrap.recovery_cmd_restart_hint":
         "포트/모드를 커스텀했다면 위 커맨드로 데스크톱을 다시 실행하세요.",
+      "desktop.runtime.phase": "런타임 상태",
+      "desktop.runtime.degraded_component": "저하 컴포넌트",
+      "desktop.runtime.fatal_component": "치명 컴포넌트",
+      "desktop.runtime.last_error": "최근 오류",
+      "desktop.runtime.restart_attempts": "재시작 횟수",
+      "desktop.runtime.badge.starting": "시작 중",
+      "desktop.runtime.badge.healthy": "정상",
+      "desktop.runtime.badge.degraded": "저하",
+      "desktop.runtime.badge.fatal": "치명",
+      "desktop.runtime.badge.stopped": "중지",
 
       "timeline.room": "룸",
       "timeline.room_select_placeholder": "룸 선택…",

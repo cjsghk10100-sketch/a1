@@ -75,6 +75,11 @@ Optional desktop env vars:
 - `DESKTOP_ENGINE_ACTOR_ID` (default `desktop_engine`, external mode only)
 - `DESKTOP_ENGINE_POLL_MS` (default `1200`, external mode only)
 - `DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE` (default `1`, external mode only)
+- `DESKTOP_RESTART_MAX_ATTEMPTS` (default `5`)
+- `DESKTOP_RESTART_BASE_DELAY_MS` (default `1000`)
+- `DESKTOP_RESTART_MAX_DELAY_MS` (default `30000`)
+- `DESKTOP_NO_WINDOW` (default `0`, smoke/headless mode)
+- `DESKTOP_EXIT_AFTER_READY` (default `0`, smoke/one-shot mode)
 - `VITE_DEV_API_BASE_URL` (optional override for web dev proxy target; desktop launcher auto-sets this to `http://127.0.0.1:${DESKTOP_API_PORT}`)
 
 Examples:
@@ -103,6 +108,26 @@ Use env template for stable local runs:
 cp .env.desktop.example .env.desktop
 pnpm desktop:dev:env
 ```
+
+Desktop smoke checks (headless launcher verification):
+
+```bash
+# requires DATABASE_URL
+pnpm -C apps/desktop run smoke:embedded
+pnpm -C apps/desktop run smoke:external
+```
+
+Desktop packaging (macOS arm64, unsigned artifacts):
+
+```bash
+pnpm desktop:dist:mac
+```
+
+Packaging notes:
+
+- Artifacts are produced in `apps/desktop/dist` (`.dmg`, `.zip`).
+- Current package is unsigned/not notarized (local/internal distribution target).
+- Desktop launcher still depends on local workspace source + pnpm runtime.
 
 ## Run Execution (Queued Runs)
 

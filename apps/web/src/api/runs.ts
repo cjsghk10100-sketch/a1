@@ -16,6 +16,10 @@ export interface RunRow {
   output: unknown;
   error: unknown;
   tags: string[] | null;
+  claim_token?: string | null;
+  claimed_by_actor_id?: string | null;
+  lease_expires_at?: string | null;
+  lease_heartbeat_at?: string | null;
 
   created_at: string;
   started_at: string | null;

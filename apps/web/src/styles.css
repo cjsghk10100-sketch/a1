@@ -52,6 +52,40 @@ body {
   letter-spacing: 0.2px;
 }
 
+.appTitleWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.runtimeBadge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+
+.runtimeBadgeHealthy {
+  color: #d8fff0;
+  background: rgba(56, 220, 160, 0.18);
+  border-color: rgba(56, 220, 160, 0.35);
+}
+
+.runtimeBadgeDegraded {
+  color: #fff6d8;
+  background: rgba(255, 190, 80, 0.18);
+  border-color: rgba(255, 190, 80, 0.35);
+}
+
+.runtimeBadgeFatal,
+.runtimeBadgeStopped {
+  color: #ffdfe3;
+  background: rgba(255, 92, 120, 0.18);
+  border-color: rgba(255, 92, 120, 0.35);
+}
+
 .appNav {
   display: flex;
   gap: 10px;

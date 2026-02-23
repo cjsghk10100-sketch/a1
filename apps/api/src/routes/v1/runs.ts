@@ -10,6 +10,8 @@ import { applyRunEvent } from "../../projectors/runProjector.js";
 
 // Keep lock namespace aligned with runtime worker to prevent duplicate start/claim races.
 const RUN_LOCK_NAMESPACE = 215;
+const CLAIM_LEASE_TTL_SECONDS = 30;
+const CLAIM_LEASE_INTERVAL = `${CLAIM_LEASE_TTL_SECONDS} seconds`;
 
 type RunRow = {
   run_id: string;
@@ -26,6 +28,10 @@ type ClaimableRunRow = RunRow & {
   goal: string | null;
   input: Record<string, unknown> | null;
   tags: string[] | null;
+  claim_token: string | null;
+  claimed_by_actor_id: string | null;
+  lease_expires_at: string | null;
+  lease_heartbeat_at: string | null;
 };
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
@@ -76,7 +82,10 @@ async function listQueuedRunIds(
   input: { workspace_id: string; room_id?: string | null; limit: number },
 ): Promise<string[]> {
   const args: unknown[] = [input.workspace_id];
-  let where = "workspace_id = $1 AND status = 'queued'";
+  let where = `workspace_id = $1 AND (
+    status = 'queued'
+    OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < now())
+  )`;
   if (input.room_id) {
     args.push(input.room_id);
     where += ` AND room_id = $${args.length}`;
@@ -87,11 +96,47 @@ async function listQueuedRunIds(
     `SELECT run_id
      FROM proj_runs
      WHERE ${where}
-     ORDER BY created_at ASC
+     ORDER BY
+      CASE WHEN status = 'queued' THEN 0 ELSE 1 END ASC,
+      created_at ASC
      LIMIT $${args.length}`,
     args,
   );
   return res.rows.map((row) => row.run_id);
+}
+
+async function assignRunLease(
+  client: DbClient,
+  input: { run_id: string; workspace_id: string; actor_id: string },
+): Promise<{ claim_token: string; lease_expires_at: string; lease_heartbeat_at: string }> {
+  const claim_token = randomUUID();
+  const lease = await client.query<{
+    claim_token: string;
+    lease_expires_at: string;
+    lease_heartbeat_at: string;
+  }>(
+    `UPDATE proj_runs
+     SET
+      claim_token = $2,
+      claimed_by_actor_id = $3,
+      lease_heartbeat_at = now(),
+      lease_expires_at = now() + $4::interval,
+      updated_at = now()
+     WHERE run_id = $1
+       AND workspace_id = $5
+     RETURNING claim_token, lease_expires_at::text, lease_heartbeat_at::text`,
+    [
+      input.run_id,
+      claim_token,
+      input.actor_id,
+      CLAIM_LEASE_INTERVAL,
+      input.workspace_id,
+    ],
+  );
+  if (lease.rowCount !== 1) {
+    throw new Error("failed_to_assign_run_lease");
+  }
+  return lease.rows[0];
 }
 
 export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -203,7 +248,11 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
              title,
              goal,
              input,
-             tags
+             tags,
+             claim_token,
+             claimed_by_actor_id,
+             lease_expires_at::text,
+             lease_heartbeat_at::text
            FROM proj_runs
            WHERE run_id = $1`,
           [run_id],
@@ -213,34 +262,46 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
 
         if (run.workspace_id !== workspace_id) continue;
         if (room_id && run.room_id !== room_id) continue;
-        if (run.status !== "queued") continue;
+        if (run.status !== "queued" && run.status !== "running") continue;
+        if (run.status === "running") {
+          if (!run.lease_expires_at) continue;
+          if (new Date(run.lease_expires_at).getTime() >= Date.now()) continue;
+        }
 
-        const occurred_at = new Date().toISOString();
-        const causation_id = run.last_event_id ?? undefined;
+        if (run.status === "queued") {
+          const occurred_at = new Date().toISOString();
+          const causation_id = run.last_event_id ?? undefined;
 
-        const event = await appendToStream(pool, {
-          event_id: randomUUID(),
-          event_type: "run.started",
-          event_version: 1,
-          occurred_at,
-          workspace_id,
-          room_id: run.room_id ?? undefined,
-          thread_id: run.thread_id ?? undefined,
+          const event = await appendToStream(pool, {
+            event_id: randomUUID(),
+            event_type: "run.started",
+            event_version: 1,
+            occurred_at,
+            workspace_id,
+            room_id: run.room_id ?? undefined,
+            thread_id: run.thread_id ?? undefined,
+            run_id: run.run_id,
+            actor: { actor_type: "service", actor_id },
+            stream:
+              run.room_id != null
+                ? { stream_type: "room", stream_id: run.room_id }
+                : { stream_type: "workspace", stream_id: workspace_id },
+            correlation_id: run.correlation_id,
+            causation_id,
+            data: { run_id: run.run_id },
+            policy_context: {},
+            model_context: {},
+            display: {},
+          });
+
+          await applyRunEvent(pool, event as RunEventV1);
+        }
+
+        const lease = await assignRunLease(lockClient, {
           run_id: run.run_id,
-          actor: { actor_type: "service", actor_id },
-          stream:
-            run.room_id != null
-              ? { stream_type: "room", stream_id: run.room_id }
-              : { stream_type: "workspace", stream_id: workspace_id },
-          correlation_id: run.correlation_id,
-          causation_id,
-          data: { run_id: run.run_id },
-          policy_context: {},
-          model_context: {},
-          display: {},
+          workspace_id,
+          actor_id,
         });
-
-        await applyRunEvent(pool, event as RunEventV1);
         return reply.code(200).send({
           claimed: true,
           run: {
@@ -254,6 +315,10 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
             input: run.input,
             tags: run.tags ?? [],
             correlation_id: run.correlation_id,
+            claim_token: lease.claim_token,
+            claimed_by_actor_id: actor_id,
+            lease_expires_at: lease.lease_expires_at,
+            lease_heartbeat_at: lease.lease_heartbeat_at,
           },
         });
       } finally {
@@ -262,6 +327,119 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     }
 
     return reply.code(200).send({ claimed: false, run: null });
+  });
+
+  app.post<{
+    Params: { runId: string };
+    Body: { actor_id?: string; claim_token?: string };
+  }>("/v1/runs/:runId/lease/heartbeat", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const actor_id = req.body.actor_id?.trim() || "external_engine";
+    const claim_token = req.body.claim_token?.trim() || "";
+    if (!claim_token) return reply.code(400).send({ error: "missing_claim_token" });
+
+    const update = await pool.query<{
+      lease_expires_at: string;
+      lease_heartbeat_at: string;
+    }>(
+      `UPDATE proj_runs
+       SET
+        lease_heartbeat_at = now(),
+        lease_expires_at = now() + $4::interval,
+        updated_at = now()
+       WHERE run_id = $1
+         AND workspace_id = $2
+         AND status = 'running'
+         AND claim_token = $3
+         AND claimed_by_actor_id = $5
+         AND lease_expires_at IS NOT NULL
+         AND lease_expires_at > now()
+       RETURNING lease_expires_at::text, lease_heartbeat_at::text`,
+      [req.params.runId, workspace_id, claim_token, CLAIM_LEASE_INTERVAL, actor_id],
+    );
+    if (update.rowCount === 1) {
+      return reply.code(200).send({
+        ok: true,
+        lease_expires_at: update.rows[0].lease_expires_at,
+        lease_heartbeat_at: update.rows[0].lease_heartbeat_at,
+      });
+    }
+
+    const existing = await pool.query<{
+      run_id: string;
+      status: string;
+      claim_token: string | null;
+      claimed_by_actor_id: string | null;
+      lease_expires_at: string | null;
+    }>(
+      `SELECT run_id, status, claim_token, claimed_by_actor_id, lease_expires_at::text
+       FROM proj_runs
+       WHERE run_id = $1
+         AND workspace_id = $2`,
+      [req.params.runId, workspace_id],
+    );
+    if (existing.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
+
+    const run = existing.rows[0];
+    if (run.status !== "running") return reply.code(409).send({ error: "run_not_running" });
+    if (run.claim_token !== claim_token || run.claimed_by_actor_id !== actor_id) {
+      return reply.code(409).send({ error: "lease_token_mismatch" });
+    }
+    if (!run.lease_expires_at || new Date(run.lease_expires_at).getTime() <= Date.now()) {
+      return reply.code(409).send({ error: "lease_expired" });
+    }
+    return reply.code(409).send({ error: "lease_heartbeat_conflict" });
+  });
+
+  app.post<{
+    Params: { runId: string };
+    Body: { actor_id?: string; claim_token?: string };
+  }>("/v1/runs/:runId/lease/release", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const actor_id = req.body.actor_id?.trim() || "external_engine";
+    const claim_token = req.body.claim_token?.trim() || "";
+    if (!claim_token) return reply.code(400).send({ error: "missing_claim_token" });
+
+    const released = await pool.query(
+      `UPDATE proj_runs
+       SET
+        claim_token = NULL,
+        claimed_by_actor_id = NULL,
+        lease_expires_at = NULL,
+        lease_heartbeat_at = NULL,
+        updated_at = now()
+       WHERE run_id = $1
+         AND workspace_id = $2
+         AND claim_token = $3
+         AND claimed_by_actor_id = $4`,
+      [req.params.runId, workspace_id, claim_token, actor_id],
+    );
+    if (released.rowCount === 1) {
+      return reply.code(200).send({ ok: true, released: true });
+    }
+
+    const existing = await pool.query<{
+      run_id: string;
+      status: string;
+      claim_token: string | null;
+      claimed_by_actor_id: string | null;
+    }>(
+      `SELECT run_id, status, claim_token, claimed_by_actor_id
+       FROM proj_runs
+       WHERE run_id = $1
+         AND workspace_id = $2`,
+      [req.params.runId, workspace_id],
+    );
+    if (existing.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
+
+    const run = existing.rows[0];
+    if (!run.claim_token && !run.claimed_by_actor_id) {
+      return reply.code(200).send({ ok: true, released: false });
+    }
+    if (run.claim_token !== claim_token || run.claimed_by_actor_id !== actor_id) {
+      return reply.code(409).send({ error: "lease_token_mismatch" });
+    }
+    return reply.code(200).send({ ok: true, released: false });
   });
 
   app.post<{
@@ -536,6 +714,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
         workspace_id, room_id, thread_id,
         status,
         title, goal, input, output, error, tags,
+        claim_token, claimed_by_actor_id, lease_expires_at, lease_heartbeat_at,
         created_at, started_at, ended_at, updated_at,
         correlation_id, last_event_id
       FROM proj_runs
@@ -559,6 +738,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
         workspace_id, room_id, thread_id,
         status,
         title, goal, input, output, error, tags,
+        claim_token, claimed_by_actor_id, lease_expires_at, lease_heartbeat_at,
         created_at, started_at, ended_at, updated_at,
         correlation_id, last_event_id
       FROM proj_runs

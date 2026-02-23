@@ -322,4 +322,80 @@ describe("DesktopBootstrapPage", () => {
       }
     }
   });
+
+  it("renders runtime supervisor details when desktopRuntime bridge is available", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network_down");
+      }) as unknown as typeof fetch,
+    );
+
+    const status: DesktopRuntimeStatus = {
+        phase: "degraded",
+        mode: "embedded",
+        updated_at: "2026-02-23T00:00:00.000Z",
+        restart_attempts_total: 2,
+        degraded_component: "api",
+        fatal_component: null,
+        last_error_code: "exit_1_none",
+        last_error_message: "boom",
+        last_error_component: "api",
+        last_error_at: "2026-02-23T00:00:00.000Z",
+        components: {
+          api: {
+            name: "api",
+            required: true,
+            enabled: true,
+            state: "restarting",
+            pid: null,
+            restart_attempts: 2,
+            next_restart_at: "2026-02-23T00:00:01.000Z",
+            last_started_at: null,
+            last_exit_at: "2026-02-23T00:00:00.000Z",
+            last_exit_code: 1,
+            last_exit_signal: null,
+            last_error_code: "exit_1_none",
+            last_error_message: "boom",
+            updated_at: "2026-02-23T00:00:00.000Z",
+          },
+          web: {
+            name: "web",
+            required: true,
+            enabled: true,
+            state: "healthy",
+            pid: 1,
+            restart_attempts: 0,
+            next_restart_at: null,
+            last_started_at: "2026-02-23T00:00:00.000Z",
+            last_exit_at: null,
+            last_exit_code: null,
+            last_exit_signal: null,
+            last_error_code: null,
+            last_error_message: null,
+            updated_at: "2026-02-23T00:00:00.000Z",
+          },
+        },
+      };
+    const bridge: DesktopRuntimeBridge = {
+      getStatus: async () => status,
+      subscribe: () => () => {},
+    };
+    window.desktopRuntime = bridge;
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("desktop.bootstrap.error_title")).toBeTruthy();
+    });
+    expect(screen.getByText(/^desktop\.runtime\.phase/)).toBeTruthy();
+    expect(screen.getByText(/^desktop\.runtime\.restart_attempts/)).toBeTruthy();
+    expect(screen.getByText(/^desktop\.runtime\.degraded_component/)).toBeTruthy();
+    expect(screen.getByText(/^desktop\.runtime\.last_error/)).toBeTruthy();
+    expect(screen.getByText("degraded")).toBeTruthy();
+    expect(screen.getByText("api")).toBeTruthy();
+    expect(screen.getByText("exit_1_none")).toBeTruthy();
+
+    delete window.desktopRuntime;
+  });
 });
