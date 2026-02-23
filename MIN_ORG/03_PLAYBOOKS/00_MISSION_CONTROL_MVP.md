@@ -163,4 +163,5 @@
 - 메모리 SSOT: `memory/ops/MEMORY_RUNTIME_SSOT.md`
 - ROI 학습 로그: `memory/reference/ROI_LEARNING_LOG.md`
 - 공급망 보안 체크리스트: `MIN_ORG/03_PLAYBOOKS/SUPPLY_CHAIN_SECURITY_CHECKLIST_V1.md`
+- 임시 파일 정책: `memory/ops/TEMP_FILE_POLICY_V1.md`
 
