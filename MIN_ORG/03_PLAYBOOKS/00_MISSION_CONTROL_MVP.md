@@ -125,9 +125,19 @@
 
 ---
 
-## 7) 연결 문서
+## 7) 외부 인사이트 반영 루프 (자동 성장)
+1. 입력 수집: 사용자 공유 링크/문서/트윗
+2. 1원칙 분해: 문제/제약/핵심 메커니즘/검증 지표
+3. 적용 판정:
+   - 운영 개선(자동화/메모리/실수 감소) → 정책·플레이북 반영
+   - 투자 ROI 개선 → `memory/reference/ROI_LEARNING_LOG.md` 저장
+4. 실행 반영: SOP/체크리스트/크론으로 구체화
+5. 검증: 결과 지표 확인 후 유지/수정/폐기
+
+## 8) 연결 문서
 - 공통 헌법: `memory/ops/COMMON_CONSTITUTION_V1.md`
 - 실행 정책: `memory/ops/EXECUTION_POLICY_V1.md`
 - 증거 표준: `memory/ops/EVIDENCE_STANDARD_V1.md`
 - 메모리 SSOT: `memory/ops/MEMORY_RUNTIME_SSOT.md`
+- ROI 학습 로그: `memory/reference/ROI_LEARNING_LOG.md`
 
