@@ -1,15 +1,25 @@
-const KEY = 'promotion_dashboard_v1';
-const sample = [
-  { proposal_id:'PR-001', target_path:'memory/ops/COMMON_CONSTITUTION_V1.md', summary:'메타 루프 조항 추가', risk_level:'L1', status:'APPLIED', created_at:new Date().toISOString(), reason:'기본 정렬 반영' },
-  { proposal_id:'PR-002', target_path:'MIN_ORG/03_PLAYBOOKS/00_MISSION_CONTROL_MVP.md', summary:'markdown.new 수집 경로 추가', risk_level:'L1', status:'PENDING_APPROVAL', created_at:new Date().toISOString(), reason:'' }
-];
-
-let state = load();
+const KEY = 'promotion_dashboard_v2';
+let state = [];
 let filter = 'ALL';
 
-function load(){
-  try { return JSON.parse(localStorage.getItem(KEY)) || sample; } catch { return sample; }
+async function bootstrap(){
+  const seeded = localStorage.getItem(KEY);
+  if (seeded) {
+    state = JSON.parse(seeded);
+    render();
+    return;
+  }
+  try {
+    const res = await fetch('./data.json');
+    const j = await res.json();
+    state = j.queue || [];
+  } catch {
+    state = [];
+  }
+  save();
+  render();
 }
+
 function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
 
 function render(){
@@ -19,15 +29,15 @@ function render(){
   rows.forEach((r,idx)=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>${r.proposal_id}</td>
-      <td>${r.target_path}</td>
-      <td>${r.summary}</td>
-      <td>${r.risk_level}</td>
-      <td><span class="badge status-${r.status}">${r.status}</span></td>
-      <td>${new Date(r.created_at).toLocaleString()}</td>
+      <td>${r.proposal_id||''}</td>
+      <td>${r.target_path||''}</td>
+      <td>${r.summary||''}</td>
+      <td>${r.risk_level||'L1'}</td>
+      <td><span class="badge status-${r.status||'DRAFT'}">${r.status||'DRAFT'}</span></td>
+      <td>${r.created_at||''}</td>
       <td>
-        <select data-idx="${idx}" class="status-change">
-          ${['DRAFT','PENDING_APPROVAL','APPROVED','REJECTED','APPLIED'].map(s=>`<option ${s===r.status?'selected':''}>${s}</option>`).join('')}
+        <select data-id="${r.proposal_id||idx}" class="status-change">
+          ${['DRAFT','PENDING_APPROVAL','APPROVED','REJECTED','APPLIED'].map(s=>`<option ${s===(r.status||'DRAFT')?'selected':''}>${s}</option>`).join('')}
         </select>
       </td>`;
     tr.addEventListener('click', ()=>showDetails(r));
@@ -37,26 +47,22 @@ function render(){
   document.querySelectorAll('.status-change').forEach(el=>{
     el.addEventListener('click',e=>e.stopPropagation());
     el.addEventListener('change', e=>{
-      const i = Number(e.target.dataset.idx);
-      const record = rows[i];
-      const realIdx = state.findIndex(x=>x.proposal_id===record.proposal_id);
-      state[realIdx].status = e.target.value;
-      save(); render();
+      const id = e.target.dataset.id;
+      const i = state.findIndex(x=>(x.proposal_id||String(state.indexOf(x)))===id);
+      if(i>=0){ state[i].status = e.target.value; save(); render(); }
     });
   });
 }
 
 function showDetails(r){
-  const div = document.getElementById('details');
-  div.innerHTML = `
-    <p><b>ID:</b> ${r.proposal_id}</p>
-    <p><b>Target:</b> ${r.target_path}</p>
-    <p><b>Summary:</b> ${r.summary}</p>
-    <p><b>Risk:</b> ${r.risk_level}</p>
-    <p><b>Status:</b> ${r.status}</p>
-    <p><b>Created:</b> ${new Date(r.created_at).toLocaleString()}</p>
-    <p><b>Reason:</b> ${r.reason || '-'}</p>
-  `;
+  document.getElementById('details').innerHTML = `
+    <p><b>ID:</b> ${r.proposal_id||'-'}</p>
+    <p><b>Target:</b> ${r.target_path||'-'}</p>
+    <p><b>Summary:</b> ${r.summary||'-'}</p>
+    <p><b>Risk:</b> ${r.risk_level||'-'}</p>
+    <p><b>Status:</b> ${r.status||'-'}</p>
+    <p><b>Created:</b> ${r.created_at||'-'}</p>
+    <p><b>Reason:</b> ${r.reason || '-'}</p>`;
 }
 
 document.getElementById('proposal-form').addEventListener('submit', e=>{
@@ -76,9 +82,19 @@ document.querySelectorAll('[data-filter]').forEach(btn=>{
 });
 
 document.getElementById('reset').addEventListener('click', ()=>{
-  state = structuredClone(sample);
-  save();
-  render();
+  localStorage.removeItem(KEY);
+  location.reload();
 });
 
-render();
+document.getElementById('export-md').addEventListener('click', ()=>{
+  const header = '| proposal_id | target | summary | risk | status | created_at |\n|---|---|---|---|---|---|\n';
+  const body = state.map(r=>`| ${r.proposal_id||'-'} | ${r.target_path||'-'} | ${r.summary||'-'} | ${r.risk_level||'L1'} | ${r.status||'DRAFT'} | ${r.created_at||'-'} |`).join('\n');
+  const content = `# PROMOTION_DASHBOARD\n\n## Queue\n${header}${body}\n\n## Recent Approvals\n| proposal_id | approved_by | approved_at | commit_ref |\n|---|---|---|---|\n| - | - | - | - |\n\n## Recent Rejects\n| proposal_id | reason | reviewer | at |\n|---|---|---|---|\n| - | - | - | - |\n`;
+  const blob = new Blob([content], {type:'text/markdown'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'PROMOTION_DASHBOARD.md';
+  a.click();
+});
+
+bootstrap();
