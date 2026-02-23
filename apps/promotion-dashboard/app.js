@@ -1,14 +1,14 @@
-const KEY = 'promotion_dashboard_v2';
+const KEY = 'promotion_dashboard_v3';
 let state = [];
-let filter = 'ALL';
+let selectedId = null;
+
 const sample = [
-  { proposal_id:'PR-001', target_path:'memory/ops/COMMON_CONSTITUTION_V1.md', summary:'메타 루프 조항 추가', risk_level:'L1', status:'APPLIED', created_at:new Date().toISOString(), reason:'샘플 데이터' },
-  { proposal_id:'PR-002', target_path:'MIN_ORG/03_PLAYBOOKS/00_MISSION_CONTROL_MVP.md', summary:'markdown.new 수집 경로 추가', risk_level:'L1', status:'PENDING_APPROVAL', created_at:new Date().toISOString(), reason:'' }
+  { proposal_id:'PR-001', target_path:'memory/ops/COMMON_CONSTITUTION_V1.md', summary:'메타 루프 조항 추가', risk_level:'L1', status:'APPLIED', created_at:new Date().toISOString(), evidence:'1212 문서 기반 상위루프 정합성', reason:'반영 완료', decided_at:new Date().toISOString() },
+  { proposal_id:'PR-002', target_path:'MIN_ORG/03_PLAYBOOKS/00_MISSION_CONTROL_MVP.md', summary:'markdown.new 수집 경로 추가', risk_level:'L1', status:'PENDING_APPROVAL', created_at:new Date().toISOString(), evidence:'토큰 절감/수집 안정성 개선', reason:'', decided_at:'' }
 ];
 
 async function loadTmpFiles(){
   const tbody = document.querySelector('#tmp-table tbody');
-  if (!tbody) return;
   tbody.innerHTML = '';
   try {
     const res = await fetch('./tmp_files.json?v=' + Date.now());
@@ -41,65 +41,84 @@ async function bootstrap(){
     } catch {
       state = structuredClone(sample);
     }
-    save();
-    render();
-    return;
-  }
-  try {
-    const res = await fetch('./data.json');
-    const j = await res.json();
-    state = (j.queue && j.queue.length) ? j.queue : structuredClone(sample);
-  } catch {
-    state = structuredClone(sample);
+  } else {
+    try {
+      const res = await fetch('./data.json');
+      const j = await res.json();
+      state = (j.queue && j.queue.length) ? j.queue.map(x=>({ ...x, evidence:x.evidence||'', reason:x.reason||'', decided_at:x.decided_at||'' })) : structuredClone(sample);
+    } catch {
+      state = structuredClone(sample);
+    }
   }
   save();
-  render();
+  renderAll();
   await loadTmpFiles();
 }
 
 function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
 
-function render(){
-  const tbody = document.querySelector('#queue-table tbody');
-  tbody.innerHTML = '';
-  const rows = state.filter(r => filter==='ALL' ? true : r.status===filter);
-  rows.forEach((r,idx)=>{
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${r.proposal_id||''}</td>
-      <td>${r.target_path||''}</td>
-      <td>${r.summary||''}</td>
-      <td>${r.risk_level||'L1'}</td>
-      <td><span class="badge status-${r.status||'DRAFT'}">${r.status||'DRAFT'}</span></td>
-      <td>${r.created_at||''}</td>
-      <td>
-        <select data-id="${r.proposal_id||idx}" class="status-change">
-          ${['DRAFT','PENDING_APPROVAL','APPROVED','REJECTED','APPLIED'].map(s=>`<option ${s===(r.status||'DRAFT')?'selected':''}>${s}</option>`).join('')}
-        </select>
-      </td>`;
-    tr.addEventListener('click', ()=>showDetails(r));
+function renderTable(selector, rows, rowBuilder){
+  const tbody = document.querySelector(selector+' tbody');
+  tbody.innerHTML='';
+  if(!rows.length){
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td colspan="6">항목 없음</td>';
     tbody.appendChild(tr);
-  });
-
-  document.querySelectorAll('.status-change').forEach(el=>{
-    el.addEventListener('click',e=>e.stopPropagation());
-    el.addEventListener('change', e=>{
-      const id = e.target.dataset.id;
-      const i = state.findIndex(x=>(x.proposal_id||String(state.indexOf(x)))===id);
-      if(i>=0){ state[i].status = e.target.value; save(); render(); }
-    });
+    return;
+  }
+  rows.forEach(r=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = rowBuilder(r);
+    tr.addEventListener('click', ()=>selectProposal(r.proposal_id));
+    tbody.appendChild(tr);
   });
 }
 
-function showDetails(r){
+function renderAll(){
+  const pending = state.filter(x=>x.status==='PENDING_APPROVAL');
+  const approved = state.filter(x=>x.status==='APPROVED');
+  const rejected = state.filter(x=>x.status==='REJECTED');
+
+  renderTable('#pending-table', pending, r=>`
+    <td>${r.proposal_id}</td><td>${r.target_path}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.risk_level||'L1'}</td>
+    <td><span class="badge status-${r.status}">${r.status}</span></td>`);
+
+  renderTable('#approved-table', approved, r=>`
+    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
+
+  renderTable('#rejected-table', rejected, r=>`
+    <td>${r.proposal_id}</td><td>${r.summary}</td><td>${r.evidence||'-'}</td><td>${r.reason||'-'}</td><td>${fmt(r.decided_at)}</td>`);
+}
+
+function fmt(s){ if(!s) return '-'; try{return new Date(s).toLocaleString();}catch{return s;} }
+
+function selectProposal(id){
+  selectedId = id;
+  const r = state.find(x=>x.proposal_id===id);
+  if(!r) return;
   document.getElementById('details').innerHTML = `
-    <p><b>ID:</b> ${r.proposal_id||'-'}</p>
-    <p><b>Target:</b> ${r.target_path||'-'}</p>
-    <p><b>Summary:</b> ${r.summary||'-'}</p>
+    <p><b>ID:</b> ${r.proposal_id}</p>
+    <p><b>Target:</b> ${r.target_path}</p>
+    <p><b>Summary:</b> ${r.summary}</p>
+    <p><b>근거:</b> ${r.evidence||'-'}</p>
     <p><b>Risk:</b> ${r.risk_level||'-'}</p>
-    <p><b>Status:</b> ${r.status||'-'}</p>
-    <p><b>Created:</b> ${r.created_at||'-'}</p>
+    <p><b>Status:</b> <span class="badge status-${r.status}">${r.status}</span></p>
+    <p><b>Created:</b> ${fmt(r.created_at)}</p>
     <p><b>Reason:</b> ${r.reason || '-'}</p>`;
+  document.getElementById('decision-reason').value = r.reason || '';
+}
+
+function decide(status){
+  if(!selectedId){ alert('먼저 승격 대기 행을 선택해줘.'); return; }
+  const r = state.find(x=>x.proposal_id===selectedId);
+  if(!r){ return; }
+  const reason = document.getElementById('decision-reason').value.trim();
+  r.status = status;
+  r.reason = reason;
+  r.decided_at = new Date().toISOString();
+  save();
+  renderAll();
+  selectProposal(selectedId);
 }
 
 document.getElementById('proposal-form').addEventListener('submit', e=>{
@@ -107,30 +126,25 @@ document.getElementById('proposal-form').addEventListener('submit', e=>{
   const fd = new FormData(e.target);
   const item = Object.fromEntries(fd.entries());
   item.created_at = new Date().toISOString();
+  item.status = 'PENDING_APPROVAL';
   item.reason = '';
+  item.decided_at = '';
   state.unshift(item);
   save();
   e.target.reset();
-  render();
+  renderAll();
 });
 
-document.querySelectorAll('[data-filter]').forEach(btn=>{
-  btn.addEventListener('click', ()=>{ filter = btn.dataset.filter; render(); });
-});
-
-document.getElementById('reset').addEventListener('click', ()=>{
-  localStorage.removeItem(KEY);
-  location.reload();
-});
-
-document.getElementById('refresh-tmp').addEventListener('click', async ()=>{
-  await loadTmpFiles();
-});
+document.getElementById('approve-btn').addEventListener('click', ()=>decide('APPROVED'));
+document.getElementById('reject-btn').addEventListener('click', ()=>decide('REJECTED'));
+document.getElementById('apply-btn').addEventListener('click', ()=>decide('APPLIED'));
+document.getElementById('refresh-tmp').addEventListener('click', loadTmpFiles);
+document.getElementById('reset').addEventListener('click', ()=>{ localStorage.removeItem(KEY); location.reload(); });
 
 document.getElementById('export-md').addEventListener('click', ()=>{
   const header = '| proposal_id | target | summary | risk | status | created_at |\n|---|---|---|---|---|---|\n';
   const body = state.map(r=>`| ${r.proposal_id||'-'} | ${r.target_path||'-'} | ${r.summary||'-'} | ${r.risk_level||'L1'} | ${r.status||'DRAFT'} | ${r.created_at||'-'} |`).join('\n');
-  const content = `# PROMOTION_DASHBOARD\n\n## Queue\n${header}${body}\n\n## Recent Approvals\n| proposal_id | approved_by | approved_at | commit_ref |\n|---|---|---|---|\n| - | - | - | - |\n\n## Recent Rejects\n| proposal_id | reason | reviewer | at |\n|---|---|---|---|\n| - | - | - | - |\n`;
+  const content = `# PROMOTION_DASHBOARD\n\n## Queue\n${header}${body}\n\n## Recent Approvals\n| proposal_id | approved_by | approved_at | commit_ref |\n|---|---|---|---|\n${state.filter(x=>x.status==='APPROVED').map(r=>`| ${r.proposal_id} | me | ${fmt(r.decided_at)} | - |`).join('\n') || '| - | - | - | - |'}\n\n## Recent Rejects\n| proposal_id | reason | reviewer | at |\n|---|---|---|---|\n${state.filter(x=>x.status==='REJECTED').map(r=>`| ${r.proposal_id} | ${r.reason||'-'} | me | ${fmt(r.decided_at)} |`).join('\n') || '| - | - | - | - |'}\n`;
   const blob = new Blob([content], {type:'text/markdown'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);

@@ -9,62 +9,68 @@
 <body>
   <header>
     <h1>Promotion Dashboard MVP</h1>
-    <p>승격 대기/승인/반려 상태판 (로컬 저장)</p>
+    <p>임시파일 / 승격 대기 / 승인 / 반려 상태판 (로컬 저장)</p>
   </header>
 
   <section class="card">
     <h2>새 승격 제안 추가</h2>
-    <form id="proposal-form">
-      <input name="proposal_id" placeholder="proposal_id (예: PR-001)" required />
+    <form id="proposal-form" class="proposal-form">
+      <input name="proposal_id" placeholder="proposal_id (예: PR-003)" required />
       <input name="target_path" placeholder="target_path" required />
-      <input name="summary" placeholder="summary" required />
+      <input name="summary" placeholder="요약" required />
       <select name="risk_level">
         <option>L0</option><option selected>L1</option><option>L2</option><option>L3</option>
       </select>
-      <select name="status">
-        <option>DRAFT</option>
-        <option selected>PENDING_APPROVAL</option>
-        <option>APPROVED</option>
-        <option>REJECTED</option>
-        <option>APPLIED</option>
-      </select>
+      <input name="evidence" placeholder="승격 근거 (왜 시스템에 도움되는지)" required />
       <button type="submit">추가</button>
     </form>
   </section>
 
   <section class="grid">
     <div class="card">
-      <h2>Queue</h2>
-      <table id="queue-table">
-        <thead>
-          <tr><th>ID</th><th>Target</th><th>Summary</th><th>Risk</th><th>Status</th><th>Created</th><th>Action</th></tr>
-        </thead>
+      <h2>승격 대기 (PENDING_APPROVAL)</h2>
+      <table id="pending-table">
+        <thead><tr><th>ID</th><th>Target</th><th>Summary</th><th>근거</th><th>Risk</th><th>Action</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
-
     <div class="card">
-      <h2>Details</h2>
+      <h2>승인/반려 판정</h2>
       <div id="details">행을 선택하면 상세가 보여요.</div>
+      <label>판정 사유(짧게)</label>
+      <textarea id="decision-reason" rows="4" placeholder="승인/반려 이유"></textarea>
+      <div class="decision-buttons">
+        <button id="approve-btn">승인</button>
+        <button id="reject-btn">반려</button>
+        <button id="apply-btn">반영 완료</button>
+      </div>
     </div>
   </section>
 
-  <section class="card">
-    <h2>빠른 필터</h2>
-    <div class="filters">
-      <button data-filter="ALL">ALL</button>
-      <button data-filter="PENDING_APPROVAL">PENDING</button>
-      <button data-filter="APPROVED">APPROVED</button>
-      <button data-filter="REJECTED">REJECTED</button>
-      <button data-filter="APPLIED">APPLIED</button>
-      <button id="reset">데이터 리셋</button>
-      <button id="export-md">Markdown 내보내기</button>
-      <button id="refresh-tmp">임시파일 새로고침</button>
+  <section class="grid">
+    <div class="card">
+      <h2>승인됨 (APPROVED)</h2>
+      <table id="approved-table">
+        <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>사유</th><th>At</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>반려됨 (REJECTED)</h2>
+      <table id="rejected-table">
+        <thead><tr><th>ID</th><th>Summary</th><th>근거</th><th>사유</th><th>At</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </section>
 
   <section class="card">
     <h2>Temp Files (tmp/)</h2>
+    <div class="filters">
+      <button id="refresh-tmp">임시파일 새로고침</button>
+      <button id="reset">데이터 리셋</button>
+      <button id="export-md">Markdown 내보내기</button>
+    </div>
     <table id="tmp-table">
       <thead>
         <tr><th>Path</th><th>Zone</th><th>Size</th><th>Modified</th></tr>
