@@ -405,6 +405,18 @@ export function resolveRoomScopedThreadId(args: {
   return belongsToRoom ? threadId : undefined;
 }
 
+export function resolveRunScopedStepId(args: {
+  runId: string;
+  stepId: string;
+  steps: Array<Pick<StepRow, "step_id" | "run_id">>;
+}): string | undefined {
+  const runId = args.runId.trim();
+  const stepId = args.stepId.trim();
+  if (!runId || !stepId) return undefined;
+  const belongsToRun = args.steps.some((step) => step.step_id === stepId && step.run_id === runId);
+  return belongsToRun ? stepId : undefined;
+}
+
 function loadToolCallsStepId(runId: string): string {
   if (!runId.trim()) return "";
   return localStorage.getItem(toolCallsStepStorageKey(runId)) ?? "";
@@ -2394,6 +2406,16 @@ export function WorkPage(): JSX.Element {
                     const tool_name = createToolCallName.trim();
                     if (!step_id || !tool_name) return;
                     const run_id = selectedStepForToolCalls?.run_id?.trim() ?? stepsRunIdRef.current.trim();
+                    const resolvedStepId = resolveRunScopedStepId({
+                      runId: run_id,
+                      stepId: step_id,
+                      steps,
+                    });
+                    if (!resolvedStepId) {
+                      setCreateToolCallError("step_run_mismatch");
+                      setCreateToolCallState("error");
+                      return;
+                    }
                     const requestId = createToolCallRequestRef.current + 1;
                     createToolCallRequestRef.current = requestId;
 
@@ -2411,20 +2433,20 @@ export function WorkPage(): JSX.Element {
                     }
 
                     try {
-                      const res = await createToolCall(step_id, {
+                      const res = await createToolCall(resolvedStepId, {
                         tool_name,
                         title: createToolCallTitle.trim() ? createToolCallTitle.trim() : undefined,
                         input: parsedInput.value,
                         agent_id: createToolCallAgentId.trim() ? createToolCallAgentId.trim() : undefined,
                       });
 
-                      if (toolCallsStepIdRef.current === step_id) {
+                      if (toolCallsStepIdRef.current === resolvedStepId) {
                         setCreateToolCallTitle("");
                         setCreateToolCallInputJson("");
                         setCreatedToolCallId(res.tool_call_id);
                       }
 
-                      await reloadToolCalls(step_id);
+                      await reloadToolCalls(resolvedStepId);
                       if (run_id) await reloadSteps(run_id);
 
                       if (createToolCallRequestRef.current === requestId) {
@@ -2528,15 +2550,25 @@ export function WorkPage(): JSX.Element {
                                   void (async () => {
                                     const step_id = toolCallsStepId.trim();
                                     if (!step_id) return;
+                                    const run_id = stepsRunIdRef.current.trim();
+                                    const resolvedStepId = resolveRunScopedStepId({
+                                      runId: run_id,
+                                      stepId: step_id,
+                                      steps,
+                                    });
+                                    if (!resolvedStepId) {
+                                      setToolCallActionError("step_run_mismatch");
+                                      return;
+                                    }
 
-                                    if (toolCallsStepIdRef.current === step_id) {
+                                    if (toolCallsStepIdRef.current === resolvedStepId) {
                                       setToolCallActionError(null);
                                     }
                                     const parsed = parseToolCallSucceedPayload({
                                       outputJsonInput: toolCallSucceedOutputJson,
                                     });
                                     if (parsed.errorCode) {
-                                      if (toolCallsStepIdRef.current === step_id) {
+                                      if (toolCallsStepIdRef.current === resolvedStepId) {
                                         setToolCallActionError(parsed.errorCode);
                                       }
                                       return;
@@ -2544,25 +2576,24 @@ export function WorkPage(): JSX.Element {
 
                                     const requestId = toolCallActionRequestRef.current + 1;
                                     toolCallActionRequestRef.current = requestId;
-                                    if (toolCallsStepIdRef.current === step_id) {
+                                    if (toolCallsStepIdRef.current === resolvedStepId) {
                                       setToolCallActionId(tc.tool_call_id);
                                     }
                                     try {
                                       await succeedToolCall(tc.tool_call_id, parsed.payload);
-                                      await reloadToolCalls(step_id);
-                                      const run_id = tc.run_id?.trim();
+                                      await reloadToolCalls(resolvedStepId);
                                       if (run_id) await reloadSteps(run_id);
                                     } catch (e) {
                                       if (
                                         toolCallActionRequestRef.current === requestId &&
-                                        toolCallsStepIdRef.current === step_id
+                                        toolCallsStepIdRef.current === resolvedStepId
                                       ) {
                                         setToolCallActionError(toErrorCode(e));
                                       }
                                     } finally {
                                       if (
                                         toolCallActionRequestRef.current === requestId &&
-                                        toolCallsStepIdRef.current === step_id
+                                        toolCallsStepIdRef.current === resolvedStepId
                                       ) {
                                         setToolCallActionId(null);
                                       }
@@ -2580,8 +2611,18 @@ export function WorkPage(): JSX.Element {
                                   void (async () => {
                                     const step_id = toolCallsStepId.trim();
                                     if (!step_id) return;
+                                    const run_id = stepsRunIdRef.current.trim();
+                                    const resolvedStepId = resolveRunScopedStepId({
+                                      runId: run_id,
+                                      stepId: step_id,
+                                      steps,
+                                    });
+                                    if (!resolvedStepId) {
+                                      setToolCallActionError("step_run_mismatch");
+                                      return;
+                                    }
 
-                                    if (toolCallsStepIdRef.current === step_id) {
+                                    if (toolCallsStepIdRef.current === resolvedStepId) {
                                       setToolCallActionError(null);
                                     }
                                     const parsed = parseToolCallFailPayload({
@@ -2589,7 +2630,7 @@ export function WorkPage(): JSX.Element {
                                       errorJsonInput: toolCallFailErrorJson,
                                     });
                                     if (parsed.errorCode) {
-                                      if (toolCallsStepIdRef.current === step_id) {
+                                      if (toolCallsStepIdRef.current === resolvedStepId) {
                                         setToolCallActionError(parsed.errorCode);
                                       }
                                       return;
@@ -2597,25 +2638,24 @@ export function WorkPage(): JSX.Element {
 
                                     const requestId = toolCallActionRequestRef.current + 1;
                                     toolCallActionRequestRef.current = requestId;
-                                    if (toolCallsStepIdRef.current === step_id) {
+                                    if (toolCallsStepIdRef.current === resolvedStepId) {
                                       setToolCallActionId(tc.tool_call_id);
                                     }
                                     try {
                                       await failToolCall(tc.tool_call_id, parsed.payload);
-                                      await reloadToolCalls(step_id);
-                                      const run_id = tc.run_id?.trim();
+                                      await reloadToolCalls(resolvedStepId);
                                       if (run_id) await reloadSteps(run_id);
                                     } catch (e) {
                                       if (
                                         toolCallActionRequestRef.current === requestId &&
-                                        toolCallsStepIdRef.current === step_id
+                                        toolCallsStepIdRef.current === resolvedStepId
                                       ) {
                                         setToolCallActionError(toErrorCode(e));
                                       }
                                     } finally {
                                       if (
                                         toolCallActionRequestRef.current === requestId &&
-                                        toolCallsStepIdRef.current === step_id
+                                        toolCallsStepIdRef.current === resolvedStepId
                                       ) {
                                         setToolCallActionId(null);
                                       }
@@ -2808,6 +2848,16 @@ export function WorkPage(): JSX.Element {
                     const kind = createArtifactKind.trim();
                     if (!step_id || !kind) return;
                     const run_id = selectedStepForArtifacts?.run_id?.trim() ?? stepsRunIdRef.current.trim();
+                    const resolvedStepId = resolveRunScopedStepId({
+                      runId: run_id,
+                      stepId: step_id,
+                      steps,
+                    });
+                    if (!resolvedStepId) {
+                      setCreateArtifactError("step_run_mismatch");
+                      setCreateArtifactState("error");
+                      return;
+                    }
                     const requestId = createArtifactRequestRef.current + 1;
                     createArtifactRequestRef.current = requestId;
 
@@ -2839,7 +2889,7 @@ export function WorkPage(): JSX.Element {
                     }
 
                     try {
-                      const res = await createArtifact(step_id, {
+                      const res = await createArtifact(resolvedStepId, {
                         kind,
                         title: createArtifactTitle.trim() ? createArtifactTitle.trim() : undefined,
                         mime_type: createArtifactMimeType.trim() ? createArtifactMimeType.trim() : undefined,
@@ -2847,7 +2897,7 @@ export function WorkPage(): JSX.Element {
                         metadata: parsedMetadata.value,
                       });
 
-                      if (artifactsStepIdRef.current === step_id) {
+                      if (artifactsStepIdRef.current === resolvedStepId) {
                         setCreateArtifactTitle("");
                         setCreateArtifactMimeType("");
                         setCreateArtifactText("");
@@ -2858,7 +2908,7 @@ export function WorkPage(): JSX.Element {
                         setCreatedArtifactId(res.artifact_id);
                       }
 
-                      await reloadArtifacts(step_id);
+                      await reloadArtifacts(resolvedStepId);
                       if (run_id) await reloadSteps(run_id);
 
                       if (createArtifactRequestRef.current === requestId) {
