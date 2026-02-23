@@ -22,3 +22,7 @@
 2. 실패 조건과 롤백 방법을 적는다.
 3. 실행 증거(로그/파일 경로)를 남긴다.
 4. 템플릿은 `memory/ops/` 또는 `memory/reference/`에 둔다.
+
+## 공통 운영 스킬
+- 공통 스킬: `memory/ops/COMMON_SKILL_V1.md`
+- 공통 헌법: `memory/ops/COMMON_CONSTITUTION_V1.md`
