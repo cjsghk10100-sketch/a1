@@ -83,6 +83,7 @@ const ownerPassphrase =
   process.env.DESKTOP_OWNER_PASSPHRASE?.trim() ||
   process.env.VITE_AUTH_OWNER_PASSPHRASE?.trim() ||
   "";
+const desktopUserDataDir = process.env.DESKTOP_USER_DATA_DIR?.trim() || "";
 const restartMaxAttempts = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_ATTEMPTS, 5);
 const restartBaseDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_BASE_DELAY_MS, 1000);
 const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY_MS, 30_000);
@@ -91,6 +92,17 @@ const exitAfterReady = parseBoolean(process.env.DESKTOP_EXIT_AFTER_READY, false)
 
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
 const bootstrapUrl = `${webBaseUrl}/desktop-bootstrap`;
+
+if (desktopUserDataDir) {
+  try {
+    app.setPath("userData", desktopUserDataDir);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[desktop] failed to apply custom userData path: ${String(err instanceof Error ? err.message : err)}`,
+    );
+  }
+}
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
