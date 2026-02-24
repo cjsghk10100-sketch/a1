@@ -38,6 +38,21 @@ function parseBearerToken(raw: string | undefined): string | null {
   return token.length ? token : null;
 }
 
+function getHeaderString(raw: string | string[] | undefined): string | null {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return normalizeString(value);
+}
+
+function isLoopbackIp(ip: string | undefined): boolean {
+  if (!ip) return false;
+  const value = ip.trim().toLowerCase();
+  return (
+    value === "127.0.0.1" ||
+    value === "::1" ||
+    value === "::ffff:127.0.0.1"
+  );
+}
+
 function authSessionConfig(config: AppConfig): {
   sessionSecret: string;
   accessTtlSec: number;
@@ -73,6 +88,35 @@ export async function registerAuthRoutes(
 
     const existing = await findOwnerByWorkspace(pool, workspace_id);
     if (existing) return reply.code(409).send({ error: "owner_already_exists" });
+
+    const bootstrapTokenHeader =
+      getHeaderString(req.headers["x-bootstrap-token"] as string | string[] | undefined) ??
+      getHeaderString(req.headers["x-auth-bootstrap-token"] as string | string[] | undefined);
+    const hasConfiguredBootstrapToken =
+      typeof config.authBootstrapToken === "string" &&
+      config.authBootstrapToken.length > 0;
+    const bootstrapTokenAccepted =
+      hasConfiguredBootstrapToken &&
+      bootstrapTokenHeader != null &&
+      bootstrapTokenHeader === config.authBootstrapToken;
+
+    const bearerToken = parseBearerToken(req.headers.authorization);
+    let trustedBySession = false;
+    if (bearerToken) {
+      const session = await findSessionByAccessToken(
+        pool,
+        authSessionConfig(config).sessionSecret,
+        bearerToken,
+      );
+      trustedBySession = Boolean(session);
+    }
+
+    const trustedByLoopback =
+      config.authBootstrapAllowLoopback !== false && isLoopbackIp(req.ip);
+
+    if (!bootstrapTokenAccepted && !trustedBySession && !trustedByLoopback) {
+      return reply.code(403).send({ error: "bootstrap_forbidden" });
+    }
 
     const client = await pool.connect();
     try {

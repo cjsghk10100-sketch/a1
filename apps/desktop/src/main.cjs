@@ -73,6 +73,9 @@ const engineRoomId = process.env.DESKTOP_ENGINE_ROOM_ID?.trim() || "";
 const engineActorId = process.env.DESKTOP_ENGINE_ACTOR_ID?.trim() || "desktop_engine";
 const enginePollMs = parsePositiveInt(process.env.DESKTOP_ENGINE_POLL_MS, 1200);
 const engineMaxClaimsPerCycle = parsePositiveInt(process.env.DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE, 1);
+const engineBearerToken = process.env.DESKTOP_ENGINE_BEARER_TOKEN?.trim() || "";
+const bootstrapToken =
+  process.env.DESKTOP_BOOTSTRAP_TOKEN?.trim() || process.env.AUTH_BOOTSTRAP_TOKEN?.trim() || "";
 const restartMaxAttempts = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_ATTEMPTS, 5);
 const restartBaseDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_BASE_DELAY_MS, 1000);
 const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY_MS, 30_000);
@@ -136,6 +139,7 @@ const components = {
       RUN_WORKER_EMBEDDED: runnerMode === "embedded" ? "1" : "0",
       AUTH_REQUIRE_SESSION: "1",
       AUTH_ALLOW_LEGACY_WORKSPACE_HEADER: runnerMode === "external" ? "1" : "0",
+      ...(bootstrapToken ? { AUTH_BOOTSTRAP_TOKEN: bootstrapToken } : {}),
     },
     ready_url: `http://127.0.0.1:${apiPort}/health`,
     ready_timeout_ms: apiTimeoutMs,
@@ -154,6 +158,7 @@ const components = {
       VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
       VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
       VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
+      ...(bootstrapToken ? { VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken } : {}),
     },
     ready_url: webBaseUrl,
     ready_timeout_ms: webTimeoutMs,
@@ -166,6 +171,7 @@ const components = {
       ENGINE_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
       ENGINE_WORKSPACE_ID: engineWorkspaceId,
       ENGINE_ACTOR_ID: engineActorId,
+      ...(engineBearerToken ? { ENGINE_BEARER_TOKEN: engineBearerToken } : {}),
       ENGINE_POLL_MS: String(enginePollMs),
       ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
       ...(engineRoomId ? { ENGINE_ROOM_ID: engineRoomId } : {}),

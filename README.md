@@ -69,10 +69,12 @@ Optional desktop env vars:
 - `DESKTOP_WEB_PORT` (default `5173`)
 - `DESKTOP_API_START_TIMEOUT_MS` (default `45000`)
 - `DESKTOP_WEB_START_TIMEOUT_MS` (default `45000`)
+- `DESKTOP_BOOTSTRAP_TOKEN` (optional; forwarded as API bootstrap token + web bootstrap header)
 - `DESKTOP_RUNNER_MODE` (default `embedded`, allowed: `embedded|external`)
 - `DESKTOP_ENGINE_WORKSPACE_ID` (default `ws_dev`, external mode only)
 - `DESKTOP_ENGINE_ROOM_ID` (optional room filter, external mode only)
 - `DESKTOP_ENGINE_ACTOR_ID` (default `desktop_engine`, external mode only)
+- `DESKTOP_ENGINE_BEARER_TOKEN` (optional owner/session bearer for strict auth auto-registration)
 - `DESKTOP_ENGINE_POLL_MS` (default `1200`, external mode only)
 - `DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE` (default `1`, external mode only)
 - `DESKTOP_RESTART_MAX_ATTEMPTS` (default `5`)
@@ -161,9 +163,16 @@ Optional engine env vars:
 - `ENGINE_ACTOR_ID` (default `external_engine`)
 - `ENGINE_ID` (optional; if omitted engine auto-registers and receives a token)
 - `ENGINE_AUTH_TOKEN` (optional; pair with `ENGINE_ID` for fixed identity)
+- `ENGINE_BEARER_TOKEN` (optional owner/session bearer for `AUTH_REQUIRE_SESSION=1` + legacy auth off)
+- `ENGINE_OWNER_ACCESS_TOKEN` (alias of `ENGINE_BEARER_TOKEN`)
 - `ENGINE_POLL_MS` (default `1200`)
 - `ENGINE_MAX_CLAIMS_PER_CYCLE` (default `1`)
 - `ENGINE_RUN_ONCE` (default `false`)
+
+Auth bootstrap hardening (optional):
+
+- `AUTH_BOOTSTRAP_TOKEN` (if set, `/v1/auth/bootstrap-owner` accepts only trusted callers)
+- `AUTH_BOOTSTRAP_ALLOW_LOOPBACK` (default `1`; set `0` to require session/token even on localhost)
 
 Debugging claim endpoint directly:
 

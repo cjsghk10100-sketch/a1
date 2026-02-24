@@ -94,10 +94,17 @@ async function parseJsonSafe(res: Response): Promise<unknown> {
   }
 }
 
-async function postJsonRaw(path: string, payload: unknown): Promise<{ status: number; body: unknown }> {
+async function postJsonRaw(
+  path: string,
+  payload: unknown,
+  extraHeaders?: Record<string, string>,
+): Promise<{ status: number; body: unknown }> {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(extraHeaders ?? {}),
+    },
     body: JSON.stringify(payload),
   });
   const body = await parseJsonSafe(res);
@@ -122,10 +129,15 @@ async function refreshSessionToken(): Promise<boolean> {
 }
 
 async function bootstrapOrLoginOwner(): Promise<void> {
+  const bootstrapTokenRaw = import.meta.env.VITE_AUTH_BOOTSTRAP_TOKEN;
+  const bootstrapToken =
+    typeof bootstrapTokenRaw === "string" && bootstrapTokenRaw.trim().length > 0
+      ? bootstrapTokenRaw.trim()
+      : null;
   const bootstrap = await postJsonRaw("/v1/auth/bootstrap-owner", {
     workspace_id: DEFAULT_WORKSPACE_ID,
     display_name: DEFAULT_OWNER_NAME,
-  });
+  }, bootstrapToken ? { "x-bootstrap-token": bootstrapToken } : undefined);
   if (bootstrap.status === 201) {
     const tokens = readSessionTokens(bootstrap.body);
     if (!tokens) throw new ApiError("auth_bootstrap_invalid_session_payload", 500, bootstrap.body);
