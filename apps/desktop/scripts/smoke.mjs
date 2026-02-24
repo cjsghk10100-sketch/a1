@@ -1,5 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,11 +62,49 @@ async function fetchJson(url, options = {}) {
   return { status: res.status, json };
 }
 
+async function ensureOwnerSession(baseUrl, workspaceId, bootstrapToken, passphrase) {
+  const bootstrap = await fetchJson(`${baseUrl}/v1/auth/bootstrap-owner`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(bootstrapToken ? { "x-bootstrap-token": bootstrapToken } : {}),
+    },
+    body: JSON.stringify({
+      workspace_id: workspaceId,
+      display_name: "Desktop Smoke Owner",
+      passphrase,
+    }),
+  });
+
+  if (bootstrap.status === 201) {
+    return bootstrap.json?.session?.access_token;
+  }
+
+  if (bootstrap.status !== 409) {
+    throw new Error(`smoke_auth_bootstrap_failed:${bootstrap.status}`);
+  }
+
+  const login = await fetchJson(`${baseUrl}/v1/auth/login`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      workspace_id: workspaceId,
+      passphrase,
+    }),
+  });
+  if (login.status !== 200) {
+    throw new Error(`smoke_auth_login_failed:${login.status}`);
+  }
+  return login.json?.session?.access_token;
+}
+
 async function waitForHealth(baseUrl) {
   await waitFor(async () => {
     const res = await fetch(`${baseUrl}/health`, { method: "GET" });
     return res.ok;
-  }, 45_000);
+  }, 90_000);
 }
 
 async function waitForBootstrap(webPort) {
@@ -73,13 +113,13 @@ async function waitForBootstrap(webPort) {
       method: "GET",
     });
     return res.status >= 200 && res.status < 500;
-  }, 45_000);
+  }, 90_000);
 }
 
-async function createSmokeRun(baseUrl, workspaceId) {
+async function createSmokeRun(baseUrl, workspaceId, accessToken) {
   const headers = {
     "content-type": "application/json",
-    "x-workspace-id": workspaceId,
+    authorization: `Bearer ${accessToken}`,
   };
   const room = await fetchJson(`${baseUrl}/v1/rooms`, {
     method: "POST",
@@ -118,16 +158,31 @@ async function waitForRunSucceeded(baseUrl, runId, headers) {
     });
     if (run.status !== 200) return false;
     return run.json?.run?.status === "succeeded";
-  }, 60_000);
+  }, 90_000);
+}
+
+function hasXvfbRun() {
+  if (process.platform !== "linux") return false;
+  const result = spawnSync("xvfb-run", ["--help"], {
+    stdio: "ignore",
+  });
+  return result.error == null;
 }
 
 function spawnDesktop(env) {
-  return spawn(PNPM_BIN, ["-C", "apps/desktop", "dev"], {
+  const shouldWrapWithXvfb = process.platform === "linux" && !process.env.DISPLAY && hasXvfbRun();
+  const command = shouldWrapWithXvfb ? "xvfb-run" : PNPM_BIN;
+  const args = shouldWrapWithXvfb
+    ? ["-a", PNPM_BIN, "-C", "apps/desktop", "dev"]
+    : ["-C", "apps/desktop", "dev"];
+
+  return spawn(command, args, {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
       ...env,
     },
+    detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
@@ -143,8 +198,22 @@ async function stopProcess(child) {
     };
     child.once("exit", complete);
     child.kill("SIGTERM");
+    if (process.platform !== "win32" && typeof child.pid === "number") {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        // best effort
+      }
+    }
     setTimeout(() => {
       if (done) return;
+      if (process.platform !== "win32" && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          // best effort
+        }
+      }
       child.kill("SIGKILL");
       complete();
     }, 4000);
@@ -160,13 +229,18 @@ async function main() {
 
   const apiPort = await reservePort();
   const webPort = await reservePort();
-  const workspaceId = `ws_smoke_${mode}`;
+  const workspaceId = `ws_smoke_${mode}_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+  const bootstrapToken = `smoke_bootstrap_${mode}`;
+  const ownerPassphrase = `smoke_owner_${workspaceId}`;
+  const desktopUserDataDir = await mkdtemp(path.join(os.tmpdir(), `agentapp-desktop-smoke-${mode}-`));
   const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
   const env = {
     DATABASE_URL: databaseUrl,
     ELECTRON_DISABLE_SANDBOX: "1",
     DESKTOP_NO_WINDOW: "1",
+    DESKTOP_API_START_TIMEOUT_MS: "90000",
+    DESKTOP_WEB_START_TIMEOUT_MS: "90000",
     DESKTOP_API_PORT: String(apiPort),
     DESKTOP_WEB_PORT: String(webPort),
     DESKTOP_RUNNER_MODE: mode,
@@ -174,26 +248,49 @@ async function main() {
     DESKTOP_ENGINE_ACTOR_ID: `smoke_${mode}_engine`,
     DESKTOP_ENGINE_POLL_MS: "300",
     DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: "1",
+    DESKTOP_BOOTSTRAP_TOKEN: bootstrapToken,
+    DESKTOP_OWNER_PASSPHRASE: ownerPassphrase,
+    DESKTOP_USER_DATA_DIR: desktopUserDataDir,
   };
 
   const child = spawnDesktop(env);
   let stderr = "";
+  let stdout = "";
+  child.stdout.on("data", (buf) => {
+    stdout += String(buf);
+    if (stdout.length > 8_000) {
+      stdout = stdout.slice(-8_000);
+    }
+  });
   child.stderr.on("data", (buf) => {
     stderr += String(buf);
+    if (stderr.length > 8_000) {
+      stderr = stderr.slice(-8_000);
+    }
   });
 
   try {
     await waitForHealth(apiBaseUrl);
     await waitForBootstrap(webPort);
-    const { runId, headers } = await createSmokeRun(apiBaseUrl, workspaceId);
+    const accessToken = await ensureOwnerSession(
+      apiBaseUrl,
+      workspaceId,
+      bootstrapToken,
+      ownerPassphrase,
+    );
+    if (!accessToken) throw new Error("smoke_auth_token_missing");
+    const { runId, headers } = await createSmokeRun(apiBaseUrl, workspaceId, accessToken);
     await waitForRunSucceeded(apiBaseUrl, runId, headers);
     // eslint-disable-next-line no-console
     console.log(`[desktop-smoke] ok (mode=${mode}, api=${apiPort}, web=${webPort}, run=${runId})`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`desktop_smoke_failed:${mode}:${message}:stderr=${stderr.slice(0, 500)}`);
+    throw new Error(
+      `desktop_smoke_failed:${mode}:${message}:stdout=${stdout.slice(-1200)}:stderr=${stderr.slice(-1200)}`,
+    );
   } finally {
     await stopProcess(child);
+    await rm(desktopUserDataDir, { recursive: true, force: true });
   }
 }
 

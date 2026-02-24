@@ -104,6 +104,41 @@ async function createRun(
   return json.run_id;
 }
 
+async function registerEngine(
+  baseUrl: string,
+  workspaceHeader: Record<string, string>,
+  actor_id: string,
+  rooms: string[] = ["*"],
+): Promise<{ engineHeaders: Record<string, string> }> {
+  const res = await requestJson(
+    baseUrl,
+    "POST",
+    "/v1/engines/register",
+    {
+      actor_id,
+      engine_name: `Contract Engine ${actor_id}`,
+      token_label: "contract",
+      scopes: {
+        action_types: ["run.claim", "run.lease.heartbeat", "run.lease.release"],
+        rooms,
+      },
+    },
+    workspaceHeader,
+  );
+  assert.equal(res.status, 201);
+  const json = res.json as {
+    engine: { engine_id: string };
+    token: { engine_token: string };
+  };
+  return {
+    engineHeaders: {
+      ...workspaceHeader,
+      "x-engine-id": json.engine.engine_id,
+      "x-engine-token": json.token.engine_token,
+    },
+  };
+}
+
 type ClaimResponse = {
   claimed: boolean;
   run: null | {
@@ -154,22 +189,29 @@ async function main(): Promise<void> {
     const ws1 = { "x-workspace-id": `ws_contract_run_claim_1_${runIdSuffix}` };
     const ws2 = { "x-workspace-id": `ws_contract_run_claim_2_${runIdSuffix}` };
     const actorId = `engine_bridge_${runIdSuffix}`;
+    const { engineHeaders: ws1EngineHeaders } = await registerEngine(baseUrl, ws1, actorId);
+    const { engineHeaders: ws2EngineHeaders } = await registerEngine(baseUrl, ws2, actorId);
 
     const roomA = await createRoom(baseUrl, ws1, "Run Claim Room A");
     const roomB = await createRoom(baseUrl, ws1, "Run Claim Room B");
     const ws2Room = await createRoom(baseUrl, ws2, "Run Claim Room WS2");
+    const { engineHeaders: ws1RoomAScopedHeaders } = await registerEngine(baseUrl, ws1, actorId, [roomA]);
 
     const runA1 = await createRun(baseUrl, ws1, { room_id: roomA, title: "Run A1" });
     const runA2 = await createRun(baseUrl, ws1, { room_id: roomA, title: "Run A2" });
     const runB1 = await createRun(baseUrl, ws1, { room_id: roomB, title: "Run B1" });
     const runWs2 = await createRun(baseUrl, ws2, { room_id: ws2Room, title: "Run WS2" });
 
+    const missingTokenClaim = await requestJson(baseUrl, "POST", "/v1/runs/claim", {}, ws1);
+    assert.equal(missingTokenClaim.status, 401);
+    assert.deepEqual(missingTokenClaim.json, { error: "missing_engine_token" });
+
     const claimA1Res = await requestJson(
       baseUrl,
       "POST",
       "/v1/runs/claim",
-      { room_id: roomA, actor_id: actorId },
-      ws1,
+      { room_id: roomA },
+      ws1EngineHeaders,
     );
     assert.equal(claimA1Res.status, 200);
     const claimA1 = claimA1Res.json as ClaimResponse;
@@ -187,8 +229,8 @@ async function main(): Promise<void> {
       baseUrl,
       "POST",
       "/v1/runs/claim",
-      { room_id: roomA, actor_id: actorId },
-      ws1,
+      { room_id: roomA },
+      ws1EngineHeaders,
     );
     assert.equal(claimA2Res.status, 200);
     const claimA2 = claimA2Res.json as ClaimResponse;
@@ -202,15 +244,15 @@ async function main(): Promise<void> {
       baseUrl,
       "POST",
       "/v1/runs/claim",
-      { room_id: roomA, actor_id: actorId },
-      ws1,
+      { room_id: roomA },
+      ws1EngineHeaders,
     );
     assert.equal(claimA3Res.status, 200);
     const claimA3 = claimA3Res.json as ClaimResponse;
     assert.equal(claimA3.claimed, false);
     assert.equal(claimA3.run, null);
 
-    const claimBRes = await requestJson(baseUrl, "POST", "/v1/runs/claim", { actor_id: actorId }, ws1);
+    const claimBRes = await requestJson(baseUrl, "POST", "/v1/runs/claim", {}, ws1EngineHeaders);
     assert.equal(claimBRes.status, 200);
     const claimB = claimBRes.json as ClaimResponse;
     assertClaimedRun(claimB);
@@ -218,13 +260,13 @@ async function main(): Promise<void> {
     assert.equal(claimB.run.room_id, roomB);
     assert.equal(claimB.run.claimed_by_actor_id, actorId);
 
-    const claimWs1EmptyRes = await requestJson(baseUrl, "POST", "/v1/runs/claim", { actor_id: actorId }, ws1);
+    const claimWs1EmptyRes = await requestJson(baseUrl, "POST", "/v1/runs/claim", {}, ws1EngineHeaders);
     assert.equal(claimWs1EmptyRes.status, 200);
     const claimWs1Empty = claimWs1EmptyRes.json as ClaimResponse;
     assert.equal(claimWs1Empty.claimed, false);
     assert.equal(claimWs1Empty.run, null);
 
-    const claimWs2Res = await requestJson(baseUrl, "POST", "/v1/runs/claim", { actor_id: actorId }, ws2);
+    const claimWs2Res = await requestJson(baseUrl, "POST", "/v1/runs/claim", {}, ws2EngineHeaders);
     assert.equal(claimWs2Res.status, 200);
     const claimWs2 = claimWs2Res.json as ClaimResponse;
     assertClaimedRun(claimWs2);
@@ -235,10 +277,9 @@ async function main(): Promise<void> {
       "POST",
       `/v1/runs/${claimA1.run.run_id}/lease/heartbeat`,
       {
-        actor_id: actorId,
         claim_token: "wrong_token",
       },
-      ws1,
+      ws1EngineHeaders,
     );
     assert.equal(badHeartbeat.status, 409);
     assert.deepEqual(badHeartbeat.json, { error: "lease_token_mismatch" });
@@ -248,25 +289,47 @@ async function main(): Promise<void> {
       "POST",
       `/v1/runs/${claimA1.run.run_id}/lease/heartbeat`,
       {
-        actor_id: actorId,
         claim_token: claimA1.run.claim_token,
       },
-      ws1,
+      ws1EngineHeaders,
     );
     assert.equal(goodHeartbeat.status, 200);
     const heartbeatJson = goodHeartbeat.json as { ok: true; lease_expires_at: string };
     assert.equal(heartbeatJson.ok, true);
     assert.ok(new Date(heartbeatJson.lease_expires_at).getTime() > Date.now());
 
+    const crossRoomHeartbeat = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimB.run.run_id}/lease/heartbeat`,
+      {
+        claim_token: claimB.run.claim_token,
+      },
+      ws1RoomAScopedHeaders,
+    );
+    assert.equal(crossRoomHeartbeat.status, 403);
+    assert.deepEqual(crossRoomHeartbeat.json, { error: "engine_room_not_allowed" });
+
+    const crossRoomRelease = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimB.run.run_id}/lease/release`,
+      {
+        claim_token: claimB.run.claim_token,
+      },
+      ws1RoomAScopedHeaders,
+    );
+    assert.equal(crossRoomRelease.status, 403);
+    assert.deepEqual(crossRoomRelease.json, { error: "engine_room_not_allowed" });
+
     const badRelease = await requestJson(
       baseUrl,
       "POST",
       `/v1/runs/${claimA1.run.run_id}/lease/release`,
       {
-        actor_id: actorId,
         claim_token: "wrong_token",
       },
-      ws1,
+      ws1EngineHeaders,
     );
     assert.equal(badRelease.status, 409);
     assert.deepEqual(badRelease.json, { error: "lease_token_mismatch" });
@@ -276,10 +339,9 @@ async function main(): Promise<void> {
       "POST",
       `/v1/runs/${claimA1.run.run_id}/lease/release`,
       {
-        actor_id: actorId,
         claim_token: claimA1.run.claim_token,
       },
-      ws1,
+      ws1EngineHeaders,
     );
     assert.equal(goodRelease.status, 200);
     assert.deepEqual(goodRelease.json, { ok: true, released: true });
@@ -289,10 +351,9 @@ async function main(): Promise<void> {
       "POST",
       `/v1/runs/${claimA1.run.run_id}/lease/release`,
       {
-        actor_id: actorId,
         claim_token: claimA1.run.claim_token,
       },
-      ws1,
+      ws1EngineHeaders,
     );
     assert.equal(releaseAgain.status, 200);
     assert.deepEqual(releaseAgain.json, { ok: true, released: false });
@@ -360,6 +421,37 @@ async function main(): Promise<void> {
     assert.equal(leaseCleared.rows[0].claimed_by_actor_id, null);
     assert.equal(leaseCleared.rows[0].lease_expires_at, null);
     assert.equal(leaseCleared.rows[0].lease_heartbeat_at, null);
+
+    const attemptsA1 = await db.query<{
+      attempt_no: number;
+      release_reason: string | null;
+      claim_token: string;
+    }>(
+      `SELECT attempt_no, release_reason, claim_token
+       FROM run_attempts
+       WHERE run_id = $1
+       ORDER BY attempt_no ASC`,
+      [claimA1.run.run_id],
+    );
+    assert.ok((attemptsA1.rowCount ?? attemptsA1.rows.length) >= 1);
+    const latestA1 = attemptsA1.rows[attemptsA1.rows.length - 1];
+    assert.equal(latestA1.claim_token, claimA1.run.claim_token);
+    assert.equal(latestA1.release_reason, "manual_release");
+
+    const attemptsA2 = await db.query<{
+      attempt_no: number;
+      release_reason: string | null;
+      claim_token: string;
+    }>(
+      `SELECT attempt_no, release_reason, claim_token
+       FROM run_attempts
+       WHERE run_id = $1
+       ORDER BY attempt_no ASC`,
+      [claimA2.run.run_id],
+    );
+    assert.equal(attemptsA2.rowCount, 1);
+    assert.equal(attemptsA2.rows[0].claim_token, claimA2.run.claim_token);
+    assert.equal(attemptsA2.rows[0].release_reason, "run_completed");
   } finally {
     await db.end();
     await app.close();

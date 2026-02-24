@@ -1,4 +1,5 @@
 const { spawn } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
@@ -73,6 +74,16 @@ const engineRoomId = process.env.DESKTOP_ENGINE_ROOM_ID?.trim() || "";
 const engineActorId = process.env.DESKTOP_ENGINE_ACTOR_ID?.trim() || "desktop_engine";
 const enginePollMs = parsePositiveInt(process.env.DESKTOP_ENGINE_POLL_MS, 1200);
 const engineMaxClaimsPerCycle = parsePositiveInt(process.env.DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE, 1);
+const engineBearerToken = process.env.DESKTOP_ENGINE_BEARER_TOKEN?.trim() || "";
+const configuredBootstrapToken =
+  process.env.DESKTOP_BOOTSTRAP_TOKEN?.trim() || process.env.AUTH_BOOTSTRAP_TOKEN?.trim() || "";
+const bootstrapToken =
+  configuredBootstrapToken || `desktop_bootstrap_${randomBytes(24).toString("hex")}`;
+const ownerPassphrase =
+  process.env.DESKTOP_OWNER_PASSPHRASE?.trim() ||
+  process.env.VITE_AUTH_OWNER_PASSPHRASE?.trim() ||
+  "";
+const desktopUserDataDir = process.env.DESKTOP_USER_DATA_DIR?.trim() || "";
 const restartMaxAttempts = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_ATTEMPTS, 5);
 const restartBaseDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_BASE_DELAY_MS, 1000);
 const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY_MS, 30_000);
@@ -81,6 +92,17 @@ const exitAfterReady = parseBoolean(process.env.DESKTOP_EXIT_AFTER_READY, false)
 
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
 const bootstrapUrl = `${webBaseUrl}/desktop-bootstrap`;
+
+if (desktopUserDataDir) {
+  try {
+    app.setPath("userData", desktopUserDataDir);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[desktop] failed to apply custom userData path: ${String(err instanceof Error ? err.message : err)}`,
+    );
+  }
+}
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -134,6 +156,9 @@ const components = {
     env: {
       PORT: String(apiPort),
       RUN_WORKER_EMBEDDED: runnerMode === "embedded" ? "1" : "0",
+      AUTH_REQUIRE_SESSION: "1",
+      AUTH_ALLOW_LEGACY_WORKSPACE_HEADER: runnerMode === "external" ? "1" : "0",
+      AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
     },
     ready_url: `http://127.0.0.1:${apiPort}/health`,
     ready_timeout_ms: apiTimeoutMs,
@@ -152,6 +177,8 @@ const components = {
       VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
       VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
       VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
+      ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
+      VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
     },
     ready_url: webBaseUrl,
     ready_timeout_ms: webTimeoutMs,
@@ -164,6 +191,7 @@ const components = {
       ENGINE_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
       ENGINE_WORKSPACE_ID: engineWorkspaceId,
       ENGINE_ACTOR_ID: engineActorId,
+      ...(engineBearerToken ? { ENGINE_BEARER_TOKEN: engineBearerToken } : {}),
       ENGINE_POLL_MS: String(enginePollMs),
       ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
       ...(engineRoomId ? { ENGINE_ROOM_ID: engineRoomId } : {}),

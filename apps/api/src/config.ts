@@ -5,6 +5,13 @@ export interface AppConfig {
   runWorkerPollMs?: number;
   runWorkerBatchLimit?: number;
   runWorkerWorkspaceId?: string;
+  authRequireSession?: boolean;
+  authAllowLegacyWorkspaceHeader?: boolean;
+  authSessionSecret?: string;
+  authSessionAccessTtlSec?: number;
+  authSessionRefreshTtlSec?: number;
+  authBootstrapToken?: string;
+  authBootstrapAllowLoopback?: boolean;
 }
 
 function parsePort(raw: string | undefined): number {
@@ -59,6 +66,10 @@ function parseOptionalId(raw: string | undefined): string | undefined {
 }
 
 export function loadConfig(): AppConfig {
+  const authSessionSecret =
+    process.env.AUTH_SESSION_SECRET?.trim() || "agentapp_local_dev_session_secret";
+  const authBootstrapToken = process.env.AUTH_BOOTSTRAP_TOKEN?.trim();
+
   return {
     port: parsePort(process.env.PORT),
     databaseUrl: requireEnv("DATABASE_URL"),
@@ -69,5 +80,23 @@ export function loadConfig(): AppConfig {
       "RUN_WORKER_BATCH_LIMIT",
     ),
     runWorkerWorkspaceId: parseOptionalId(process.env.RUN_WORKER_WORKSPACE_ID),
+    authRequireSession: parseBoolean(process.env.AUTH_REQUIRE_SESSION, true),
+    authAllowLegacyWorkspaceHeader: parseBoolean(
+      process.env.AUTH_ALLOW_LEGACY_WORKSPACE_HEADER,
+      false,
+    ),
+    authSessionSecret,
+    authSessionAccessTtlSec: parsePositiveInt(
+      process.env.AUTH_SESSION_ACCESS_TTL_SEC,
+      "AUTH_SESSION_ACCESS_TTL_SEC",
+      3600,
+    ),
+    authSessionRefreshTtlSec: parsePositiveInt(
+      process.env.AUTH_SESSION_REFRESH_TTL_SEC,
+      "AUTH_SESSION_REFRESH_TTL_SEC",
+      60 * 60 * 24 * 30,
+    ),
+    authBootstrapToken: authBootstrapToken && authBootstrapToken.length > 0 ? authBootstrapToken : undefined,
+    authBootstrapAllowLoopback: parseBoolean(process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK, false),
   };
 }

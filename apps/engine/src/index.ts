@@ -15,6 +15,7 @@ type ClaimedRun = {
   claimed_by_actor_id: string;
   lease_expires_at: string;
   lease_heartbeat_at: string;
+  attempt_no?: number;
 };
 
 type ClaimResponse = {
@@ -35,6 +36,10 @@ type EngineConfig = {
   workspaceId: string;
   roomId?: string;
   actorId: string;
+  bearerToken?: string;
+  refreshToken?: string;
+  engineId?: string;
+  engineToken?: string;
   pollMs: number;
   maxClaimsPerCycle: number;
   runOnce: boolean;
@@ -61,11 +66,25 @@ function readBoolEnv(name: string, fallback: boolean): boolean {
 
 function getConfig(): EngineConfig {
   const roomId = process.env.ENGINE_ROOM_ID?.trim();
+  const engineId = process.env.ENGINE_ID?.trim();
+  const engineToken = process.env.ENGINE_AUTH_TOKEN?.trim();
+  const bearerToken =
+    process.env.ENGINE_BEARER_TOKEN?.trim() ||
+    process.env.ENGINE_OWNER_ACCESS_TOKEN?.trim() ||
+    "";
+  const refreshToken =
+    process.env.ENGINE_REFRESH_TOKEN?.trim() ||
+    process.env.ENGINE_OWNER_REFRESH_TOKEN?.trim() ||
+    "";
   return {
     apiBaseUrl: process.env.ENGINE_API_BASE_URL?.trim() || "http://127.0.0.1:3000",
     workspaceId: process.env.ENGINE_WORKSPACE_ID?.trim() || "ws_dev",
     roomId: roomId && roomId.length > 0 ? roomId : undefined,
     actorId: process.env.ENGINE_ACTOR_ID?.trim() || "external_engine",
+    bearerToken: bearerToken.length > 0 ? bearerToken : undefined,
+    refreshToken: refreshToken.length > 0 ? refreshToken : undefined,
+    engineId: engineId && engineId.length > 0 ? engineId : undefined,
+    engineToken: engineToken && engineToken.length > 0 ? engineToken : undefined,
     pollMs: readIntEnv("ENGINE_POLL_MS", 1200),
     maxClaimsPerCycle: readIntEnv("ENGINE_MAX_CLAIMS_PER_CYCLE", 1),
     runOnce: readBoolEnv("ENGINE_RUN_ONCE", false),
@@ -80,29 +99,106 @@ function buildUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, "")}${path}`;
 }
 
+function requestHeaders(cfg: EngineConfig, includeJson = true): Record<string, string> {
+  const headers: Record<string, string> = {
+    "x-workspace-id": cfg.workspaceId,
+  };
+  if (includeJson) headers["content-type"] = "application/json";
+  if (cfg.bearerToken) headers.authorization = `Bearer ${cfg.bearerToken}`;
+  if (cfg.engineId && cfg.engineToken) {
+    headers["x-engine-id"] = cfg.engineId;
+    headers["x-engine-token"] = cfg.engineToken;
+  }
+  return headers;
+}
+
+class ApiPostError extends Error {
+  public readonly status: number;
+  public readonly path: string;
+  public readonly bodyText: string;
+
+  constructor(path: string, status: number, bodyText: string) {
+    super(`api_post_failed:${path}:status=${status}:body=${bodyText.slice(0, 280) || "<empty>"}`);
+    this.name = "ApiPostError";
+    this.path = path;
+    this.status = status;
+    this.bodyText = bodyText;
+  }
+}
+
+function parseJsonSafe(bodyText: string): unknown {
+  if (!bodyText) return null;
+  try {
+    return JSON.parse(bodyText) as unknown;
+  } catch {
+    return bodyText;
+  }
+}
+
+function readSessionTokens(body: unknown): { access_token: string; refresh_token: string } | null {
+  if (!body || typeof body !== "object") return null;
+  const session = (body as { session?: unknown }).session;
+  if (!session || typeof session !== "object") return null;
+  const access_token = (session as { access_token?: unknown }).access_token;
+  const refresh_token = (session as { refresh_token?: unknown }).refresh_token;
+  if (typeof access_token !== "string" || typeof refresh_token !== "string") return null;
+  if (!access_token.trim() || !refresh_token.trim()) return null;
+  return { access_token, refresh_token };
+}
+
+async function refreshBearerToken(cfg: EngineConfig): Promise<boolean> {
+  if (!cfg.refreshToken) return false;
+  const res = await fetch(buildUrl(cfg.apiBaseUrl, "/v1/auth/refresh"), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ refresh_token: cfg.refreshToken }),
+  });
+  const bodyText = await res.text();
+  const body = parseJsonSafe(bodyText);
+  if (!res.ok) return false;
+  const tokens = readSessionTokens(body);
+  if (!tokens) return false;
+  cfg.bearerToken = tokens.access_token;
+  cfg.refreshToken = tokens.refresh_token;
+  return true;
+}
+
 async function apiPost<T>(
   cfg: EngineConfig,
   path: string,
   payload: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const res = await fetch(buildUrl(cfg.apiBaseUrl, path), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-workspace-id": cfg.workspaceId,
-    },
-    body: JSON.stringify(payload),
-    signal,
-  });
-  const bodyText = await res.text();
-  const body = bodyText ? (JSON.parse(bodyText) as unknown) : null;
-  if (!res.ok) {
-    throw new Error(
-      `api_post_failed:${path}:status=${res.status}:body=${bodyText.slice(0, 280) || "<empty>"}`,
-    );
+  const send = async (): Promise<{ status: number; bodyText: string; body: unknown }> => {
+    const res = await fetch(buildUrl(cfg.apiBaseUrl, path), {
+      method: "POST",
+      headers: requestHeaders(cfg, true),
+      body: JSON.stringify(payload),
+      signal,
+    });
+    const bodyText = await res.text();
+    return {
+      status: res.status,
+      bodyText,
+      body: parseJsonSafe(bodyText),
+    };
+  };
+
+  let response = await send();
+  if (
+    response.status === 401 &&
+    !path.startsWith("/v1/auth/") &&
+    (await refreshBearerToken(cfg))
+  ) {
+    response = await send();
   }
-  return body as T;
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new ApiPostError(path, response.status, response.bodyText);
+  }
+  return response.body as T;
 }
 
 function getRunInputFlag(run: ClaimedRun, key: string): unknown {
@@ -147,10 +243,49 @@ async function safeFailRun(cfg: EngineConfig, runId: string, err: unknown): Prom
   }
 }
 
+type EngineRegisterResponse = {
+  engine: {
+    engine_id: string;
+    actor_id: string;
+  };
+  token: {
+    engine_token: string;
+  };
+};
+
+async function ensureEngineIdentity(cfg: EngineConfig): Promise<EngineConfig> {
+  if (cfg.engineId && cfg.engineToken) return cfg;
+
+  const registered = await apiPost<EngineRegisterResponse>(cfg, "/v1/engines/register", {
+    actor_id: cfg.actorId,
+    engine_name: `Engine ${cfg.actorId}`,
+    token_label: "auto_bootstrap",
+    scopes: {
+      action_types: ["run.claim", "run.lease.heartbeat", "run.lease.release"],
+      rooms: cfg.roomId ? [cfg.roomId] : ["*"],
+    },
+  });
+
+  const engineId = registered.engine.engine_id;
+  const engineToken = registered.token.engine_token;
+  if (!engineId || !engineToken) {
+    throw new Error("engine_bootstrap_missing_token");
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(`[engine] registered engine id=${engineId} actor=${registered.engine.actor_id}`);
+  return {
+    ...cfg,
+    engineId,
+    engineToken,
+  };
+}
+
 async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
   const shouldFail = getRunInputFlag(run, "simulate_fail") === true;
   let heartbeatError: Error | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let runTerminalPersisted = false;
 
   const assertLeaseHealthy = () => {
     if (heartbeatError) throw heartbeatError;
@@ -161,17 +296,9 @@ async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
   };
   const heartbeat = async () => {
     await apiPost<{ ok: true }>(cfg, `/v1/runs/${run.run_id}/lease/heartbeat`, {
-      actor_id: cfg.actorId,
       claim_token: run.claim_token,
     });
   };
-  const releaseLease = async () => {
-    await apiPost<{ ok: true }>(cfg, `/v1/runs/${run.run_id}/lease/release`, {
-      actor_id: cfg.actorId,
-      claim_token: run.claim_token,
-    });
-  };
-
   try {
     await heartbeat();
     heartbeatTimer = setInterval(() => {
@@ -211,6 +338,7 @@ async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
           reason,
         },
       });
+      runTerminalPersisted = true;
       // eslint-disable-next-line no-console
       console.warn(`[engine] run ${run.run_id} blocked by tool policy: ${reason}`);
       return;
@@ -225,6 +353,7 @@ async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
         message: "simulated run failure",
         error: { code: "SIMULATED_FAILURE", run_id: run.run_id },
       });
+      runTerminalPersisted = true;
       // eslint-disable-next-line no-console
       console.warn(`[engine] run ${run.run_id} failed intentionally (simulate_fail=true)`);
       return;
@@ -253,6 +382,7 @@ async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
       summary: "Completed by external engine runner",
       output,
     });
+    runTerminalPersisted = true;
 
     // eslint-disable-next-line no-console
     console.log(`[engine] run completed: ${run.run_id}`);
@@ -260,20 +390,17 @@ async function processRun(cfg: EngineConfig, run: ClaimedRun): Promise<void> {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
     }
-    try {
-      await releaseLease();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+    if (!runTerminalPersisted) {
       // eslint-disable-next-line no-console
-      console.warn(`[engine] failed to release lease for ${run.run_id}: ${message}`);
+      console.warn(
+        `[engine] run ${run.run_id} ended without persisted terminal state; lease is kept until TTL expiry for safe reclaim`,
+      );
     }
   }
 }
 
 async function claimRun(cfg: EngineConfig): Promise<ClaimResponse> {
-  const payload: { actor_id: string; room_id?: string } = {
-    actor_id: cfg.actorId,
-  };
+  const payload: { room_id?: string } = {};
   if (cfg.roomId) payload.room_id = cfg.roomId;
   return apiPost<ClaimResponse>(cfg, "/v1/runs/claim", payload);
 }
@@ -296,10 +423,11 @@ async function runCycle(cfg: EngineConfig): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  const cfg = getConfig();
+  const initialCfg = getConfig();
+  const cfg = await ensureEngineIdentity(initialCfg);
   // eslint-disable-next-line no-console
   console.log(
-    `[engine] started (api=${cfg.apiBaseUrl}, workspace=${cfg.workspaceId}, room=${cfg.roomId ?? "*"}, actor=${cfg.actorId}, poll=${cfg.pollMs}ms)`,
+    `[engine] started (api=${cfg.apiBaseUrl}, workspace=${cfg.workspaceId}, room=${cfg.roomId ?? "*"}, actor=${cfg.actorId}, engine_id=${cfg.engineId ?? "-"}, poll=${cfg.pollMs}ms)`,
   );
 
   if (cfg.runOnce) {
