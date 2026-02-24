@@ -97,6 +97,6 @@ export function loadConfig(): AppConfig {
       60 * 60 * 24 * 30,
     ),
     authBootstrapToken: authBootstrapToken && authBootstrapToken.length > 0 ? authBootstrapToken : undefined,
-    authBootstrapAllowLoopback: parseBoolean(process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK, true),
+    authBootstrapAllowLoopback: parseBoolean(process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK, false),
   };
 }

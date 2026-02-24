@@ -39,6 +39,7 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
   const authAllowLegacyWorkspaceHeader =
     ctx.config.authAllowLegacyWorkspaceHeader ??
     parseBoolean(process.env.AUTH_ALLOW_LEGACY_WORKSPACE_HEADER, false);
+  const sessionCookieName = "agentapp_access_token";
 
   function parseBearerToken(raw: string | undefined): string | null {
     if (!raw) return null;
@@ -46,6 +47,24 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
     if (!header.toLowerCase().startsWith("bearer ")) return null;
     const token = header.slice(7).trim();
     return token.length ? token : null;
+  }
+
+  function parseTokenFromCookie(raw: string | undefined, cookieName: string): string | null {
+    if (!raw) return null;
+    for (const part of raw.split(";")) {
+      const [name, ...valueParts] = part.split("=");
+      if (!name) continue;
+      if (name.trim() !== cookieName) continue;
+      const value = valueParts.join("=").trim();
+      if (!value) return null;
+      try {
+        const decoded = decodeURIComponent(value);
+        return decoded.trim().length > 0 ? decoded.trim() : null;
+      } catch {
+        return value.trim().length > 0 ? value.trim() : null;
+      }
+    }
+    return null;
   }
 
   function legacyWorkspaceHeader(req: { headers: Record<string, unknown> }): string | null {
@@ -104,7 +123,15 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
       return;
     }
 
-    const bearerToken = parseBearerToken(req.headers.authorization);
+    const authorizationHeader = Array.isArray(req.headers.authorization)
+      ? req.headers.authorization[0]
+      : req.headers.authorization;
+    const cookieHeader = Array.isArray(req.headers.cookie)
+      ? req.headers.cookie[0]
+      : req.headers.cookie;
+    const bearerToken =
+      parseBearerToken(authorizationHeader) ??
+      parseTokenFromCookie(cookieHeader, sessionCookieName);
     if (bearerToken) {
       const session = await findSessionByAccessToken(
         ctx.pool,

@@ -166,6 +166,8 @@ Optional engine env vars:
 - `ENGINE_AUTH_TOKEN` (optional; pair with `ENGINE_ID` for fixed identity)
 - `ENGINE_BEARER_TOKEN` (optional owner/session bearer for `AUTH_REQUIRE_SESSION=1` + legacy auth off)
 - `ENGINE_OWNER_ACCESS_TOKEN` (alias of `ENGINE_BEARER_TOKEN`)
+- `ENGINE_REFRESH_TOKEN` (optional refresh token used to rotate expired bearer during long runs)
+- `ENGINE_OWNER_REFRESH_TOKEN` (alias of `ENGINE_REFRESH_TOKEN`)
 - `ENGINE_POLL_MS` (default `1200`)
 - `ENGINE_MAX_CLAIMS_PER_CYCLE` (default `1`)
 - `ENGINE_RUN_ONCE` (default `false`)
@@ -173,7 +175,7 @@ Optional engine env vars:
 Auth bootstrap hardening (optional):
 
 - `AUTH_BOOTSTRAP_TOKEN` (if set, `/v1/auth/bootstrap-owner` accepts only trusted callers)
-- `AUTH_BOOTSTRAP_ALLOW_LOOPBACK` (default `1`; set `0` to require session/token even on localhost)
+- `AUTH_BOOTSTRAP_ALLOW_LOOPBACK` (default `0`; set `1` only for local bootstrap convenience)
 - `VITE_AUTH_OWNER_PASSPHRASE` (optional fixed passphrase for web bootstrap/login; when unset, web stores a generated local passphrase)
 
 Debugging claim endpoint directly:
