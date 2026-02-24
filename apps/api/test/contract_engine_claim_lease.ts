@@ -93,9 +93,11 @@ function readAccessToken(body: unknown): string {
 }
 
 async function ensureOwnerAccessToken(baseUrl: string, workspaceId: string): Promise<string> {
+  const passphrase = `pass_${workspaceId}`;
   const bootstrap = await requestJson(baseUrl, "POST", "/v1/auth/bootstrap-owner", {
     workspace_id: workspaceId,
     display_name: "Engine Lease Owner",
+    passphrase,
   });
   if (bootstrap.status === 201) {
     return readAccessToken(bootstrap.json);
@@ -103,6 +105,7 @@ async function ensureOwnerAccessToken(baseUrl: string, workspaceId: string): Pro
   assert.equal(bootstrap.status, 409);
   const login = await requestJson(baseUrl, "POST", "/v1/auth/login", {
     workspace_id: workspaceId,
+    passphrase,
   });
   assert.equal(login.status, 200);
   return readAccessToken(login.json);

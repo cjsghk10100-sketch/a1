@@ -117,6 +117,9 @@ export async function registerAuthRoutes(
     if (!bootstrapTokenAccepted && !trustedBySession && !trustedByLoopback) {
       return reply.code(403).send({ error: "bootstrap_forbidden" });
     }
+    if (!passphrase) {
+      return reply.code(400).send({ error: "missing_passphrase" });
+    }
 
     const client = await pool.connect();
     try {
@@ -131,7 +134,7 @@ export async function registerAuthRoutes(
         workspace_id,
         principal_id,
         display_name,
-        passphrase_hash: passphrase ? hashPassphrase(passphrase) : null,
+        passphrase_hash: hashPassphrase(passphrase),
       });
       if (!created) {
         await client.query("ROLLBACK");
@@ -174,11 +177,11 @@ export async function registerAuthRoutes(
     const owner = await findOwnerByWorkspace(pool, workspace_id);
     if (!owner) return reply.code(404).send({ error: "owner_not_found" });
 
-    if (owner.passphrase_hash) {
-      if (!passphrase) return reply.code(401).send({ error: "invalid_credentials" });
-      if (!verifyPassphrase(passphrase, owner.passphrase_hash)) {
-        return reply.code(401).send({ error: "invalid_credentials" });
-      }
+    if (!owner.passphrase_hash || !passphrase) {
+      return reply.code(401).send({ error: "invalid_credentials" });
+    }
+    if (!verifyPassphrase(passphrase, owner.passphrase_hash)) {
+      return reply.code(401).send({ error: "invalid_credentials" });
     }
 
     const issued = await issueOwnerSession(pool, owner, authSessionConfig(config), {
