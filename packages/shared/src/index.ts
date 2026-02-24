@@ -5,6 +5,7 @@ export * from "./artifacts.js";
 export * from "./capabilities.js";
 export * from "./data_access.js";
 export * from "./discord.js";
+export * from "./evidence.js";
 export * from "./egress.js";
 export * from "./engines.js";
 export * from "./ids.js";

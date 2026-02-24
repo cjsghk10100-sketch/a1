@@ -11,6 +11,7 @@ import { registerAuditRoutes } from "./audit.js";
 import { registerCapabilityRoutes } from "./capabilities.js";
 import { registerDataAccessRoutes } from "./dataAccess.js";
 import { registerDiscordIngestRoutes } from "./discordIngest.js";
+import { registerEvidenceRoutes } from "./evidence.js";
 import { registerEgressRoutes } from "./egress.js";
 import { registerEngineRoutes } from "./engines.js";
 import { registerEventRoutes } from "./events.js";
@@ -46,6 +47,7 @@ export async function registerV1Routes(
   await registerCapabilityRoutes(app, pool);
   await registerDataAccessRoutes(app, pool);
   await registerDiscordIngestRoutes(app, pool);
+  await registerEvidenceRoutes(app, pool);
   await registerEgressRoutes(app, pool);
   await registerEngineRoutes(app, pool);
   await registerEventRoutes(app, pool);

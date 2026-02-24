@@ -79,6 +79,7 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `run.started` (v1)
 - `run.completed` (v1)
 - `run.failed` (v1)
+- `evidence.manifest.created` (v1)
 - `step.created` (v1)
 - `tool.invoked` (v1)
 - `tool.succeeded` (v1)
@@ -123,6 +124,10 @@ Some runtime safety contracts are projection/API level (not standalone events):
   - `POST /v1/engines/:engineId/deactivate`
 
 These contracts are intentionally non-event to avoid noise while preserving run ownership safety.
+
+Evidence manifest contracts:
+- `GET /v1/runs/:runId/evidence`
+- `POST /v1/runs/:runId/evidence/finalize`
 
 ## Planned Event Families (vNext)
 

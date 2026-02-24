@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { newRunId, newStepId, type RunEventV1, type RunStatus } from "@agentapp/shared";
 
 import type { DbClient, DbPool } from "../../db/pool.js";
+import { finalizeRunEvidenceManifest } from "../../evidence/manifest.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { applyRunEvent } from "../../projectors/runProjector.js";
 import { getEngineTokenSecret, verifyEngineToken } from "../../security/engineTokens.js";
@@ -777,6 +778,12 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     });
 
     await applyRunEvent(pool, event as RunEventV1);
+    await finalizeRunEvidenceManifest(pool, {
+      workspace_id,
+      run_id: existing.rows[0].run_id,
+      actor: { actor_type: "service", actor_id: "api" },
+      correlation_id: existing.rows[0].correlation_id,
+    });
     return reply.code(200).send({ ok: true });
   });
 
@@ -853,6 +860,12 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     });
 
     await applyRunEvent(pool, event as RunEventV1);
+    await finalizeRunEvidenceManifest(pool, {
+      workspace_id,
+      run_id: existing.rows[0].run_id,
+      actor: { actor_type: "service", actor_id: "api" },
+      correlation_id: existing.rows[0].correlation_id,
+    });
     return reply.code(200).send({ ok: true });
   });
 
