@@ -14,6 +14,7 @@ export * from "./incidents.js";
 export * from "./lifecycle.js";
 export * from "./learning.js";
 export * from "./policy.js";
+export * from "./promotion.js";
 export * from "./runs.js";
 export * from "./scorecards.js";
 export * from "./secrets.js";

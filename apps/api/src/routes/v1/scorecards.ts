@@ -7,6 +7,7 @@ import {
   newScorecardId,
   type ActorType,
   type LessonLoggedDataV1,
+  type ScorecardId,
   type ScoreDecision,
   type ScoreMetricV1,
   type ScorecardEventV1,
@@ -14,6 +15,7 @@ import {
 
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
+import { evaluatePromotionLoopForScorecard, getPromotionLoopStatus } from "../../promotion/loop.js";
 import { applyScorecardEvent } from "../../projectors/scorecardProjector.js";
 import { sha256Hex, stableStringify } from "../../security/hashChain.js";
 
@@ -25,6 +27,12 @@ function getHeaderString(value: string | string[] | undefined): string | undefin
 function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
   const raw = getHeaderString(req.headers["x-workspace-id"] as string | string[] | undefined);
   return raw?.trim() || "ws_dev";
+}
+
+function principalIdFromReq(req: { headers: Record<string, unknown> }): string | undefined {
+  const raw = getHeaderString(req.headers["x-principal-id"] as string | string[] | undefined);
+  const value = raw?.trim();
+  return value?.length ? value : undefined;
 }
 
 function normalizeActorType(raw: unknown): ActorType {
@@ -233,6 +241,12 @@ export async function registerScorecardRoutes(app: FastifyInstance, pool: DbPool
       display: {},
     });
     await applyScorecardEvent(pool, event as ScorecardEventV1);
+    await evaluatePromotionLoopForScorecard(pool, {
+      workspace_id,
+      scorecard_id: scorecard_id as ScorecardId,
+      actor: { actor_type, actor_id },
+      actor_principal_id: principalIdFromReq(req),
+    });
     return reply.code(201).send({ scorecard_id });
   });
 
@@ -495,4 +509,23 @@ export async function registerScorecardRoutes(app: FastifyInstance, pool: DbPool
     return reply.code(200).send({ lessons: rows.rows });
   });
 
+  app.get<{
+    Params: { agentId: string };
+  }>("/v1/agents/:agentId/promotion-loop/status", async (req, reply) => {
+    const workspace_id = workspaceIdFromReq(req);
+    const agent_id = normalizeOptionalString(req.params.agentId);
+    if (!agent_id) return reply.code(400).send({ error: "invalid_agent_id" });
+
+    const exists = await ensureRowExists(
+      pool,
+      `SELECT '1' AS found
+       FROM sec_agents
+       WHERE agent_id = $1`,
+      [agent_id],
+    );
+    if (!exists) return reply.code(404).send({ error: "agent_not_found" });
+
+    const status = await getPromotionLoopStatus(pool, { workspace_id, agent_id });
+    return reply.code(200).send({ agent_id, ...status });
+  });
 }
