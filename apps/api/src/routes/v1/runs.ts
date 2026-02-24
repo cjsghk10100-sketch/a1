@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { newRunId, newStepId, type RunEventV1, type RunStatus } from "@agentapp/shared";
 
 import type { DbClient, DbPool } from "../../db/pool.js";
+import { finalizeRunEvidenceManifest } from "../../evidence/manifest.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { applyRunEvent } from "../../projectors/runProjector.js";
 import { getEngineTokenSecret, verifyEngineToken } from "../../security/engineTokens.js";
@@ -19,6 +20,7 @@ type RunRow = {
   workspace_id: string;
   room_id: string | null;
   thread_id: string | null;
+  experiment_id: string | null;
   correlation_id: string;
   last_event_id: string | null;
   status: string;
@@ -277,6 +279,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     Body: {
       room_id: string;
       thread_id?: string;
+      experiment_id?: string;
       title?: string;
       goal?: string;
       input?: Record<string, unknown>;
@@ -315,6 +318,29 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
       }
     }
 
+    const experiment_id = req.body.experiment_id?.trim() || undefined;
+    if (experiment_id) {
+      const experiment = await pool.query<{
+        workspace_id: string;
+        room_id: string | null;
+        status: string;
+      }>(
+        `SELECT workspace_id, room_id, status
+         FROM proj_experiments
+         WHERE experiment_id = $1`,
+        [experiment_id],
+      );
+      if (experiment.rowCount !== 1 || experiment.rows[0].workspace_id !== workspace_id) {
+        return reply.code(404).send({ error: "experiment_not_found" });
+      }
+      if (experiment.rows[0].status !== "open") {
+        return reply.code(409).send({ error: "experiment_not_open" });
+      }
+      if (experiment.rows[0].room_id && experiment.rows[0].room_id !== room_id) {
+        return reply.code(400).send({ error: "experiment_room_mismatch" });
+      }
+    }
+
     const run_id = newRunId();
     const occurred_at = new Date().toISOString();
     const correlation_id = req.body.correlation_id?.trim() || randomUUID();
@@ -334,6 +360,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
       correlation_id,
       data: {
         run_id,
+        experiment_id,
         title: req.body.title,
         goal: req.body.goal,
         input: req.body.input,
@@ -398,6 +425,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
              workspace_id,
              room_id,
              thread_id,
+             experiment_id,
              correlation_id,
              last_event_id,
              status,
@@ -473,6 +501,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
             workspace_id: run.workspace_id,
             room_id: run.room_id,
             thread_id: run.thread_id,
+            experiment_id: run.experiment_id,
             status: "running",
             title: run.title,
             goal: run.goal,
@@ -661,7 +690,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
 
     try {
       const existing = await lockClient.query<RunRow>(
-        "SELECT run_id, workspace_id, room_id, thread_id, correlation_id, last_event_id, status FROM proj_runs WHERE run_id = $1",
+        "SELECT run_id, workspace_id, room_id, thread_id, experiment_id, correlation_id, last_event_id, status FROM proj_runs WHERE run_id = $1",
         [req.params.runId],
       );
       if (existing.rowCount !== 1 || existing.rows[0].workspace_id !== workspace_id) {
@@ -777,6 +806,12 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     });
 
     await applyRunEvent(pool, event as RunEventV1);
+    await finalizeRunEvidenceManifest(pool, {
+      workspace_id,
+      run_id: existing.rows[0].run_id,
+      actor: { actor_type: "service", actor_id: "api" },
+      correlation_id: existing.rows[0].correlation_id,
+    });
     return reply.code(200).send({ ok: true });
   });
 
@@ -853,6 +888,12 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     });
 
     await applyRunEvent(pool, event as RunEventV1);
+    await finalizeRunEvidenceManifest(pool, {
+      workspace_id,
+      run_id: existing.rows[0].run_id,
+      actor: { actor_type: "service", actor_id: "api" },
+      correlation_id: existing.rows[0].correlation_id,
+    });
     return reply.code(200).send({ ok: true });
   });
 
@@ -923,11 +964,12 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
   });
 
   app.get<{
-    Querystring: { room_id?: string; status?: string; limit?: string };
+    Querystring: { room_id?: string; experiment_id?: string; status?: string; limit?: string };
   }>("/v1/runs", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
 
     const room_id = req.query.room_id?.trim() || null;
+    const experiment_id = req.query.experiment_id?.trim() || null;
     const status = normalizeRunStatus(req.query.status);
     if (req.query.status && !status) {
       return reply.code(400).send({ error: "invalid_status" });
@@ -943,6 +985,10 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
       args.push(room_id);
       where += ` AND room_id = $${args.length}`;
     }
+    if (experiment_id) {
+      args.push(experiment_id);
+      where += ` AND experiment_id = $${args.length}`;
+    }
     if (status) {
       args.push(status);
       where += ` AND status = $${args.length}`;
@@ -953,7 +999,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     const res = await pool.query(
       `SELECT
         run_id,
-        workspace_id, room_id, thread_id,
+        workspace_id, room_id, thread_id, experiment_id,
         status,
         title, goal, input, output, error, tags,
         claim_token, claimed_by_actor_id, lease_expires_at, lease_heartbeat_at,
@@ -977,7 +1023,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     const res = await pool.query(
       `SELECT
         run_id,
-        workspace_id, room_id, thread_id,
+        workspace_id, room_id, thread_id, experiment_id,
         status,
         title, goal, input, output, error, tags,
         claim_token, claimed_by_actor_id, lease_expires_at, lease_heartbeat_at,

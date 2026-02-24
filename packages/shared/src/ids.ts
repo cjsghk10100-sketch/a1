@@ -2,10 +2,14 @@ import { ulid } from "ulid";
 
 export type ApprovalId = `appr_${string}`;
 export type ArtifactId = `art_${string}`;
+export type EvidenceId = `evd_${string}`;
+export type ExperimentId = `exp_${string}`;
 export type IncidentId = `inc_${string}`;
+export type LessonId = `les_${string}`;
 export type MessageId = `msg_${string}`;
 export type RoomId = `room_${string}`;
 export type RunId = `run_${string}`;
+export type ScorecardId = `scd_${string}`;
 export type StepId = `step_${string}`;
 export type ToolCallId = `tc_${string}`;
 export type ThreadId = `th_${string}`;
@@ -23,8 +27,20 @@ export function newArtifactId(): ArtifactId {
   return withPrefix("art_") as ArtifactId;
 }
 
+export function newEvidenceId(): EvidenceId {
+  return withPrefix("evd_") as EvidenceId;
+}
+
+export function newExperimentId(): ExperimentId {
+  return withPrefix("exp_") as ExperimentId;
+}
+
 export function newIncidentId(): IncidentId {
   return withPrefix("inc_") as IncidentId;
+}
+
+export function newLessonId(): LessonId {
+  return withPrefix("les_") as LessonId;
 }
 
 export function newMessageId(): MessageId {
@@ -37,6 +53,10 @@ export function newRoomId(): RoomId {
 
 export function newRunId(): RunId {
   return withPrefix("run_") as RunId;
+}
+
+export function newScorecardId(): ScorecardId {
+  return withPrefix("scd_") as ScorecardId;
 }
 
 export function newStepId(): StepId {

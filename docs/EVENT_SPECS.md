@@ -79,6 +79,13 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `run.started` (v1)
 - `run.completed` (v1)
 - `run.failed` (v1)
+- `evidence.manifest.created` (v1)
+- `experiment.created` (v1)
+- `experiment.updated` (v1)
+- `experiment.closed` (v1)
+- `scorecard.recorded` (v1)
+- `lesson.logged` (v1)
+- `promotion.evaluated` (v1)
 - `step.created` (v1)
 - `tool.invoked` (v1)
 - `tool.succeeded` (v1)
@@ -116,6 +123,9 @@ Some runtime safety contracts are projection/API level (not standalone events):
 - Lease endpoints:
   - `POST /v1/runs/:id/lease/heartbeat`
   - `POST /v1/runs/:id/lease/release`
+- Evidence endpoints:
+  - `GET /v1/runs/:id/evidence`
+  - `POST /v1/runs/:id/evidence/finalize`
 - Engine trust-boundary endpoints:
   - `POST /v1/engines/register`
   - `POST /v1/engines/:engineId/tokens/issue`

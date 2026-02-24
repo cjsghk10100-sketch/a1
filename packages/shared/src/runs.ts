@@ -21,6 +21,7 @@ export type StepStatus = (typeof StepStatus)[keyof typeof StepStatus];
 
 export interface RunCreatedDataV1 {
   run_id: RunId;
+  experiment_id?: string;
   title?: string;
   goal?: string;
   input?: Record<string, unknown>;
