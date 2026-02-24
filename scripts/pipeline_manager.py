@@ -21,16 +21,18 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def parse_number(val: str):
+def parse_number(val: str, percent_or_ratio: bool = True):
     v = val.strip().replace('%', '')
     try:
         num = float(v)
     except ValueError:
         return None
+    if not percent_or_ratio:
+        return num
     if '%' in val:
         return num / 100.0
     if num > 1.0:
-        # tolerate 0~100 scale inputs
+        # tolerate 0~100 scale inputs for ratio-like metrics
         return num / 100.0
     return num
 
@@ -55,14 +57,16 @@ def parse_file(path: Path):
     has_eval = bool(re.search(r'(?im)^\s*eval\s*:', text))
     has_learn = bool(re.search(r'(?im)^\s*learn\s*:', text))
 
-    def pick(key: str):
+    def pick(key: str, percent_or_ratio: bool = True):
         m = re.search(rf'(?im)^\s*{key}\s*:\s*([^\n]+)', text)
-        return parse_number(m.group(1)) if m else None
+        return parse_number(m.group(1), percent_or_ratio=percent_or_ratio) if m else None
 
     kpi = {
-        'success_rate': pick('success_rate'),
-        'drift': pick('drift'),
-        'reproducibility': pick('reproducibility'),
+        'success_rate': pick('success_rate', percent_or_ratio=True),
+        'drift': pick('drift', percent_or_ratio=True),
+        'reproducibility': pick('reproducibility', percent_or_ratio=True),
+        'revenue_usdc': pick('revenue_usdc', percent_or_ratio=False),
+        'token_cost_usdc': pick('token_cost_usdc', percent_or_ratio=False),
     }
 
     return {
@@ -105,6 +109,8 @@ LEARN: keep this format
 success_rate: 95%
 drift: 3%
 reproducibility: 100%
+revenue_usdc: 3.0
+token_cost_usdc: 0.5
 """,
         'PRJ-PIPELINE-FAIL-MISSING_v1.md': """# FAIL sample
 approval_id: APR-1002
@@ -121,6 +127,8 @@ LEARN: exists
 success_rate: 70%
 drift: 25%
 reproducibility: 60%
+revenue_usdc: 2.0
+token_cost_usdc: 1.8
 """,
     }
     for name, content in samples.items():
@@ -145,6 +153,9 @@ def main():
     ap.add_argument('--min-success', type=float, default=0.90)
     ap.add_argument('--max-drift', type=float, default=0.10)
     ap.add_argument('--min-repro', type=float, default=0.90)
+    ap.add_argument('--default-revenue-usdc', type=float, default=0.0)
+    ap.add_argument('--default-token-cost-usdc', type=float, default=0.0)
+    ap.add_argument('--min-margin-rate', type=float, default=0.0, help='0.0~1.0, e.g., 0.2 means 20%%')
 
     args = ap.parse_args()
 
@@ -207,6 +218,22 @@ def main():
         if kpi['reproducibility'] is None or kpi['reproducibility'] < args.min_repro:
             reasons.append('kpi_reproducibility_fail')
 
+        revenue = kpi['revenue_usdc'] if kpi['revenue_usdc'] is not None else args.default_revenue_usdc
+        token_cost = kpi['token_cost_usdc'] if kpi['token_cost_usdc'] is not None else args.default_token_cost_usdc
+        if revenue < 0 or token_cost < 0:
+            reasons.append('econ_invalid_negative_values')
+            margin_rate = None
+        elif revenue == 0:
+            margin_rate = None
+        else:
+            margin_rate = (revenue - token_cost) / revenue
+            if margin_rate < args.min_margin_rate:
+                reasons.append('kpi_margin_rate_fail')
+
+        kpi['revenue_usdc'] = revenue
+        kpi['token_cost_usdc'] = token_cost
+        kpi['margin_rate'] = margin_rate
+
         if reasons:
             action = 'demote'
 
@@ -220,6 +247,11 @@ def main():
         if reasons:
             write_incident(incidents, d, dry_run)
 
+    margins = [d.kpi.get('margin_rate') for d in decisions if d.kpi.get('margin_rate') is not None]
+    total_revenue = sum((d.kpi.get('revenue_usdc') or 0.0) for d in decisions)
+    total_token_cost = sum((d.kpi.get('token_cost_usdc') or 0.0) for d in decisions)
+    total_net_margin = total_revenue - total_token_cost
+
     summary = {
         'time_utc': now_iso(),
         'dry_run': dry_run,
@@ -227,6 +259,13 @@ def main():
             'total': len(decisions),
             'promote': sum(1 for d in decisions if d.action == 'promote'),
             'demote': sum(1 for d in decisions if d.action == 'demote'),
+        },
+        'economics': {
+            'total_revenue_usdc': total_revenue,
+            'total_token_cost_usdc': total_token_cost,
+            'total_net_margin_usdc': total_net_margin,
+            'avg_margin_rate': (sum(margins) / len(margins)) if margins else None,
+            'min_margin_rate_required': args.min_margin_rate,
         },
         'decisions': [asdict(d) for d in decisions],
     }
