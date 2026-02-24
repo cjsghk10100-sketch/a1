@@ -48,6 +48,10 @@
 - 로컬 파일 시스템에서 앱으로 새로운 데이터(Goal, Portfolio, Artifact 등)를 반입할 수 있는 유일한 물리적 창구는 `20_PIPELINE/_drop/` 폴더로 한정한다.
 - `_drop` 인입은 **완료 신호가 있는 파일만** 허용한다. (`.tmp → .md` 원자적 rename 또는 `.ready` 마커)
 - 동기화 어댑터는 파일 안정화 조건(**debounce + size-stable**)을 만족할 때만 ingest한다.
+- ingest/approve/promote/demote/incident 전 단계에서 `idempotency_key`를 필수로 사용한다.
+- `dry-run`과 `real-run`의 실행 주체(계정/토큰/권한)는 완전히 분리한다.
+- SLA 판정 시각은 파일 mtime이 아니라 **앱 이벤트 시각 또는 서버 수신 시각**을 기준으로 한다.
+- 드리프트/실패 시 자동 롤백 한계와 수동 승인 경계를 명문화해 경계 밖 자동 조치를 금지한다.
 
 ### 1.2 MIN_ORG 동기화 규칙
 - `MIN_ORG/` 문서는 이식/복구용 원문 저장소로 유지한다.
@@ -55,10 +59,10 @@
 - 내용 변경 시 `memory/ops/`를 먼저 수정하고 `MIN_ORG/`는 링크/출처만 갱신한다.
 
 - **최상위(규범) SSOT**: `memory/ops/COMMON_CONSTITUTION_V1.md`
-- **운영(메모리 런타임) SSOT**: `memory/ops/MEMORY_RUNTIME_SSOT.md`
-- **현재 상태 SSOT**: `memory/state.md`
+- **운영 상태 SSOT**: `앱 이벤트 스토어(evt_events)`
+- **런타임 표시판(Projection)**: `memory/state.md`
 
-해석 우선순위는 **헌법 > 런타임 SSOT > 상태 파일** 순서를 따른다.
+해석 우선순위는 **헌법 > 앱 이벤트 SSOT > 런타임 표시판** 순서를 따른다.
 
 ---
 
