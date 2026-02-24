@@ -69,7 +69,7 @@ Optional desktop env vars:
 - `DESKTOP_WEB_PORT` (default `5173`)
 - `DESKTOP_API_START_TIMEOUT_MS` (default `45000`)
 - `DESKTOP_WEB_START_TIMEOUT_MS` (default `45000`)
-- `DESKTOP_BOOTSTRAP_TOKEN` (optional; forwarded as API bootstrap token + web bootstrap header)
+- `DESKTOP_BOOTSTRAP_TOKEN` (optional fixed token; when omitted desktop generates an ephemeral token and injects it into API+web automatically)
 - `DESKTOP_OWNER_PASSPHRASE` (optional; forwarded to web as owner bootstrap/login passphrase)
 - `DESKTOP_RUNNER_MODE` (default `embedded`, allowed: `embedded|external`)
 - `DESKTOP_ENGINE_WORKSPACE_ID` (default `ws_dev`, external mode only)

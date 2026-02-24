@@ -1,4 +1,5 @@
 const { spawn } = require("node:child_process");
+const { randomBytes } = require("node:crypto");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
@@ -74,8 +75,10 @@ const engineActorId = process.env.DESKTOP_ENGINE_ACTOR_ID?.trim() || "desktop_en
 const enginePollMs = parsePositiveInt(process.env.DESKTOP_ENGINE_POLL_MS, 1200);
 const engineMaxClaimsPerCycle = parsePositiveInt(process.env.DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE, 1);
 const engineBearerToken = process.env.DESKTOP_ENGINE_BEARER_TOKEN?.trim() || "";
-const bootstrapToken =
+const configuredBootstrapToken =
   process.env.DESKTOP_BOOTSTRAP_TOKEN?.trim() || process.env.AUTH_BOOTSTRAP_TOKEN?.trim() || "";
+const bootstrapToken =
+  configuredBootstrapToken || `desktop_bootstrap_${randomBytes(24).toString("hex")}`;
 const ownerPassphrase =
   process.env.DESKTOP_OWNER_PASSPHRASE?.trim() ||
   process.env.VITE_AUTH_OWNER_PASSPHRASE?.trim() ||
@@ -143,7 +146,7 @@ const components = {
       RUN_WORKER_EMBEDDED: runnerMode === "embedded" ? "1" : "0",
       AUTH_REQUIRE_SESSION: "1",
       AUTH_ALLOW_LEGACY_WORKSPACE_HEADER: runnerMode === "external" ? "1" : "0",
-      ...(bootstrapToken ? { AUTH_BOOTSTRAP_TOKEN: bootstrapToken } : {}),
+      AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
     },
     ready_url: `http://127.0.0.1:${apiPort}/health`,
     ready_timeout_ms: apiTimeoutMs,
@@ -163,7 +166,7 @@ const components = {
       VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
       VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
       ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
-      ...(bootstrapToken ? { VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken } : {}),
+      VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
     },
     ready_url: webBaseUrl,
     ready_timeout_ms: webTimeoutMs,

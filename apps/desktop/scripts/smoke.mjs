@@ -60,12 +60,13 @@ async function fetchJson(url, options = {}) {
   return { status: res.status, json };
 }
 
-async function ensureOwnerSession(baseUrl, workspaceId) {
+async function ensureOwnerSession(baseUrl, workspaceId, bootstrapToken) {
   const passphrase = `smoke_owner_${workspaceId}`;
   const bootstrap = await fetchJson(`${baseUrl}/v1/auth/bootstrap-owner`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...(bootstrapToken ? { "x-bootstrap-token": bootstrapToken } : {}),
     },
     body: JSON.stringify({
       workspace_id: workspaceId,
@@ -198,7 +199,8 @@ async function main() {
 
   const apiPort = await reservePort();
   const webPort = await reservePort();
-  const workspaceId = `ws_smoke_${mode}`;
+  const workspaceId = `ws_smoke_${mode}_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+  const bootstrapToken = `smoke_bootstrap_${mode}`;
   const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
   const env = {
@@ -212,6 +214,7 @@ async function main() {
     DESKTOP_ENGINE_ACTOR_ID: `smoke_${mode}_engine`,
     DESKTOP_ENGINE_POLL_MS: "300",
     DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: "1",
+    DESKTOP_BOOTSTRAP_TOKEN: bootstrapToken,
   };
 
   const child = spawnDesktop(env);
@@ -223,7 +226,7 @@ async function main() {
   try {
     await waitForHealth(apiBaseUrl);
     await waitForBootstrap(webPort);
-    const accessToken = await ensureOwnerSession(apiBaseUrl, workspaceId);
+    const accessToken = await ensureOwnerSession(apiBaseUrl, workspaceId, bootstrapToken);
     if (!accessToken) throw new Error("smoke_auth_token_missing");
     const { runId, headers } = await createSmokeRun(apiBaseUrl, workspaceId, accessToken);
     await waitForRunSucceeded(apiBaseUrl, runId, headers);
