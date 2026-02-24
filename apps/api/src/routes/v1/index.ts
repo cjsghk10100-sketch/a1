@@ -22,6 +22,7 @@ import { registerPolicyRoutes } from "./policy.js";
 import { registerPrincipalRoutes } from "./principals.js";
 import { registerResourceLabelRoutes } from "./resourceLabels.js";
 import { registerRunRoutes } from "./runs.js";
+import { registerScorecardRoutes } from "./scorecards.js";
 import { registerSearchRoutes } from "./search.js";
 import { registerSnapshotRoutes } from "./snapshots.js";
 import { registerSurvivalRoutes } from "./survival.js";
@@ -59,6 +60,7 @@ export async function registerV1Routes(
   await registerPrincipalRoutes(app, pool);
   await registerResourceLabelRoutes(app, pool);
   await registerRunRoutes(app, pool);
+  await registerScorecardRoutes(app, pool);
   await registerSearchRoutes(app, pool);
   await registerSnapshotRoutes(app, pool);
   await registerSurvivalRoutes(app, pool);

@@ -100,6 +100,8 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `experiment.created` (v1)
 - `experiment.updated` (v1)
 - `experiment.closed` (v1)
+- `scorecard.recorded` (v1)
+- `lesson.logged` (v1)
 
 ## Implemented Non-Event Runtime Contracts
 
@@ -131,6 +133,13 @@ These contracts are intentionally non-event to avoid noise while preserving run 
 Evidence manifest contracts:
 - `GET /v1/runs/:runId/evidence`
 - `POST /v1/runs/:runId/evidence/finalize`
+
+Scorecard and lesson contracts:
+- `POST /v1/scorecards`
+- `GET /v1/scorecards`
+- `GET /v1/scorecards/:scorecardId`
+- `POST /v1/lessons`
+- `GET /v1/lessons`
 
 ## Planned Event Families (vNext)
 

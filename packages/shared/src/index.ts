@@ -15,6 +15,7 @@ export * from "./lifecycle.js";
 export * from "./learning.js";
 export * from "./policy.js";
 export * from "./runs.js";
+export * from "./scorecards.js";
 export * from "./secrets.js";
 export * from "./snapshots.js";
 export * from "./skills_ledger.js";
