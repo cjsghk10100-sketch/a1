@@ -108,7 +108,7 @@ export async function registerAuthRoutes(
         authSessionConfig(config).sessionSecret,
         bearerToken,
       );
-      trustedBySession = Boolean(session);
+      trustedBySession = Boolean(session && session.workspace_id === workspace_id);
     }
 
     const trustedByLoopback =

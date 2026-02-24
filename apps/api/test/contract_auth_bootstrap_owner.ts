@@ -159,7 +159,20 @@ async function main(): Promise<void> {
       },
       { authorization: `Bearer ${accessToken}` },
     );
-    assert.equal(bootstrapBySession.status, 201);
+    assert.equal(bootstrapBySession.status, 403);
+    assert.deepEqual(bootstrapBySession.json, { error: "bootstrap_forbidden" });
+
+    const bootstrapWorkspaceBWithToken = await requestJson(
+      baseUrl,
+      "POST",
+      "/v1/auth/bootstrap-owner",
+      {
+        workspace_id: workspaceB,
+        display_name: "Owner B",
+      },
+      { "x-bootstrap-token": bootstrapToken },
+    );
+    assert.equal(bootstrapWorkspaceBWithToken.status, 201);
   } finally {
     await app.close();
   }
