@@ -165,7 +165,11 @@ export function OpsPage(): JSX.Element {
                     <li key={component.name} className="opsRow">
                       <div className="opsRowTitle mono">{component.name}</div>
                       <div className="opsRowMeta mono">
-                        {component.state} | pid={component.pid ?? "—"} | restart={component.restart_attempts}
+                        {t("ops.runtime.component_meta", {
+                          state: component.state,
+                          pid: component.pid ?? "—",
+                          restart: component.restart_attempts,
+                        })}
                       </div>
                     </li>
                   ))}
@@ -214,11 +218,11 @@ export function OpsPage(): JSX.Element {
               {leaseRiskRuns.map(({ run, seconds_left }) => (
                 <li key={run.run_id} className="opsRow">
                   <div className="opsRowTitle mono">
-                    {run.run_id} ({run.room_id ?? "no-room"})
+                    {run.run_id} ({run.room_id ?? t("ops.lease.no_room")})
                   </div>
                   <div className="opsRowMeta mono">
-                    {t("ops.lease.expires_in", { seconds: seconds_left ?? "?" })} | actor=
-                    {run.claimed_by_actor_id ?? "—"}
+                    {t("ops.lease.expires_in", { seconds: seconds_left ?? "?" })} |{" "}
+                    {t("ops.lease.actor", { actor: run.claimed_by_actor_id ?? "—" })}
                   </div>
                 </li>
               ))}
