@@ -41,6 +41,7 @@
 2. 상태 전이의 단방향성 (One-way State Mutation)
 - 폴더 간 파일 이동으로 상태를 변경하는 것을 엄격히 금지한다. (SSOT 붕괴 원인)
 - 승인, 실행, 증거 제출, 승격/강등 등 모든 상태 전이는 반드시 앱 API(이벤트 추가)를 통해서만 이루어져야 한다.
+- `pipeline_manager`는 **sync adapter**로만 동작하며, 상태 판단/승인/승격/강등 결정권을 갖지 않는다.
 
 3. 물리적 폴더의 자가치유 (Self-healing Projection)
 - 사용자가 임의로 파이프라인 폴더 내의 파일을 이동하거나 수정하여 앱 DB와 상태가 엇갈릴 경우(Drift), 동기화 어댑터는 이를 Incident로 기록하고 즉시 **앱 DB 상태를 기준으로 폴더를 덮어씌워 원복(Rollback)**한다.
@@ -224,8 +225,9 @@
 
 
 참조: `references/ops/CLAUDE_v3.0.md`
-참조: `/Users/min/Desktop/1212.md`
 참조: `MIN_ORG/01_CONSTITUTION/EXPERIMENT_SPEC.md`
 참조: `MIN_ORG/01_CONSTITUTION/PROMOTION_PIPELINE.md`
 참조: `MIN_ORG/01_CONSTITUTION/RISK_POLICY.md`
 참조: `MIN_ORG/01_CONSTITUTION/DATA_OBJECTS.md`
+참조: `/Users/min/Desktop/1.md`
+참조: `/Users/min/Desktop/3.md`

@@ -11,13 +11,15 @@ pipeline_manager ↔ app integration operating consensus (v1)
 
 ## 1) Core Facts (First Principles)
 1. 목적은 자동화 자체가 아니라 **통제 가능한 실행 + 증거 축적 + 학습 루프**다.
-2. `pipeline_manager`는 **상태 전이 관리자(운영 심장)**이고, 앱은 **통제/가시화 인터페이스**다.
+2. `pipeline_manager`는 **sync adapter(프로젝션/인입 어댑터)**이고, 앱은 **상태 전이 관리자(운영 심장)**다.
 3. 진실 원천은 설명이 아니라 **로그·증거·상태 파일(incident/rollback 포함)**이다.
 
 ## 2) Hard Constraints
 1. 기본 모드는 **dry-run** 고정. real-run은 명시 플래그 + 승인 무결성(승인자/시각/근거) 필수.
 2. 승격은 `EVIDENCE/EVAL/LEARN` + 출처/경로 검증 **ALL PASS**일 때만 허용.
 3. 실패 시 즉시 demote/rollback + `incident_code` 기록. 내부 추론/중간 로그는 사용자 비노출.
+4. adapter는 projection/ingest만 수행하며 승인/승격/강등 판단을 수행하지 않는다.
+5. 상태 전이의 단일 경로는 앱 API 이벤트다(폴더 이동으로 상태 변경 금지).
 
 ## 3) Immediate Actions
 1. CLI/API 규약 고정

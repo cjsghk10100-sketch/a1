@@ -23,6 +23,12 @@
 4) Execute: 승인된 건만 실행
 - 내부 협업/추론은 비공개 작업 구역에서 처리
 
+### Adapter Role Boundary (고정)
+- `pipeline_manager`는 **sync adapter 전용**이다.
+- adapter 책임: app→folder projection 렌더링, `_drop` 제한 인입, drift 감지/기록.
+- adapter 금지: 승인/승격/강등 판단, 폴더 이동 기반 상태 전이 결정.
+- 상태 전이 판단은 앱 API/정책 게이트에서만 수행한다.
+
 ### Phase 3: 증명 및 학습
 5) Evidence: `EVIDENCE_STANDARD` 충족 여부 기계 검증
 - 증거 누락 시 즉시 Execute 단계로 롤백
