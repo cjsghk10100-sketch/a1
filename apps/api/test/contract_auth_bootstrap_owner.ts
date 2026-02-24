@@ -92,141 +92,202 @@ async function main(): Promise<void> {
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
 
-  const pool = createPool(databaseUrl);
-  const bootstrapToken = `bootstrap_${randomUUID().slice(0, 8)}`;
-  const app = await buildServer({
-    config: {
-      port: 0,
-      databaseUrl,
-      authRequireSession: true,
-      authAllowLegacyWorkspaceHeader: false,
-      authBootstrapAllowLoopback: false,
-      authBootstrapToken: bootstrapToken,
-    },
-    pool,
-  });
-  await app.listen({ host: "127.0.0.1", port: 0 });
-  const address = app.server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected tcp address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const prevAuthSessionSecret = process.env.AUTH_SESSION_SECRET;
+  const prevBootstrapAllowLoopback = process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK;
+  process.env.AUTH_SESSION_SECRET = `session_secret_${randomUUID().slice(0, 10)}`;
+  delete process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK;
 
+  const primaryPool = createPool(databaseUrl);
   try {
-    const workspaceA = `ws_bootstrap_a_${randomUUID().slice(0, 6)}`;
-    const workspaceB = `ws_bootstrap_b_${randomUUID().slice(0, 6)}`;
-    const workspaceAPassphrase = `pass_${workspaceA}`;
-    const workspaceBPassphrase = `pass_${workspaceB}`;
-
-    const unauthorized = await requestJson(baseUrl, "POST", "/v1/auth/bootstrap-owner", {
-      workspace_id: workspaceA,
-      display_name: "Owner A",
+    const bootstrapToken = `bootstrap_${randomUUID().slice(0, 8)}`;
+    const app = await buildServer({
+      config: {
+        port: 0,
+        databaseUrl,
+        authRequireSession: true,
+        authAllowLegacyWorkspaceHeader: false,
+        authBootstrapAllowLoopback: false,
+        authBootstrapToken: bootstrapToken,
+      },
+      pool: primaryPool,
     });
-    assert.equal(unauthorized.status, 403);
-    assert.deepEqual(unauthorized.json, { error: "bootstrap_forbidden" });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const address = app.server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected tcp address");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
 
-    const wrongToken = await requestJson(
-      baseUrl,
-      "POST",
-      "/v1/auth/bootstrap-owner",
-      {
+    try {
+      const workspaceA = `ws_bootstrap_a_${randomUUID().slice(0, 6)}`;
+      const workspaceB = `ws_bootstrap_b_${randomUUID().slice(0, 6)}`;
+      const workspaceAPassphrase = `pass_${workspaceA}`;
+      const workspaceBPassphrase = `pass_${workspaceB}`;
+
+      const unauthorized = await requestJson(baseUrl, "POST", "/v1/auth/bootstrap-owner", {
         workspace_id: workspaceA,
         display_name: "Owner A",
+      });
+      assert.equal(unauthorized.status, 403);
+      assert.deepEqual(unauthorized.json, { error: "bootstrap_forbidden" });
+
+      const wrongToken = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/auth/bootstrap-owner",
+        {
+          workspace_id: workspaceA,
+          display_name: "Owner A",
+          passphrase: workspaceAPassphrase,
+        },
+        { "x-bootstrap-token": `${bootstrapToken}_wrong` },
+      );
+      assert.equal(wrongToken.status, 403);
+      assert.deepEqual(wrongToken.json, { error: "bootstrap_forbidden" });
+
+      const missingPassphrase = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/auth/bootstrap-owner",
+        {
+          workspace_id: workspaceA,
+          display_name: "Owner A",
+        },
+        { "x-bootstrap-token": bootstrapToken },
+      );
+      assert.equal(missingPassphrase.status, 400);
+      assert.deepEqual(missingPassphrase.json, { error: "missing_passphrase" });
+
+      const bootstrapped = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/auth/bootstrap-owner",
+        {
+          workspace_id: workspaceA,
+          display_name: "Owner A",
+          passphrase: workspaceAPassphrase,
+        },
+        { "x-bootstrap-token": bootstrapToken },
+      );
+      assert.equal(bootstrapped.status, 201);
+      const accessToken = readAccessToken(bootstrapped.json);
+
+      const roomsByAccessToken = await requestJson(
+        baseUrl,
+        "GET",
+        "/v1/rooms",
+        undefined,
+        { authorization: `Bearer ${accessToken}` },
+      );
+      assert.equal(roomsByAccessToken.status, 200);
+
+      const loginMissingPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+        workspace_id: workspaceA,
+      });
+      assert.equal(loginMissingPassphrase.status, 401);
+      assert.deepEqual(loginMissingPassphrase.json, { error: "invalid_credentials" });
+
+      const loginWrongPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+        workspace_id: workspaceA,
+        passphrase: `${workspaceAPassphrase}_wrong`,
+      });
+      assert.equal(loginWrongPassphrase.status, 401);
+      assert.deepEqual(loginWrongPassphrase.json, { error: "invalid_credentials" });
+
+      const loginCorrectPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+        workspace_id: workspaceA,
         passphrase: workspaceAPassphrase,
-      },
-      { "x-bootstrap-token": `${bootstrapToken}_wrong` },
-    );
-    assert.equal(wrongToken.status, 403);
-    assert.deepEqual(wrongToken.json, { error: "bootstrap_forbidden" });
+      });
+      assert.equal(loginCorrectPassphrase.status, 200);
 
-    const missingPassphrase = await requestJson(
-      baseUrl,
-      "POST",
-      "/v1/auth/bootstrap-owner",
-      {
-        workspace_id: workspaceA,
-        display_name: "Owner A",
-      },
-      { "x-bootstrap-token": bootstrapToken },
-    );
-    assert.equal(missingPassphrase.status, 400);
-    assert.deepEqual(missingPassphrase.json, { error: "missing_passphrase" });
+      const bootstrapBySession = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/auth/bootstrap-owner",
+        {
+          workspace_id: workspaceB,
+          display_name: "Owner B",
+          passphrase: workspaceBPassphrase,
+        },
+        { authorization: `Bearer ${accessToken}` },
+      );
+      assert.equal(bootstrapBySession.status, 403);
+      assert.deepEqual(bootstrapBySession.json, { error: "bootstrap_forbidden" });
 
-    const bootstrapped = await requestJson(
-      baseUrl,
-      "POST",
-      "/v1/auth/bootstrap-owner",
-      {
-        workspace_id: workspaceA,
-        display_name: "Owner A",
-        passphrase: workspaceAPassphrase,
-      },
-      { "x-bootstrap-token": bootstrapToken },
-    );
-    assert.equal(bootstrapped.status, 201);
-    const accessToken = readAccessToken(bootstrapped.json);
+      const bootstrapWorkspaceBWithToken = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/auth/bootstrap-owner",
+        {
+          workspace_id: workspaceB,
+          display_name: "Owner B",
+          passphrase: workspaceBPassphrase,
+        },
+        { "x-bootstrap-token": bootstrapToken },
+      );
+      assert.equal(bootstrapWorkspaceBWithToken.status, 201);
 
-    const loginMissingPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
-      workspace_id: workspaceA,
-    });
-    assert.equal(loginMissingPassphrase.status, 401);
-    assert.deepEqual(loginMissingPassphrase.json, { error: "invalid_credentials" });
+      await primaryPool.query(
+        `UPDATE sec_local_owners
+         SET passphrase_hash = NULL
+         WHERE workspace_id = $1`,
+        [workspaceB],
+      );
 
-    const loginWrongPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
-      workspace_id: workspaceA,
-      passphrase: `${workspaceAPassphrase}_wrong`,
-    });
-    assert.equal(loginWrongPassphrase.status, 401);
-    assert.deepEqual(loginWrongPassphrase.json, { error: "invalid_credentials" });
-
-    const loginCorrectPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
-      workspace_id: workspaceA,
-      passphrase: workspaceAPassphrase,
-    });
-    assert.equal(loginCorrectPassphrase.status, 200);
-
-    const bootstrapBySession = await requestJson(
-      baseUrl,
-      "POST",
-      "/v1/auth/bootstrap-owner",
-      {
+      const loginUnsetPassphraseHash = await requestJson(baseUrl, "POST", "/v1/auth/login", {
         workspace_id: workspaceB,
-        display_name: "Owner B",
         passphrase: workspaceBPassphrase,
+      });
+      assert.equal(loginUnsetPassphraseHash.status, 401);
+      assert.deepEqual(loginUnsetPassphraseHash.json, { error: "invalid_credentials" });
+    } finally {
+      await app.close();
+    }
+
+    const loopbackPool = createPool(databaseUrl);
+    const loopbackDisabledByDefaultApp = await buildServer({
+      config: {
+        port: 0,
+        databaseUrl,
+        authRequireSession: true,
+        authAllowLegacyWorkspaceHeader: false,
       },
-      { authorization: `Bearer ${accessToken}` },
-    );
-    assert.equal(bootstrapBySession.status, 403);
-    assert.deepEqual(bootstrapBySession.json, { error: "bootstrap_forbidden" });
-
-    const bootstrapWorkspaceBWithToken = await requestJson(
-      baseUrl,
-      "POST",
-      "/v1/auth/bootstrap-owner",
-      {
-        workspace_id: workspaceB,
-        display_name: "Owner B",
-        passphrase: workspaceBPassphrase,
-      },
-      { "x-bootstrap-token": bootstrapToken },
-    );
-    assert.equal(bootstrapWorkspaceBWithToken.status, 201);
-
-    await pool.query(
-      `UPDATE sec_local_owners
-       SET passphrase_hash = NULL
-       WHERE workspace_id = $1`,
-      [workspaceB],
-    );
-
-    const loginUnsetPassphraseHash = await requestJson(baseUrl, "POST", "/v1/auth/login", {
-      workspace_id: workspaceB,
-      passphrase: workspaceBPassphrase,
+      pool: loopbackPool,
     });
-    assert.equal(loginUnsetPassphraseHash.status, 401);
-    assert.deepEqual(loginUnsetPassphraseHash.json, { error: "invalid_credentials" });
+    await loopbackDisabledByDefaultApp.listen({ host: "127.0.0.1", port: 0 });
+    const loopbackDisabledAddress = loopbackDisabledByDefaultApp.server.address();
+    if (!loopbackDisabledAddress || typeof loopbackDisabledAddress === "string") {
+      throw new Error("expected tcp address");
+    }
+    const loopbackDisabledBaseUrl = `http://127.0.0.1:${loopbackDisabledAddress.port}`;
+    try {
+      const workspaceLoopback = `ws_bootstrap_loopback_${randomUUID().slice(0, 6)}`;
+      const loopbackBootstrap = await requestJson(
+        loopbackDisabledBaseUrl,
+        "POST",
+        "/v1/auth/bootstrap-owner",
+        {
+          workspace_id: workspaceLoopback,
+          display_name: "Loopback Owner",
+          passphrase: `pass_${workspaceLoopback}`,
+        },
+      );
+      assert.equal(loopbackBootstrap.status, 403);
+      assert.deepEqual(loopbackBootstrap.json, { error: "bootstrap_forbidden" });
+    } finally {
+      await loopbackDisabledByDefaultApp.close();
+    }
   } finally {
-    await app.close();
+    if (typeof prevAuthSessionSecret === "string") {
+      process.env.AUTH_SESSION_SECRET = prevAuthSessionSecret;
+    } else {
+      delete process.env.AUTH_SESSION_SECRET;
+    }
+    if (typeof prevBootstrapAllowLoopback === "string") {
+      process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK = prevBootstrapAllowLoopback;
+    } else {
+      delete process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK;
+    }
   }
 }
 
