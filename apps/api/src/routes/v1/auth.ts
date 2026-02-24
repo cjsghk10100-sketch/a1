@@ -53,13 +53,43 @@ function isLoopbackIp(ip: string | undefined): boolean {
   );
 }
 
+function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
+  if (!raw) return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value === "1" || value === "true" || value === "yes" || value === "on") return true;
+  if (value === "0" || value === "false" || value === "no" || value === "off") return false;
+  return fallback;
+}
+
+function resolveAuthSessionSecret(config: AppConfig): string {
+  return (
+    config.authSessionSecret ??
+    process.env.AUTH_SESSION_SECRET?.trim() ??
+    "agentapp_local_dev_session_secret"
+  );
+}
+
+function resolveAuthBootstrapToken(config: AppConfig): string | undefined {
+  const resolved = config.authBootstrapToken ?? process.env.AUTH_BOOTSTRAP_TOKEN;
+  if (typeof resolved !== "string") return undefined;
+  const token = resolved.trim();
+  return token.length > 0 ? token : undefined;
+}
+
+function resolveAuthBootstrapAllowLoopback(config: AppConfig): boolean {
+  if (typeof config.authBootstrapAllowLoopback === "boolean") {
+    return config.authBootstrapAllowLoopback;
+  }
+  return parseBoolean(process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK, false);
+}
+
 function authSessionConfig(config: AppConfig): {
   sessionSecret: string;
   accessTtlSec: number;
   refreshTtlSec: number;
 } {
   return {
-    sessionSecret: config.authSessionSecret ?? "agentapp_local_dev_session_secret",
+    sessionSecret: resolveAuthSessionSecret(config),
     accessTtlSec: config.authSessionAccessTtlSec ?? 3600,
     refreshTtlSec: config.authSessionRefreshTtlSec ?? 60 * 60 * 24 * 30,
   };
@@ -79,6 +109,10 @@ export async function registerAuthRoutes(
   pool: DbPool,
   config: AppConfig,
 ): Promise<void> {
+  const sessionConfig = authSessionConfig(config);
+  const bootstrapToken = resolveAuthBootstrapToken(config);
+  const bootstrapAllowLoopback = resolveAuthBootstrapAllowLoopback(config);
+
   app.post<{
     Body: { workspace_id?: string; display_name?: string; passphrase?: string };
   }>("/v1/auth/bootstrap-owner", async (req, reply) => {
@@ -92,27 +126,24 @@ export async function registerAuthRoutes(
     const bootstrapTokenHeader =
       getHeaderString(req.headers["x-bootstrap-token"] as string | string[] | undefined) ??
       getHeaderString(req.headers["x-auth-bootstrap-token"] as string | string[] | undefined);
-    const hasConfiguredBootstrapToken =
-      typeof config.authBootstrapToken === "string" &&
-      config.authBootstrapToken.length > 0;
+    const hasConfiguredBootstrapToken = typeof bootstrapToken === "string";
     const bootstrapTokenAccepted =
       hasConfiguredBootstrapToken &&
       bootstrapTokenHeader != null &&
-      bootstrapTokenHeader === config.authBootstrapToken;
+      bootstrapTokenHeader === bootstrapToken;
 
     const bearerToken = parseBearerToken(req.headers.authorization);
     let trustedBySession = false;
     if (bearerToken) {
       const session = await findSessionByAccessToken(
         pool,
-        authSessionConfig(config).sessionSecret,
+        sessionConfig.sessionSecret,
         bearerToken,
       );
       trustedBySession = Boolean(session && session.workspace_id === workspace_id);
     }
 
-    const trustedByLoopback =
-      config.authBootstrapAllowLoopback !== false && isLoopbackIp(req.ip);
+    const trustedByLoopback = bootstrapAllowLoopback && isLoopbackIp(req.ip);
 
     if (!bootstrapTokenAccepted && !trustedBySession && !trustedByLoopback) {
       return reply.code(403).send({ error: "bootstrap_forbidden" });
@@ -152,7 +183,7 @@ export async function registerAuthRoutes(
     const owner = await findOwnerByWorkspace(pool, workspace_id);
     if (!owner) return reply.code(500).send({ error: "owner_not_found_after_create" });
 
-    const issued = await issueOwnerSession(pool, owner, authSessionConfig(config), {
+    const issued = await issueOwnerSession(pool, owner, sessionConfig, {
       user_agent: req.headers["user-agent"],
       created_ip: req.ip,
     });
@@ -184,7 +215,7 @@ export async function registerAuthRoutes(
       return reply.code(401).send({ error: "invalid_credentials" });
     }
 
-    const issued = await issueOwnerSession(pool, owner, authSessionConfig(config), {
+    const issued = await issueOwnerSession(pool, owner, sessionConfig, {
       user_agent: req.headers["user-agent"],
       created_ip: req.ip,
     });
@@ -207,10 +238,10 @@ export async function registerAuthRoutes(
     if (!refresh_token) return reply.code(400).send({ error: "missing_refresh_token" });
 
     const rotated = await rotateSessionByRefreshToken(pool, {
-      sessionSecret: authSessionConfig(config).sessionSecret,
+      sessionSecret: sessionConfig.sessionSecret,
       refreshToken: refresh_token,
-      accessTtlSec: authSessionConfig(config).accessTtlSec,
-      refreshTtlSec: authSessionConfig(config).refreshTtlSec,
+      accessTtlSec: sessionConfig.accessTtlSec,
+      refreshTtlSec: sessionConfig.refreshTtlSec,
     });
     if (!rotated) return reply.code(401).send({ error: "invalid_refresh_token" });
 
@@ -230,7 +261,7 @@ export async function registerAuthRoutes(
       revoked =
         (await revokeSessionByAccessToken(
           pool,
-          authSessionConfig(config).sessionSecret,
+          sessionConfig.sessionSecret,
           headerToken,
         )) || revoked;
     }
@@ -238,7 +269,7 @@ export async function registerAuthRoutes(
       revoked =
         (await revokeSessionByRefreshToken(
           pool,
-          authSessionConfig(config).sessionSecret,
+          sessionConfig.sessionSecret,
           refresh_token,
         )) || revoked;
     }
@@ -252,7 +283,7 @@ export async function registerAuthRoutes(
 
     const session = await findSessionByAccessToken(
       pool,
-      authSessionConfig(config).sessionSecret,
+      sessionConfig.sessionSecret,
       token,
     );
     if (!session) return reply.code(401).send({ error: "invalid_session" });
