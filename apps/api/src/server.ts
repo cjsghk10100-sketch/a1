@@ -56,12 +56,38 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
     return normalized.length ? normalized : null;
   }
 
+  function requestPath(url: string): string {
+    return url.split("?")[0] ?? url;
+  }
+
+  function isEngineTokenRoute(url: string): boolean {
+    const path = requestPath(url);
+    if (path === "/v1/runs/claim") return true;
+    return /^\/v1\/runs\/[^/]+\/lease\/(heartbeat|release)$/.test(path);
+  }
+
+  function hasEngineTokenHeaders(headers: Record<string, unknown>): boolean {
+    const rawId = headers["x-engine-id"];
+    const rawToken = headers["x-engine-token"];
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
+    const token = Array.isArray(rawToken) ? rawToken[0] : rawToken;
+    return (
+      typeof id === "string" &&
+      id.trim().length > 0 &&
+      typeof token === "string" &&
+      token.trim().length > 0
+    );
+  }
+
   await registerHealthRoutes(app, ctx.pool);
 
   app.addHook("preHandler", async (req, reply) => {
     if (req.url === "/health") return;
     if (!req.url.startsWith("/v1/")) return;
     if (req.url.startsWith("/v1/auth/")) return;
+    if (isEngineTokenRoute(req.url) && hasEngineTokenHeaders(req.headers as Record<string, unknown>)) {
+      return;
+    }
 
     const bearerToken = parseBearerToken(req.headers.authorization);
     if (bearerToken) {
@@ -88,11 +114,7 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
       return;
     }
 
-    if (authRequireSession !== true) {
-      return;
-    }
-
-    if (authAllowLegacyWorkspaceHeader === true) {
+    if (authAllowLegacyWorkspaceHeader === true || authRequireSession !== true) {
       const workspace_id = legacyWorkspaceHeader(req) ?? "ws_dev";
       const client = await ctx.pool.connect();
       try {
