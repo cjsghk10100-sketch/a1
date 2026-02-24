@@ -76,6 +76,10 @@ const engineMaxClaimsPerCycle = parsePositiveInt(process.env.DESKTOP_ENGINE_MAX_
 const engineBearerToken = process.env.DESKTOP_ENGINE_BEARER_TOKEN?.trim() || "";
 const bootstrapToken =
   process.env.DESKTOP_BOOTSTRAP_TOKEN?.trim() || process.env.AUTH_BOOTSTRAP_TOKEN?.trim() || "";
+const ownerPassphrase =
+  process.env.DESKTOP_OWNER_PASSPHRASE?.trim() ||
+  process.env.VITE_AUTH_OWNER_PASSPHRASE?.trim() ||
+  "";
 const restartMaxAttempts = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_ATTEMPTS, 5);
 const restartBaseDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_BASE_DELAY_MS, 1000);
 const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY_MS, 30_000);
@@ -158,6 +162,7 @@ const components = {
       VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
       VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
       VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
+      ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
       ...(bootstrapToken ? { VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken } : {}),
     },
     ready_url: webBaseUrl,

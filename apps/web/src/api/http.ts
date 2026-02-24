@@ -12,11 +12,13 @@ export class ApiError extends Error {
 
 const ACCESS_TOKEN_STORAGE_KEY = "agentapp.auth.access_token";
 const REFRESH_TOKEN_STORAGE_KEY = "agentapp.auth.refresh_token";
+const OWNER_PASSPHRASE_STORAGE_KEY = "agentapp.auth.owner_passphrase";
 const DEFAULT_WORKSPACE_ID = "ws_dev";
 const DEFAULT_OWNER_NAME = "Local Owner";
 
 let accessTokenCache: string | null = null;
 let refreshTokenCache: string | null = null;
+let ownerPassphraseCache: string | null = null;
 let ensureAuthPromise: Promise<void> | null = null;
 
 function isTestMode(): boolean {
@@ -84,6 +86,40 @@ function clearTokens(): void {
   setTokenInStorage(REFRESH_TOKEN_STORAGE_KEY, null);
 }
 
+function randomPassphraseFallback(): string {
+  return `owner_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
+}
+
+function generateOwnerPassphrase(): string {
+  if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+    return randomPassphraseFallback();
+  }
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  const encoded = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  return `owner_${encoded}`;
+}
+
+function getOwnerPassphrase(): string {
+  if (ownerPassphraseCache) return ownerPassphraseCache;
+
+  const envValue = import.meta.env.VITE_AUTH_OWNER_PASSPHRASE;
+  if (typeof envValue === "string" && envValue.trim().length > 0) {
+    ownerPassphraseCache = envValue.trim();
+    return ownerPassphraseCache;
+  }
+
+  const stored = loadTokenFromStorage(OWNER_PASSPHRASE_STORAGE_KEY);
+  if (stored) {
+    ownerPassphraseCache = stored;
+    return ownerPassphraseCache;
+  }
+
+  ownerPassphraseCache = generateOwnerPassphrase();
+  setTokenInStorage(OWNER_PASSPHRASE_STORAGE_KEY, ownerPassphraseCache);
+  return ownerPassphraseCache;
+}
+
 async function parseJsonSafe(res: Response): Promise<unknown> {
   const text = await res.text();
   if (!text) return null;
@@ -129,6 +165,7 @@ async function refreshSessionToken(): Promise<boolean> {
 }
 
 async function bootstrapOrLoginOwner(): Promise<void> {
+  const ownerPassphrase = getOwnerPassphrase();
   const bootstrapTokenRaw = import.meta.env.VITE_AUTH_BOOTSTRAP_TOKEN;
   const bootstrapToken =
     typeof bootstrapTokenRaw === "string" && bootstrapTokenRaw.trim().length > 0
@@ -137,6 +174,7 @@ async function bootstrapOrLoginOwner(): Promise<void> {
   const bootstrap = await postJsonRaw("/v1/auth/bootstrap-owner", {
     workspace_id: DEFAULT_WORKSPACE_ID,
     display_name: DEFAULT_OWNER_NAME,
+    passphrase: ownerPassphrase,
   }, bootstrapToken ? { "x-bootstrap-token": bootstrapToken } : undefined);
   if (bootstrap.status === 201) {
     const tokens = readSessionTokens(bootstrap.body);
@@ -151,6 +189,7 @@ async function bootstrapOrLoginOwner(): Promise<void> {
 
   const login = await postJsonRaw("/v1/auth/login", {
     workspace_id: DEFAULT_WORKSPACE_ID,
+    passphrase: ownerPassphrase,
   });
   if (login.status !== 200) {
     throw new ApiError("auth_login_failed", login.status, login.body);

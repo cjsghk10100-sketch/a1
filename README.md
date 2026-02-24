@@ -70,6 +70,7 @@ Optional desktop env vars:
 - `DESKTOP_API_START_TIMEOUT_MS` (default `45000`)
 - `DESKTOP_WEB_START_TIMEOUT_MS` (default `45000`)
 - `DESKTOP_BOOTSTRAP_TOKEN` (optional; forwarded as API bootstrap token + web bootstrap header)
+- `DESKTOP_OWNER_PASSPHRASE` (optional; forwarded to web as owner bootstrap/login passphrase)
 - `DESKTOP_RUNNER_MODE` (default `embedded`, allowed: `embedded|external`)
 - `DESKTOP_ENGINE_WORKSPACE_ID` (default `ws_dev`, external mode only)
 - `DESKTOP_ENGINE_ROOM_ID` (optional room filter, external mode only)
@@ -173,6 +174,7 @@ Auth bootstrap hardening (optional):
 
 - `AUTH_BOOTSTRAP_TOKEN` (if set, `/v1/auth/bootstrap-owner` accepts only trusted callers)
 - `AUTH_BOOTSTRAP_ALLOW_LOOPBACK` (default `1`; set `0` to require session/token even on localhost)
+- `VITE_AUTH_OWNER_PASSPHRASE` (optional fixed passphrase for web bootstrap/login; when unset, web stores a generated local passphrase)
 
 Debugging claim endpoint directly:
 

@@ -61,6 +61,7 @@ async function fetchJson(url, options = {}) {
 }
 
 async function ensureOwnerSession(baseUrl, workspaceId) {
+  const passphrase = `smoke_owner_${workspaceId}`;
   const bootstrap = await fetchJson(`${baseUrl}/v1/auth/bootstrap-owner`, {
     method: "POST",
     headers: {
@@ -69,6 +70,7 @@ async function ensureOwnerSession(baseUrl, workspaceId) {
     body: JSON.stringify({
       workspace_id: workspaceId,
       display_name: "Desktop Smoke Owner",
+      passphrase,
     }),
   });
 
@@ -87,6 +89,7 @@ async function ensureOwnerSession(baseUrl, workspaceId) {
     },
     body: JSON.stringify({
       workspace_id: workspaceId,
+      passphrase,
     }),
   });
   if (login.status !== 200) {

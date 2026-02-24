@@ -92,9 +92,11 @@ function readSessionTokens(body: unknown): { access_token: string } {
 }
 
 async function ensureOwnerToken(baseUrl: string, workspaceId: string): Promise<string> {
+  const passphrase = `pass_${workspaceId}`;
   const bootstrap = await requestJson(baseUrl, "POST", "/v1/auth/bootstrap-owner", {
     workspace_id: workspaceId,
     display_name: "Engine Body Cred Owner",
+    passphrase,
   });
   if (bootstrap.status === 201) {
     return readSessionTokens(bootstrap.json).access_token;
@@ -102,6 +104,7 @@ async function ensureOwnerToken(baseUrl: string, workspaceId: string): Promise<s
   assert.equal(bootstrap.status, 409);
   const login = await requestJson(baseUrl, "POST", "/v1/auth/login", {
     workspace_id: workspaceId,
+    passphrase,
   });
   assert.equal(login.status, 200);
   return readSessionTokens(login.json).access_token;
@@ -228,4 +231,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-

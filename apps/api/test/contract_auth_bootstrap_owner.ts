@@ -115,6 +115,8 @@ async function main(): Promise<void> {
   try {
     const workspaceA = `ws_bootstrap_a_${randomUUID().slice(0, 6)}`;
     const workspaceB = `ws_bootstrap_b_${randomUUID().slice(0, 6)}`;
+    const workspaceAPassphrase = `pass_${workspaceA}`;
+    const workspaceBPassphrase = `pass_${workspaceB}`;
 
     const unauthorized = await requestJson(baseUrl, "POST", "/v1/auth/bootstrap-owner", {
       workspace_id: workspaceA,
@@ -130,13 +132,14 @@ async function main(): Promise<void> {
       {
         workspace_id: workspaceA,
         display_name: "Owner A",
+        passphrase: workspaceAPassphrase,
       },
       { "x-bootstrap-token": `${bootstrapToken}_wrong` },
     );
     assert.equal(wrongToken.status, 403);
     assert.deepEqual(wrongToken.json, { error: "bootstrap_forbidden" });
 
-    const bootstrapped = await requestJson(
+    const missingPassphrase = await requestJson(
       baseUrl,
       "POST",
       "/v1/auth/bootstrap-owner",
@@ -146,8 +149,41 @@ async function main(): Promise<void> {
       },
       { "x-bootstrap-token": bootstrapToken },
     );
+    assert.equal(missingPassphrase.status, 400);
+    assert.deepEqual(missingPassphrase.json, { error: "missing_passphrase" });
+
+    const bootstrapped = await requestJson(
+      baseUrl,
+      "POST",
+      "/v1/auth/bootstrap-owner",
+      {
+        workspace_id: workspaceA,
+        display_name: "Owner A",
+        passphrase: workspaceAPassphrase,
+      },
+      { "x-bootstrap-token": bootstrapToken },
+    );
     assert.equal(bootstrapped.status, 201);
     const accessToken = readAccessToken(bootstrapped.json);
+
+    const loginMissingPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+      workspace_id: workspaceA,
+    });
+    assert.equal(loginMissingPassphrase.status, 401);
+    assert.deepEqual(loginMissingPassphrase.json, { error: "invalid_credentials" });
+
+    const loginWrongPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+      workspace_id: workspaceA,
+      passphrase: `${workspaceAPassphrase}_wrong`,
+    });
+    assert.equal(loginWrongPassphrase.status, 401);
+    assert.deepEqual(loginWrongPassphrase.json, { error: "invalid_credentials" });
+
+    const loginCorrectPassphrase = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+      workspace_id: workspaceA,
+      passphrase: workspaceAPassphrase,
+    });
+    assert.equal(loginCorrectPassphrase.status, 200);
 
     const bootstrapBySession = await requestJson(
       baseUrl,
@@ -156,6 +192,7 @@ async function main(): Promise<void> {
       {
         workspace_id: workspaceB,
         display_name: "Owner B",
+        passphrase: workspaceBPassphrase,
       },
       { authorization: `Bearer ${accessToken}` },
     );
@@ -169,10 +206,25 @@ async function main(): Promise<void> {
       {
         workspace_id: workspaceB,
         display_name: "Owner B",
+        passphrase: workspaceBPassphrase,
       },
       { "x-bootstrap-token": bootstrapToken },
     );
     assert.equal(bootstrapWorkspaceBWithToken.status, 201);
+
+    await pool.query(
+      `UPDATE sec_local_owners
+       SET passphrase_hash = NULL
+       WHERE workspace_id = $1`,
+      [workspaceB],
+    );
+
+    const loginUnsetPassphraseHash = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+      workspace_id: workspaceB,
+      passphrase: workspaceBPassphrase,
+    });
+    assert.equal(loginUnsetPassphraseHash.status, 401);
+    assert.deepEqual(loginUnsetPassphraseHash.json, { error: "invalid_credentials" });
   } finally {
     await app.close();
   }
