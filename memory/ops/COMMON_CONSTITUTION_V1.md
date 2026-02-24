@@ -15,6 +15,8 @@
 - 보안은 모든 속도/편의/수익 목표보다 우선한다.
 - 외부에서 파일/코드/스크립트/패키지를 내려받아 실행하거나 반입하기 전, 반드시 **일론 머스크식 1원칙 분해**(문제·구성요소·위험면·검증가능 사실)로 악성 가능성과 안전성을 점검한다.
 - 위 점검 결과가 있어도, 외부 반입/실행은 사용자(민) 승인 전까지 금지한다.
+- 외부 스킬/패키지 도입은 `MIN_ORG/03_PLAYBOOKS/SUPPLY_CHAIN_SECURITY_CHECKLIST_V1.md`의 ALL PASS 없이는 금지한다.
+- `suspicious` 경고가 있는 설치를 `--force`로 우회하는 행위는 승인 없이는 금지한다.
 - 승인 없이 우회 실행/자동 실행/권한 확장은 헌법 위반으로 간주한다.
 
 ---
@@ -230,4 +232,4 @@
 참조: `MIN_ORG/01_CONSTITUTION/RISK_POLICY.md`
 참조: `MIN_ORG/01_CONSTITUTION/DATA_OBJECTS.md`
 참조: `/Users/min/Desktop/1.md`
-참조: `/Users/min/Desktop/3.md`
+참조: `/Users/min/Desktop/3.json`
