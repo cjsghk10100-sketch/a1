@@ -39,7 +39,17 @@ def parse_file(path: Path):
     text = path.read_text(encoding='utf-8', errors='ignore')
 
     approval = re.search(r'(?im)^\s*approval_id\s*:\s*(\S+)', text)
+    approved_by = re.search(r'(?im)^\s*approved_by\s*:\s*(\S+)', text)
+    approved_at = re.search(r'(?im)^\s*approved_at\s*:\s*([^\n]+)', text)
+    approval_reason = re.search(r'(?im)^\s*approval_reason\s*:\s*([^\n]+)', text)
+
     has_approval = approval is not None and approval.group(1).strip().lower() not in {'none', 'null', 'na'}
+    has_approval_integrity = all([
+        has_approval,
+        approved_by is not None and approved_by.group(1).strip() != '',
+        approved_at is not None and approved_at.group(1).strip() != '',
+        approval_reason is not None and approval_reason.group(1).strip() != '',
+    ])
 
     has_evidence = bool(re.search(r'(?im)^\s*evidence\s*:', text))
     has_eval = bool(re.search(r'(?im)^\s*eval\s*:', text))
@@ -57,6 +67,7 @@ def parse_file(path: Path):
 
     return {
         'has_approval': has_approval,
+        'has_approval_integrity': has_approval_integrity,
         'has_evidence': has_evidence,
         'has_eval': has_eval,
         'has_learn': has_learn,
@@ -125,8 +136,10 @@ def main():
     ap.add_argument('--demoted-dir', default='tmp/archive/demoted')
     ap.add_argument('--incidents-dir', default='memory/incidents')
     ap.add_argument('--log-dir', default='tmp/export')
-    ap.add_argument('--dry-run', action='store_true')
+    ap.add_argument('--real-run', action='store_true', help='Perform real file moves')
+    ap.add_argument('--confirm-real-run', action='store_true', help='Mandatory second flag for real-run')
     ap.add_argument('--seed-samples', action='store_true')
+    ap.add_argument('--require-prefix', default='^(PRJ|IDEA|LOG)-', help='Filename prefix regex gate')
 
     ap.add_argument('--sla-hours', type=float, default=24.0)
     ap.add_argument('--min-success', type=float, default=0.90)
@@ -134,6 +147,16 @@ def main():
     ap.add_argument('--min-repro', type=float, default=0.90)
 
     args = ap.parse_args()
+
+    dry_run = True
+    if args.real_run and args.confirm_real_run:
+        dry_run = False
+    elif args.real_run and not args.confirm_real_run:
+        print(json.dumps({
+            'error': 'real_run_requires_confirm_flag',
+            'hint': 'Use both --real-run and --confirm-real-run'
+        }, ensure_ascii=False, indent=2))
+        return
 
     inbox = Path(args.inbox_dir)
     applied = Path(args.applied_dir)
@@ -162,8 +185,13 @@ def main():
         if age_hours > args.sla_hours:
             reasons.append(f'sla_exceeded>{args.sla_hours}h')
 
+        if not re.match(args.require_prefix, path.name):
+            reasons.append('prefix_rule_fail')
+
         if not parsed['has_approval']:
             reasons.append('missing_approval_id')
+        if not parsed['has_approval_integrity']:
+            reasons.append('approval_integrity_fail')
         if not parsed['has_evidence']:
             reasons.append('missing_evidence')
         if not parsed['has_eval']:
@@ -186,15 +214,15 @@ def main():
         decisions.append(d)
 
         target = applied / path.name if action == 'promote' else demoted / path.name
-        if not args.dry_run:
+        if not dry_run:
             shutil.move(str(path), str(target))
 
         if reasons:
-            write_incident(incidents, d, args.dry_run)
+            write_incident(incidents, d, dry_run)
 
     summary = {
         'time_utc': now_iso(),
-        'dry_run': args.dry_run,
+        'dry_run': dry_run,
         'counts': {
             'total': len(decisions),
             'promote': sum(1 for d in decisions if d.action == 'promote'),
@@ -204,7 +232,7 @@ def main():
     }
 
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-    out = log_dir / f'pipeline_manager_{"dryrun" if args.dry_run else "run"}_{stamp}.json'
+    out = log_dir / f'pipeline_manager_{"dryrun" if dry_run else "run"}_{stamp}.json'
     out.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
