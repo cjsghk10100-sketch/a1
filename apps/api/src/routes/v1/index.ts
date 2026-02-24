@@ -15,6 +15,7 @@ import { registerEvidenceRoutes } from "./evidence.js";
 import { registerEgressRoutes } from "./egress.js";
 import { registerEngineRoutes } from "./engines.js";
 import { registerEventRoutes } from "./events.js";
+import { registerExperimentRoutes } from "./experiments.js";
 import { registerIncidentRoutes } from "./incidents.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
 import { registerPolicyRoutes } from "./policy.js";
@@ -51,6 +52,7 @@ export async function registerV1Routes(
   await registerEgressRoutes(app, pool);
   await registerEngineRoutes(app, pool);
   await registerEventRoutes(app, pool);
+  await registerExperimentRoutes(app, pool);
   await registerIncidentRoutes(app, pool);
   await registerLifecycleRoutes(app, pool);
   await registerPolicyRoutes(app, pool);

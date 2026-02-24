@@ -97,6 +97,9 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `engine.token.issued` (v1)
 - `engine.token.revoked` (v1)
 - `engine.deactivated` (v1)
+- `experiment.created` (v1)
+- `experiment.updated` (v1)
+- `experiment.closed` (v1)
 
 ## Implemented Non-Event Runtime Contracts
 

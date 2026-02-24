@@ -3,6 +3,7 @@ import { ulid } from "ulid";
 export type ApprovalId = `appr_${string}`;
 export type ArtifactId = `art_${string}`;
 export type EvidenceId = `evd_${string}`;
+export type ExperimentId = `exp_${string}`;
 export type IncidentId = `inc_${string}`;
 export type MessageId = `msg_${string}`;
 export type RoomId = `room_${string}`;
@@ -26,6 +27,10 @@ export function newArtifactId(): ArtifactId {
 
 export function newEvidenceId(): EvidenceId {
   return withPrefix("evd_") as EvidenceId;
+}
+
+export function newExperimentId(): ExperimentId {
+  return withPrefix("exp_") as ExperimentId;
 }
 
 export function newIncidentId(): IncidentId {

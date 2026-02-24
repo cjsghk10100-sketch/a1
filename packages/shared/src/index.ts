@@ -8,6 +8,7 @@ export * from "./discord.js";
 export * from "./evidence.js";
 export * from "./egress.js";
 export * from "./engines.js";
+export * from "./experiments.js";
 export * from "./ids.js";
 export * from "./incidents.js";
 export * from "./lifecycle.js";

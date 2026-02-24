@@ -49,7 +49,7 @@ async function applyRunCreated(tx: DbClient, event: RunCreatedV1): Promise<void>
   await tx.query(
     `INSERT INTO proj_runs (
       run_id,
-      workspace_id, room_id, thread_id,
+      workspace_id, room_id, thread_id, experiment_id,
       status,
       title, goal, input, tags,
       created_at, started_at, ended_at, updated_at,
@@ -57,12 +57,12 @@ async function applyRunCreated(tx: DbClient, event: RunCreatedV1): Promise<void>
       last_event_id
     ) VALUES (
       $1,
-      $2, $3, $4,
+      $2, $3, $4, $5,
       'queued',
-      $5, $6, $7::jsonb, $8,
-      $9, NULL, NULL, $10,
-      $11,
-      $12
+      $6, $7, $8::jsonb, $9,
+      $10, NULL, NULL, $11,
+      $12,
+      $13
     )
     ON CONFLICT (run_id) DO NOTHING`,
     [
@@ -70,6 +70,7 @@ async function applyRunCreated(tx: DbClient, event: RunCreatedV1): Promise<void>
       event.workspace_id,
       event.room_id ?? null,
       event.thread_id ?? null,
+      event.data.experiment_id ?? null,
       event.data.title ?? null,
       event.data.goal ?? null,
       toJsonb(event.data.input),
