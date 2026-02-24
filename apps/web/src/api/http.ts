@@ -13,6 +13,7 @@ export class ApiError extends Error {
 const ACCESS_TOKEN_STORAGE_KEY = "agentapp.auth.access_token";
 const REFRESH_TOKEN_STORAGE_KEY = "agentapp.auth.refresh_token";
 const OWNER_PASSPHRASE_STORAGE_KEY = "agentapp.auth.owner_passphrase";
+const ACCESS_TOKEN_COOKIE_KEY = "agentapp_access_token";
 const DEFAULT_WORKSPACE_ID = "ws_dev";
 const DEFAULT_OWNER_NAME = "Local Owner";
 
@@ -46,6 +47,16 @@ function setTokenInStorage(key: string, value: string | null): void {
   window.localStorage.setItem(key, value);
 }
 
+function setAccessTokenCookie(value: string | null): void {
+  if (!hasWindow()) return;
+  const attrs = "Path=/; SameSite=Strict";
+  if (!value) {
+    window.document.cookie = `${ACCESS_TOKEN_COOKIE_KEY}=; Max-Age=0; ${attrs}`;
+    return;
+  }
+  window.document.cookie = `${ACCESS_TOKEN_COOKIE_KEY}=${encodeURIComponent(value)}; ${attrs}`;
+}
+
 function readErrorCode(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
   const code = (body as { error?: unknown }).error;
@@ -70,6 +81,7 @@ function initializeTokens(): void {
   if (accessTokenCache || refreshTokenCache) return;
   accessTokenCache = loadTokenFromStorage(ACCESS_TOKEN_STORAGE_KEY);
   refreshTokenCache = loadTokenFromStorage(REFRESH_TOKEN_STORAGE_KEY);
+  setAccessTokenCookie(accessTokenCache);
 }
 
 function persistTokens(tokens: { access_token: string; refresh_token: string }): void {
@@ -77,6 +89,7 @@ function persistTokens(tokens: { access_token: string; refresh_token: string }):
   refreshTokenCache = tokens.refresh_token;
   setTokenInStorage(ACCESS_TOKEN_STORAGE_KEY, tokens.access_token);
   setTokenInStorage(REFRESH_TOKEN_STORAGE_KEY, tokens.refresh_token);
+  setAccessTokenCookie(tokens.access_token);
 }
 
 function clearTokens(): void {
@@ -84,6 +97,7 @@ function clearTokens(): void {
   refreshTokenCache = null;
   setTokenInStorage(ACCESS_TOKEN_STORAGE_KEY, null);
   setTokenInStorage(REFRESH_TOKEN_STORAGE_KEY, null);
+  setAccessTokenCookie(null);
 }
 
 function randomPassphraseFallback(): string {
