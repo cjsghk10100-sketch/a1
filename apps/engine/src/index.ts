@@ -36,6 +36,7 @@ type EngineConfig = {
   workspaceId: string;
   roomId?: string;
   actorId: string;
+  bearerToken?: string;
   engineId?: string;
   engineToken?: string;
   pollMs: number;
@@ -66,11 +67,16 @@ function getConfig(): EngineConfig {
   const roomId = process.env.ENGINE_ROOM_ID?.trim();
   const engineId = process.env.ENGINE_ID?.trim();
   const engineToken = process.env.ENGINE_AUTH_TOKEN?.trim();
+  const bearerToken =
+    process.env.ENGINE_BEARER_TOKEN?.trim() ||
+    process.env.ENGINE_OWNER_ACCESS_TOKEN?.trim() ||
+    "";
   return {
     apiBaseUrl: process.env.ENGINE_API_BASE_URL?.trim() || "http://127.0.0.1:3000",
     workspaceId: process.env.ENGINE_WORKSPACE_ID?.trim() || "ws_dev",
     roomId: roomId && roomId.length > 0 ? roomId : undefined,
     actorId: process.env.ENGINE_ACTOR_ID?.trim() || "external_engine",
+    bearerToken: bearerToken.length > 0 ? bearerToken : undefined,
     engineId: engineId && engineId.length > 0 ? engineId : undefined,
     engineToken: engineToken && engineToken.length > 0 ? engineToken : undefined,
     pollMs: readIntEnv("ENGINE_POLL_MS", 1200),
@@ -92,6 +98,7 @@ function requestHeaders(cfg: EngineConfig, includeJson = true): Record<string, s
     "x-workspace-id": cfg.workspaceId,
   };
   if (includeJson) headers["content-type"] = "application/json";
+  if (cfg.bearerToken) headers.authorization = `Bearer ${cfg.bearerToken}`;
   if (cfg.engineId && cfg.engineToken) {
     headers["x-engine-id"] = cfg.engineId;
     headers["x-engine-token"] = cfg.engineToken;

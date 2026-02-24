@@ -81,6 +81,33 @@ async function requestJson(
   return { status: res.status, json, text };
 }
 
+function readAccessToken(body: unknown): string {
+  if (!body || typeof body !== "object") throw new Error("invalid_auth_payload");
+  const session = (body as { session?: unknown }).session;
+  if (!session || typeof session !== "object") throw new Error("invalid_auth_session");
+  const access_token = (session as { access_token?: unknown }).access_token;
+  if (typeof access_token !== "string" || !access_token.trim()) {
+    throw new Error("missing_access_token");
+  }
+  return access_token;
+}
+
+async function ensureOwnerAccessToken(baseUrl: string, workspaceId: string): Promise<string> {
+  const bootstrap = await requestJson(baseUrl, "POST", "/v1/auth/bootstrap-owner", {
+    workspace_id: workspaceId,
+    display_name: "Engine Lease Owner",
+  });
+  if (bootstrap.status === 201) {
+    return readAccessToken(bootstrap.json);
+  }
+  assert.equal(bootstrap.status, 409);
+  const login = await requestJson(baseUrl, "POST", "/v1/auth/login", {
+    workspace_id: workspaceId,
+  });
+  assert.equal(login.status, 200);
+  return readAccessToken(login.json);
+}
+
 async function createRoom(baseUrl: string, workspaceHeader: Record<string, string>, title: string): Promise<string> {
   const res = await requestJson(
     baseUrl,
@@ -124,6 +151,7 @@ async function runEngineOnce(input: {
   apiBaseUrl: string;
   workspaceId: string;
   actorId: string;
+  bearerToken: string;
 }): Promise<void> {
   const repoRoot = path.resolve(process.cwd(), "..", "..");
   await new Promise<void>((resolve, reject) => {
@@ -134,6 +162,7 @@ async function runEngineOnce(input: {
         ENGINE_API_BASE_URL: input.apiBaseUrl,
         ENGINE_WORKSPACE_ID: input.workspaceId,
         ENGINE_ACTOR_ID: input.actorId,
+        ENGINE_BEARER_TOKEN: input.bearerToken,
         ENGINE_RUN_ONCE: "true",
         ENGINE_POLL_MS: "100",
         ENGINE_MAX_CLAIMS_PER_CYCLE: "1",
@@ -177,7 +206,13 @@ async function main(): Promise<void> {
 
   const pool = createPool(databaseUrl);
   const app = await buildServer({
-    config: { port: 0, databaseUrl },
+    config: {
+      port: 0,
+      databaseUrl,
+      authRequireSession: true,
+      authAllowLegacyWorkspaceHeader: false,
+      authBootstrapAllowLoopback: true,
+    },
     pool,
   });
 
@@ -193,17 +228,20 @@ async function main(): Promise<void> {
 
   try {
     const runIdSuffix = randomUUID().slice(0, 8);
-    const workspaceHeader = { "x-workspace-id": `ws_contract_engine_lease_${runIdSuffix}` };
+    const workspaceId = `ws_contract_engine_lease_${runIdSuffix}`;
+    const ownerAccessToken = await ensureOwnerAccessToken(baseUrl, workspaceId);
+    const ownerHeaders = { authorization: `Bearer ${ownerAccessToken}` };
     const actorId = `engine_contract_lease_${runIdSuffix}`;
-    const roomId = await createRoom(baseUrl, workspaceHeader, "Engine Lease Room");
-    const runId = await createRun(baseUrl, workspaceHeader, roomId);
+    const roomId = await createRoom(baseUrl, ownerHeaders, "Engine Lease Room");
+    const runId = await createRun(baseUrl, ownerHeaders, roomId);
 
     await runEngineOnce({
       apiBaseUrl: baseUrl,
-      workspaceId: workspaceHeader["x-workspace-id"],
+      workspaceId,
       actorId,
+      bearerToken: ownerAccessToken,
     });
-    await waitForRunStatus(baseUrl, workspaceHeader, runId, "succeeded");
+    await waitForRunStatus(baseUrl, ownerHeaders, runId, "succeeded");
 
     const lease = await db.query<{
       claim_token: string | null;

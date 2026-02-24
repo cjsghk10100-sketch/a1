@@ -79,13 +79,28 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
     );
   }
 
+  function hasEngineTokenBody(body: unknown): boolean {
+    if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+    const rawId = (body as Record<string, unknown>).engine_id;
+    const rawToken = (body as Record<string, unknown>).engine_token;
+    return (
+      typeof rawId === "string" &&
+      rawId.trim().length > 0 &&
+      typeof rawToken === "string" &&
+      rawToken.trim().length > 0
+    );
+  }
+
   await registerHealthRoutes(app, ctx.pool);
 
   app.addHook("preHandler", async (req, reply) => {
     if (req.url === "/health") return;
     if (!req.url.startsWith("/v1/")) return;
     if (req.url.startsWith("/v1/auth/")) return;
-    if (isEngineTokenRoute(req.url) && hasEngineTokenHeaders(req.headers as Record<string, unknown>)) {
+    if (
+      isEngineTokenRoute(req.url) &&
+      (hasEngineTokenHeaders(req.headers as Record<string, unknown>) || hasEngineTokenBody((req as { body?: unknown }).body))
+    ) {
       return;
     }
 
