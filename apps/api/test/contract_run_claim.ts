@@ -108,6 +108,7 @@ async function registerEngine(
   baseUrl: string,
   workspaceHeader: Record<string, string>,
   actor_id: string,
+  rooms: string[] = ["*"],
 ): Promise<{ engineHeaders: Record<string, string> }> {
   const res = await requestJson(
     baseUrl,
@@ -119,7 +120,7 @@ async function registerEngine(
       token_label: "contract",
       scopes: {
         action_types: ["run.claim", "run.lease.heartbeat", "run.lease.release"],
-        rooms: ["*"],
+        rooms,
       },
     },
     workspaceHeader,
@@ -194,6 +195,7 @@ async function main(): Promise<void> {
     const roomA = await createRoom(baseUrl, ws1, "Run Claim Room A");
     const roomB = await createRoom(baseUrl, ws1, "Run Claim Room B");
     const ws2Room = await createRoom(baseUrl, ws2, "Run Claim Room WS2");
+    const { engineHeaders: ws1RoomAScopedHeaders } = await registerEngine(baseUrl, ws1, actorId, [roomA]);
 
     const runA1 = await createRun(baseUrl, ws1, { room_id: roomA, title: "Run A1" });
     const runA2 = await createRun(baseUrl, ws1, { room_id: roomA, title: "Run A2" });
@@ -295,6 +297,30 @@ async function main(): Promise<void> {
     const heartbeatJson = goodHeartbeat.json as { ok: true; lease_expires_at: string };
     assert.equal(heartbeatJson.ok, true);
     assert.ok(new Date(heartbeatJson.lease_expires_at).getTime() > Date.now());
+
+    const crossRoomHeartbeat = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimB.run.run_id}/lease/heartbeat`,
+      {
+        claim_token: claimB.run.claim_token,
+      },
+      ws1RoomAScopedHeaders,
+    );
+    assert.equal(crossRoomHeartbeat.status, 403);
+    assert.deepEqual(crossRoomHeartbeat.json, { error: "engine_room_not_allowed" });
+
+    const crossRoomRelease = await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${claimB.run.run_id}/lease/release`,
+      {
+        claim_token: claimB.run.claim_token,
+      },
+      ws1RoomAScopedHeaders,
+    );
+    assert.equal(crossRoomRelease.status, 403);
+    assert.deepEqual(crossRoomRelease.json, { error: "engine_room_not_allowed" });
 
     const badRelease = await requestJson(
       baseUrl,

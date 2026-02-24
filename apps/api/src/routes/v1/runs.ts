@@ -97,6 +97,31 @@ function normalizeRunStatus(raw: unknown): RunStatus | null {
     : null;
 }
 
+async function finalizeRunEvidenceSafely(
+  app: FastifyInstance,
+  pool: DbPool,
+  input: { workspace_id: string; run_id: string; correlation_id: string },
+): Promise<void> {
+  try {
+    await finalizeRunEvidenceManifest(pool, {
+      workspace_id: input.workspace_id,
+      run_id: input.run_id,
+      actor: { actor_type: "service", actor_id: "api" },
+      correlation_id: input.correlation_id,
+    });
+  } catch (err) {
+    app.log.warn(
+      {
+        run_id: input.run_id,
+        workspace_id: input.workspace_id,
+        correlation_id: input.correlation_id,
+        err,
+      },
+      "run terminal persisted but evidence finalize failed",
+    );
+  }
+}
+
 async function tryAcquireRunLock(pool: DbPool, run_id: string): Promise<DbClient | null> {
   const client = await pool.connect();
   try {
@@ -528,6 +553,29 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     Body: { actor_id?: string; claim_token?: string; engine_id?: string; engine_token?: string };
   }>("/v1/runs/:runId/lease/heartbeat", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
+    const existing = await pool.query<{
+      run_id: string;
+      room_id: string | null;
+      status: string;
+      claim_token: string | null;
+      claimed_by_actor_id: string | null;
+      lease_expires_at: string | null;
+    }>(
+      `SELECT
+         run_id,
+         room_id,
+         status,
+         claim_token,
+         claimed_by_actor_id,
+         lease_expires_at::text
+       FROM proj_runs
+       WHERE run_id = $1
+         AND workspace_id = $2`,
+      [req.params.runId, workspace_id],
+    );
+    if (existing.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
+    const leaseScopeRun = existing.rows[0];
+
     const creds = engineCredsFromReq(req, req.body);
     if (!creds.engine_id || !creds.engine_token) {
       return reply.code(401).send({ error: "missing_engine_token" });
@@ -539,6 +587,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
         engine_id: creds.engine_id,
         engine_token: creds.engine_token,
         required_action: "run.lease.heartbeat",
+        room_id: leaseScopeRun.room_id ?? undefined,
       },
       getEngineTokenSecret(),
     );
@@ -550,6 +599,14 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     const actor_id = engineCheck.auth.actor_id;
     const claim_token = req.body.claim_token?.trim() || "";
     if (!claim_token) return reply.code(400).send({ error: "missing_claim_token" });
+
+    if (leaseScopeRun.status !== "running") return reply.code(409).send({ error: "run_not_running" });
+    if (leaseScopeRun.claim_token !== claim_token || leaseScopeRun.claimed_by_actor_id !== actor_id) {
+      return reply.code(409).send({ error: "lease_token_mismatch" });
+    }
+    if (!leaseScopeRun.lease_expires_at || new Date(leaseScopeRun.lease_expires_at).getTime() <= Date.now()) {
+      return reply.code(409).send({ error: "lease_expired" });
+    }
 
     const update = await pool.query<{
       lease_expires_at: string;
@@ -578,7 +635,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
       });
     }
 
-    const existing = await pool.query<{
+    const postUpdate = await pool.query<{
       run_id: string;
       status: string;
       claim_token: string | null;
@@ -591,9 +648,9 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
          AND workspace_id = $2`,
       [req.params.runId, workspace_id],
     );
-    if (existing.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
+    if (postUpdate.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
 
-    const run = existing.rows[0];
+    const run = postUpdate.rows[0];
     if (run.status !== "running") return reply.code(409).send({ error: "run_not_running" });
     if (run.claim_token !== claim_token || run.claimed_by_actor_id !== actor_id) {
       return reply.code(409).send({ error: "lease_token_mismatch" });
@@ -609,6 +666,27 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     Body: { actor_id?: string; claim_token?: string; engine_id?: string; engine_token?: string };
   }>("/v1/runs/:runId/lease/release", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
+    const existing = await pool.query<{
+      run_id: string;
+      room_id: string | null;
+      status: string;
+      claim_token: string | null;
+      claimed_by_actor_id: string | null;
+    }>(
+      `SELECT
+         run_id,
+         room_id,
+         status,
+         claim_token,
+         claimed_by_actor_id
+       FROM proj_runs
+       WHERE run_id = $1
+         AND workspace_id = $2`,
+      [req.params.runId, workspace_id],
+    );
+    if (existing.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
+    const leaseScopeRun = existing.rows[0];
+
     const creds = engineCredsFromReq(req, req.body);
     if (!creds.engine_id || !creds.engine_token) {
       return reply.code(401).send({ error: "missing_engine_token" });
@@ -620,6 +698,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
         engine_id: creds.engine_id,
         engine_token: creds.engine_token,
         required_action: "run.lease.release",
+        room_id: leaseScopeRun.room_id ?? undefined,
       },
       getEngineTokenSecret(),
     );
@@ -655,7 +734,7 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
       return reply.code(200).send({ ok: true, released: true });
     }
 
-    const existing = await pool.query<{
+    const postUpdate = await pool.query<{
       run_id: string;
       status: string;
       claim_token: string | null;
@@ -667,9 +746,9 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
          AND workspace_id = $2`,
       [req.params.runId, workspace_id],
     );
-    if (existing.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
+    if (postUpdate.rowCount !== 1) return reply.code(404).send({ error: "run_not_found" });
 
-    const run = existing.rows[0];
+    const run = postUpdate.rows[0];
     if (!run.claim_token && !run.claimed_by_actor_id) {
       return reply.code(200).send({ ok: true, released: false });
     }
@@ -767,14 +846,18 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     }
 
     if (existing.rows[0].status === "succeeded" || existing.rows[0].status === "failed") {
+      await releaseRunAttempt(pool, {
+        run_id: existing.rows[0].run_id,
+        claim_token: existing.rows[0].claim_token,
+        reason: existing.rows[0].status === "succeeded" ? "run_completed" : "run_failed",
+      });
+      await finalizeRunEvidenceSafely(app, pool, {
+        workspace_id,
+        run_id: existing.rows[0].run_id,
+        correlation_id: existing.rows[0].correlation_id,
+      });
       return reply.code(409).send({ error: "run_already_ended" });
     }
-
-    await releaseRunAttempt(pool, {
-      run_id: existing.rows[0].run_id,
-      claim_token: existing.rows[0].claim_token,
-      reason: "run_completed",
-    });
 
     const occurred_at = new Date().toISOString();
     const causation_id = existing.rows[0].last_event_id ?? undefined;
@@ -806,10 +889,14 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     });
 
     await applyRunEvent(pool, event as RunEventV1);
-    await finalizeRunEvidenceManifest(pool, {
+    await releaseRunAttempt(pool, {
+      run_id: existing.rows[0].run_id,
+      claim_token: existing.rows[0].claim_token,
+      reason: "run_completed",
+    });
+    await finalizeRunEvidenceSafely(app, pool, {
       workspace_id,
       run_id: existing.rows[0].run_id,
-      actor: { actor_type: "service", actor_id: "api" },
       correlation_id: existing.rows[0].correlation_id,
     });
     return reply.code(200).send({ ok: true });
@@ -849,14 +936,18 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     }
 
     if (existing.rows[0].status === "succeeded" || existing.rows[0].status === "failed") {
+      await releaseRunAttempt(pool, {
+        run_id: existing.rows[0].run_id,
+        claim_token: existing.rows[0].claim_token,
+        reason: existing.rows[0].status === "succeeded" ? "run_completed" : "run_failed",
+      });
+      await finalizeRunEvidenceSafely(app, pool, {
+        workspace_id,
+        run_id: existing.rows[0].run_id,
+        correlation_id: existing.rows[0].correlation_id,
+      });
       return reply.code(409).send({ error: "run_already_ended" });
     }
-
-    await releaseRunAttempt(pool, {
-      run_id: existing.rows[0].run_id,
-      claim_token: existing.rows[0].claim_token,
-      reason: "run_failed",
-    });
 
     const occurred_at = new Date().toISOString();
     const causation_id = existing.rows[0].last_event_id ?? undefined;
@@ -888,10 +979,14 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
     });
 
     await applyRunEvent(pool, event as RunEventV1);
-    await finalizeRunEvidenceManifest(pool, {
+    await releaseRunAttempt(pool, {
+      run_id: existing.rows[0].run_id,
+      claim_token: existing.rows[0].claim_token,
+      reason: "run_failed",
+    });
+    await finalizeRunEvidenceSafely(app, pool, {
       workspace_id,
       run_id: existing.rows[0].run_id,
-      actor: { actor_type: "service", actor_id: "api" },
       correlation_id: existing.rows[0].correlation_id,
     });
     return reply.code(200).send({ ok: true });
