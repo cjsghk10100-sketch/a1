@@ -126,6 +126,10 @@ Some runtime safety contracts are projection/API level (not standalone events):
 - Evidence endpoints:
   - `GET /v1/runs/:id/evidence`
   - `POST /v1/runs/:id/evidence/finalize`
+- Pipeline projection endpoint:
+  - `GET /v1/pipeline/projection` (schema `pipeline_projection.v0.1`, fixed stage keys + stable sorting)
+- Incident open idempotency:
+  - `POST /v1/incidents` accepts optional `idempotency_key`; duplicate keys return existing `incident_id` with `deduped=true`
 - Engine trust-boundary endpoints:
   - `POST /v1/engines/register`
   - `POST /v1/engines/:engineId/tokens/issue`

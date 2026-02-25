@@ -35,6 +35,15 @@ type RunContextRow = {
   correlation_id: string;
 };
 
+type ExistingIdempotentIncidentRow = {
+  incident_id: string | null;
+};
+
+type PgErrorLike = {
+  code?: string;
+  constraint?: string;
+};
+
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
   return value;
@@ -57,6 +66,7 @@ function normalizeOptionalString(raw: unknown): string | undefined {
 }
 
 function normalizeSeverity(raw: unknown): IncidentSeverity | undefined {
+  if (raw === "warning") return "low";
   if (raw === "low" || raw === "medium" || raw === "high" || raw === "critical") return raw;
   return undefined;
 }
@@ -94,6 +104,14 @@ function normalizeRcaPayload(summary: string | undefined, analysis: unknown): Re
   return out;
 }
 
+function isIdempotencyUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const pgError = err as PgErrorLike;
+  if (pgError.code !== "23505") return false;
+  if (typeof pgError.constraint !== "string") return true;
+  return pgError.constraint.includes("idempotency");
+}
+
 async function getRunContext(pool: DbPool, run_id: string): Promise<RunContextRow | null> {
   const res = await pool.query<RunContextRow>(
     `SELECT run_id, workspace_id, room_id, thread_id, correlation_id
@@ -124,6 +142,29 @@ async function getIncidentContext(pool: DbPool, incident_id: string): Promise<In
   );
   if (res.rowCount !== 1) return null;
   return res.rows[0];
+}
+
+async function findIncidentByIdempotency(
+  pool: DbPool,
+  workspace_id: string,
+  stream_type: "room" | "workspace",
+  stream_id: string,
+  idempotency_key: string,
+): Promise<string | null> {
+  const res = await pool.query<ExistingIdempotentIncidentRow>(
+    `SELECT data->>'incident_id' AS incident_id
+     FROM evt_events
+     WHERE workspace_id = $1
+       AND stream_type = $2
+       AND stream_id = $3
+       AND idempotency_key = $4
+       AND event_type = 'incident.opened'
+     ORDER BY recorded_at DESC
+     LIMIT 1`,
+    [workspace_id, stream_type, stream_id, idempotency_key],
+  );
+  if (res.rowCount !== 1) return null;
+  return res.rows[0].incident_id ?? null;
 }
 
 async function validateRoomWorkspace(
@@ -160,26 +201,38 @@ async function validateThreadWorkspace(
 export async function registerIncidentRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.post<{
     Body: {
-      title: string;
+      title?: string;
       summary?: string;
       severity?: IncidentSeverity;
+      category?: string;
+      details?: Record<string, unknown>;
+      entity_type?: string;
+      entity_id?: string;
       room_id?: string;
       thread_id?: string;
       run_id?: string;
       correlation_id?: string;
+      idempotency_key?: string;
       actor_type?: ActorType;
       actor_id?: string;
     };
   }>("/v1/incidents", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
-    const title = normalizeOptionalString(req.body.title);
+    const summary = normalizeOptionalString(req.body.summary);
+    const title = normalizeOptionalString(req.body.title) ?? summary;
     if (!title) return reply.code(400).send({ error: "missing_title" });
 
-    const summary = normalizeOptionalString(req.body.summary);
     const severity = normalizeSeverity(req.body.severity);
     if (req.body.severity && !severity) {
       return reply.code(400).send({ error: "invalid_severity" });
     }
+    const category = normalizeOptionalString(req.body.category);
+    const entity_type = normalizeOptionalString(req.body.entity_type);
+    const entity_id = normalizeOptionalString(req.body.entity_id);
+    const details =
+      req.body.details && typeof req.body.details === "object" && !Array.isArray(req.body.details)
+        ? req.body.details
+        : undefined;
 
     const run_id = normalizeOptionalString(req.body.run_id);
     let room_id = normalizeOptionalString(req.body.room_id);
@@ -212,38 +265,67 @@ export async function registerIncidentRoutes(app: FastifyInstance, pool: DbPool)
 
     const actor_type = normalizeActorType(req.body.actor_type);
     const actor_id = normalizeOptionalString(req.body.actor_id) ?? (actor_type === "service" ? "api" : "ceo");
+    const idempotency_key = normalizeOptionalString(req.body.idempotency_key);
+    if (idempotency_key && idempotency_key.length > 200) {
+      return reply.code(400).send({ error: "invalid_idempotency_key" });
+    }
+
+    const stream =
+      room_id != null
+        ? ({ stream_type: "room", stream_id: room_id } as const)
+        : ({ stream_type: "workspace", stream_id: workspace_id } as const);
 
     const incident_id = newIncidentId();
     const occurred_at = new Date().toISOString();
-    const event = await appendToStream(pool, {
-      event_id: randomUUID(),
-      event_type: "incident.opened",
-      event_version: 1,
-      occurred_at,
-      workspace_id,
-      room_id,
-      thread_id,
-      run_id,
-      actor: { actor_type, actor_id },
-      stream:
-        room_id != null
-          ? { stream_type: "room", stream_id: room_id }
-          : { stream_type: "workspace", stream_id: workspace_id },
-      correlation_id: correlation_id ?? randomUUID(),
-      data: {
-        incident_id,
-        title,
-        summary,
-        severity,
+    let event: IncidentEventV1;
+    try {
+      event = (await appendToStream(pool, {
+        event_id: randomUUID(),
+        event_type: "incident.opened",
+        event_version: 1,
+        occurred_at,
+        workspace_id,
+        room_id,
+        thread_id,
         run_id,
-      },
-      policy_context: {},
-      model_context: {},
-      display: {},
-    });
+        actor: { actor_type, actor_id },
+        stream,
+        correlation_id: correlation_id ?? randomUUID(),
+        data: {
+          incident_id,
+          category,
+          title,
+          summary,
+          severity,
+          run_id,
+          entity_type,
+          entity_id,
+          details,
+        },
+        idempotency_key,
+        policy_context: {},
+        model_context: {},
+        display: {},
+      })) as IncidentEventV1;
+    } catch (err) {
+      if (idempotency_key && isIdempotencyUniqueViolation(err)) {
+        const existingIncidentId = await findIncidentByIdempotency(
+          pool,
+          workspace_id,
+          stream.stream_type,
+          stream.stream_id,
+          idempotency_key,
+        );
+        if (existingIncidentId) {
+          return reply.code(200).send({ incident_id: existingIncidentId, deduped: true });
+        }
+        return reply.code(409).send({ error: "idempotency_conflict_unresolved" });
+      }
+      throw err;
+    }
 
-    await applyIncidentEvent(pool, event as IncidentEventV1);
-    return reply.code(201).send({ incident_id });
+    await applyIncidentEvent(pool, event);
+    return reply.code(201).send({ incident_id, deduped: false });
   });
 
   app.get<{
