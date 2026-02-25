@@ -114,12 +114,17 @@ Current endpoints (selected):
 - Approvals + policy:
   - `POST /v1/approvals`, `GET /v1/approvals`, `GET /v1/approvals/:id`, `POST /v1/approvals/:id/decide`
   - `POST /v1/policy/evaluate`
+- Pipeline projection:
+  - `GET /v1/pipeline/projection` (fixed 6-stage render snapshot for sync adapters)
 - Runs:
   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/:id`
   - `POST /v1/runs/claim` (external-engine safe claim of queued run)
   - `POST /v1/runs/:id/lease/heartbeat`, `POST /v1/runs/:id/lease/release`
   - `POST /v1/runs/:id/start`, `POST /v1/runs/:id/steps`, `GET /v1/runs/:id/steps`
   - `POST /v1/runs/:id/complete`, `POST /v1/runs/:id/fail`
+- Incidents:
+  - `POST /v1/incidents` (supports optional `idempotency_key` for dedupe-safe open)
+  - `GET /v1/incidents`, `GET /v1/incidents/:id`
 - Tools/artifacts:
   - `POST /v1/steps/:stepId/toolcalls`, `POST /v1/toolcalls/:id/succeed`, `POST /v1/toolcalls/:id/fail`, `GET /v1/toolcalls`
   - `POST /v1/steps/:stepId/artifacts`, `GET /v1/artifacts`, `GET /v1/artifacts/:id`

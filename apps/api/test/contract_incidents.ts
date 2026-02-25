@@ -157,7 +157,50 @@ async function main(): Promise<void> {
       workspaceHeader,
     );
 
-    const { incident_id } = await postJson<{ incident_id: string }>(
+    const duplicateIdempotencyKey = `incident_dedupe_${Date.now()}`;
+    const firstIdempotent = await postJson<{ incident_id: string; deduped: boolean }>(
+      baseUrl,
+      "/v1/incidents",
+      {
+        room_id,
+        run_id,
+        title: "Duplicate-safe incident",
+        summary: "Same incident should dedupe",
+        severity: "medium",
+        idempotency_key: duplicateIdempotencyKey,
+      },
+      workspaceHeader,
+    );
+    assert.ok(firstIdempotent.incident_id.startsWith("inc_"));
+    assert.equal(firstIdempotent.deduped, false);
+
+    const secondIdempotent = await postJson<{ incident_id: string; deduped: boolean }>(
+      baseUrl,
+      "/v1/incidents",
+      {
+        room_id,
+        run_id,
+        title: "Duplicate-safe incident changed payload",
+        summary: "This request should return same incident",
+        severity: "high",
+        idempotency_key: duplicateIdempotencyKey,
+      },
+      workspaceHeader,
+    );
+    assert.equal(secondIdempotent.incident_id, firstIdempotent.incident_id);
+    assert.equal(secondIdempotent.deduped, true);
+
+    const duplicateEvents = await db.query<{ count: string }>(
+      `SELECT count(*)::text AS count
+       FROM evt_events
+       WHERE workspace_id = $1
+         AND event_type = 'incident.opened'
+         AND idempotency_key = $2`,
+      [workspaceHeader["x-workspace-id"], duplicateIdempotencyKey],
+    );
+    assert.equal(Number.parseInt(duplicateEvents.rows[0].count, 10), 1);
+
+    const { incident_id, deduped } = await postJson<{ incident_id: string; deduped: boolean }>(
       baseUrl,
       "/v1/incidents",
       {
@@ -170,6 +213,7 @@ async function main(): Promise<void> {
       workspaceHeader,
     );
     assert.ok(incident_id.startsWith("inc_"));
+    assert.equal(deduped, false);
 
     const closeWithoutRca = await postJsonExpect<{ error: string }>(
       baseUrl,
