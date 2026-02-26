@@ -9,7 +9,7 @@
 ## 1. 8단계 핵심 루프
 `Goal → Portfolio → Approval → Execute → Evidence → Eval → Learn → Promote/Demote`
 
-- 작업 상태는 파일 위치 또는 상태 태그로 증명한다.
+- 작업 상태의 단일 진실은 앱 이벤트(SSOT)이며, 파일 위치/상태 태그는 이를 보여주는 projection이다.
 - 이전 단계 완료 전 다음 단계로 이동 금지.
 
 ### Phase 1: 발의 및 격리
