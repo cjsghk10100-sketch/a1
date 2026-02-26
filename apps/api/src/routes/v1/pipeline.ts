@@ -1,6 +1,10 @@
 import type { FastifyInstance } from "fastify";
 
 import type { DbPool } from "../../db/pool.js";
+import {
+  buildContractError,
+  httpStatusForReasonCode,
+} from "../../contracts/pipeline_v2_contract.js";
 import { SCHEMA_VERSION } from "../../contracts/schemaVersion.js";
 import type { PipelineProjectionResponseV2_1 } from "../../contracts/pipeline_v2_contract.js";
 
@@ -102,8 +106,8 @@ function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
 }
 
 function parseLimit(raw: unknown): number {
-  const n = Number(raw ?? "500");
-  if (!Number.isFinite(n)) return 500;
+  const n = Number(raw ?? "200");
+  if (!Number.isFinite(n)) return 200;
   return Math.max(1, Math.min(500, Math.floor(n)));
 }
 
@@ -363,45 +367,60 @@ export async function registerPipelineRoutes(app: FastifyInstance, pool: DbPool)
   app.get<{
     Querystring: { limit?: string };
   }>("/v1/pipeline/projection", async (req, reply) => {
-    const workspace_id = workspaceIdFromReq(req);
-    const limit = parseLimit(req.query.limit);
+    try {
+      const workspace_id = workspaceIdFromReq(req);
+      const limit = parseLimit(req.query.limit);
 
-    const [approvalStage, executeStage, reviewStage, demotedStage] = await Promise.all([
-      fetchApprovalStage(pool, workspace_id, limit),
-      fetchExecuteRunsStage(pool, workspace_id, limit),
-      fetchReviewRunsStage(pool, workspace_id, limit),
-      fetchDemotedRunsStage(pool, workspace_id, limit),
-    ]);
+      const [approvalStage, executeStage, reviewStage, demotedStage] = await Promise.all([
+        fetchApprovalStage(pool, workspace_id, limit),
+        fetchExecuteRunsStage(pool, workspace_id, limit),
+        fetchReviewRunsStage(pool, workspace_id, limit),
+        fetchDemotedRunsStage(pool, workspace_id, limit),
+      ]);
 
-    const stages: PipelineProjectionStages = {
-      "1_inbox": [],
-      "2_pending_approval": approvalStage.items,
-      "3_execute_workspace": executeStage.items,
-      "4_review_evidence": reviewStage.items,
-      "5_promoted": [],
-      "6_demoted": demotedStage.items,
-    };
+      const stages: PipelineProjectionStages = {
+        "1_inbox": [],
+        "2_pending_approval": approvalStage.items,
+        "3_execute_workspace": executeStage.items,
+        "4_review_evidence": reviewStage.items,
+        "5_promoted": [],
+        "6_demoted": demotedStage.items,
+      };
 
-    const stage_stats: PipelineStageStats = {
-      "1_inbox": { returned: stages["1_inbox"].length, truncated: false },
-      "2_pending_approval": { returned: stages["2_pending_approval"].length, truncated: approvalStage.truncated },
-      "3_execute_workspace": { returned: stages["3_execute_workspace"].length, truncated: executeStage.truncated },
-      "4_review_evidence": { returned: stages["4_review_evidence"].length, truncated: reviewStage.truncated },
-      "5_promoted": { returned: stages["5_promoted"].length, truncated: false },
-      "6_demoted": { returned: stages["6_demoted"].length, truncated: demotedStage.truncated },
-    };
+      const stage_stats: PipelineStageStats = {
+        "1_inbox": { returned: stages["1_inbox"].length, truncated: false },
+        "2_pending_approval": {
+          returned: stages["2_pending_approval"].length,
+          truncated: approvalStage.truncated,
+        },
+        "3_execute_workspace": {
+          returned: stages["3_execute_workspace"].length,
+          truncated: executeStage.truncated,
+        },
+        "4_review_evidence": {
+          returned: stages["4_review_evidence"].length,
+          truncated: reviewStage.truncated,
+        },
+        "5_promoted": { returned: stages["5_promoted"].length, truncated: false },
+        "6_demoted": { returned: stages["6_demoted"].length, truncated: demotedStage.truncated },
+      };
 
-    const response: PipelineProjectionResponse = {
-      meta: {
-        schema_version: SCHEMA_VERSION,
-        generated_at: new Date().toISOString(),
-        limit,
-        stage_stats,
-        watermark_event_id: computeWatermarkEventId(stages),
-      },
-      stages,
-    };
+      const response: PipelineProjectionResponse = {
+        meta: {
+          schema_version: SCHEMA_VERSION,
+          generated_at: new Date().toISOString(),
+          limit,
+          truncated: Object.values(stage_stats).some((stage) => stage.truncated),
+          stage_stats,
+          watermark_event_id: computeWatermarkEventId(stages),
+        },
+        stages,
+      };
 
-    return reply.code(200).send(response);
+      return reply.code(200).send(response);
+    } catch {
+      const reason_code = "projection_unavailable";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
+    }
   });
 }

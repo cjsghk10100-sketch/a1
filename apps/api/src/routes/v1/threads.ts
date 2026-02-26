@@ -89,14 +89,16 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
       labels?: string[];
     };
   }>("/v1/threads/:threadId/messages", async (req, reply) => {
-    try {
-      assertSupportedSchemaVersion(req.body.schema_version);
-    } catch (err) {
-      return reply.code(400).send({
-        error: "invalid_schema_version",
-        reason_code: "unsupported_version",
-        message: err instanceof Error ? err.message : "unsupported schema_version",
-      });
+    if (req.body.schema_version != null) {
+      try {
+        assertSupportedSchemaVersion(req.body.schema_version);
+      } catch (err) {
+        return reply.code(400).send({
+          error: "invalid_schema_version",
+          reason_code: "unsupported_version",
+          message: err instanceof Error ? err.message : "unsupported schema_version",
+        });
+      }
     }
 
     const thread = await pool.query<{ workspace_id: string; room_id: string }>(

@@ -5,6 +5,16 @@ import type { FastifyInstance } from "fastify";
 import type { ArtifactContentType, ArtifactEventV1 } from "@agentapp/shared";
 import { newArtifactId } from "@agentapp/shared";
 
+import {
+  ContractViolationError,
+  assertArtifactCreateRequest,
+  assertSafeObjectKey,
+  buildArtifactObjectKey,
+  buildContractError,
+  errorPayloadFromUnknown,
+  httpStatusForReasonCode,
+  type ArtifactCreateRequest,
+} from "../../contracts/pipeline_v2_contract.js";
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { applyArtifactEvent } from "../../projectors/artifactProjector.js";
@@ -20,11 +30,75 @@ function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
   return raw?.trim() || "ws_dev";
 }
 
+function workspaceIdFromHeader(req: { headers: Record<string, unknown> }): string | null {
+  const raw = getHeaderString(req.headers["x-workspace-id"] as string | string[] | undefined);
+  const normalized = raw?.trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function buildUploadUrl(object_key: string): string {
+  const base = process.env.ARTIFACT_UPLOAD_BASE_URL?.trim() || "https://storage.local/upload";
+  try {
+    const url = new URL(base);
+    url.searchParams.set("object_key", object_key);
+    return url.toString();
+  } catch {
+    throw new ContractViolationError(
+      "storage_unavailable",
+      "storage endpoint is not configured",
+    );
+  }
+}
+
 function normalizeContentType(raw: unknown): ArtifactContentType {
   return raw === "text" || raw === "json" || raw === "uri" || raw === "none" ? raw : "none";
 }
 
 export async function registerArtifactRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
+  app.post<{ Body: unknown }>("/v1/artifacts", async (req, reply) => {
+    const workspace_id = workspaceIdFromHeader(req);
+    if (!workspace_id) {
+      const reason_code = "missing_workspace_header";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(
+        buildContractError(reason_code, {
+          header: "x-workspace-id",
+        }),
+      );
+    }
+
+    let body: ArtifactCreateRequest;
+    try {
+      assertArtifactCreateRequest(req.body);
+      body = req.body;
+    } catch (err) {
+      const payload = errorPayloadFromUnknown(err, "internal_error");
+      return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
+    }
+
+    let object_key: string;
+    let upload_url: string;
+    try {
+      object_key = buildArtifactObjectKey({
+        workspace_id,
+        correlation_id: body.correlation_id,
+        message_id: body.message_id,
+      });
+      assertSafeObjectKey(object_key);
+      upload_url = buildUploadUrl(object_key);
+    } catch (err) {
+      const payload = errorPayloadFromUnknown(err, "storage_unavailable");
+      return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
+    }
+
+    const artifact_id = newArtifactId();
+    return reply.code(201).send({
+      artifact_id,
+      object_key,
+      upload_url,
+      content_type: body.content_type,
+    });
+  });
+
   app.post<{
     Params: { stepId: string };
     Body: {
@@ -40,14 +114,16 @@ export async function registerArtifactRoutes(app: FastifyInstance, pool: DbPool)
   }>("/v1/steps/:stepId/artifacts", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
 
-    try {
-      assertSupportedSchemaVersion(req.body.schema_version);
-    } catch (err) {
-      return reply.code(400).send({
-        error: "invalid_schema_version",
-        reason_code: "unsupported_version",
-        message: err instanceof Error ? err.message : "unsupported schema_version",
-      });
+    if (req.body.schema_version != null) {
+      try {
+        assertSupportedSchemaVersion(req.body.schema_version);
+      } catch (err) {
+        return reply.code(400).send({
+          error: "invalid_schema_version",
+          reason_code: "unsupported_version",
+          message: err instanceof Error ? err.message : "unsupported schema_version",
+        });
+      }
     }
 
     if (!req.body.kind?.trim()) {
@@ -216,4 +292,3 @@ export async function registerArtifactRoutes(app: FastifyInstance, pool: DbPool)
     return reply.code(200).send({ artifact: res.rows[0] });
   });
 }
-
