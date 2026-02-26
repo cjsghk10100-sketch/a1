@@ -1,7 +1,7 @@
 export const SCHEMA_VERSION = "2.1" as const;
 
-// current + previous
-export const SUPPORTED_VERSIONS = ["2.0", "2.1"] as const;
+// pinned to current only
+export const SUPPORTED_VERSIONS = ["2.1"] as const;
 export type SupportedSchemaVersion = (typeof SUPPORTED_VERSIONS)[number];
 
 export function assertSupportedSchemaVersion(v: unknown): asserts v is SupportedSchemaVersion {
