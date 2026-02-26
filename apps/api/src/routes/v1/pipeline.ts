@@ -94,6 +94,13 @@ type PipelineProjectionStages = {
 };
 
 type PipelineProjectionResponse = PipelineProjectionResponseV2_1;
+type LegacyFlatProjectionResponse = {
+  schema_version: "pipeline_projection.v0.1";
+  generated_at: string;
+} & PipelineProjectionStages;
+
+const LEGACY_FLAT_SCHEMA_VERSION = "pipeline_projection.v0.1" as const;
+// projection schema_version is namespaced (pipeline_projection.v0.1) and intentionally differs from write API schema_version (2.1).
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -109,6 +116,10 @@ function parseLimit(raw: unknown): number {
   const n = Number(raw ?? "200");
   if (!Number.isFinite(n)) return 200;
   return Math.max(1, Math.min(500, Math.floor(n)));
+}
+
+function wantsEnvelopeFormat(raw: unknown): boolean {
+  return typeof raw === "string" && raw.trim().toLowerCase() === "envelope";
 }
 
 function toApprovalStageItem(row: ApprovalStageRow): ApprovalStageItem {
@@ -365,11 +376,13 @@ async function fetchDemotedRunsStage(
 
 export async function registerPipelineRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.get<{
-    Querystring: { limit?: string };
+    Querystring: { limit?: string; format?: string };
   }>("/v1/pipeline/projection", async (req, reply) => {
     try {
       const workspace_id = workspaceIdFromReq(req);
       const limit = parseLimit(req.query.limit);
+      const asEnvelope = wantsEnvelopeFormat(req.query.format);
+      const generated_at = new Date().toISOString();
 
       const [approvalStage, executeStage, reviewStage, demotedStage] = await Promise.all([
         fetchApprovalStage(pool, workspace_id, limit),
@@ -408,7 +421,7 @@ export async function registerPipelineRoutes(app: FastifyInstance, pool: DbPool)
       const response: PipelineProjectionResponse = {
         meta: {
           schema_version: SCHEMA_VERSION,
-          generated_at: new Date().toISOString(),
+          generated_at,
           limit,
           truncated: Object.values(stage_stats).some((stage) => stage.truncated),
           stage_stats,
@@ -417,7 +430,16 @@ export async function registerPipelineRoutes(app: FastifyInstance, pool: DbPool)
         stages,
       };
 
-      return reply.code(200).send(response);
+      if (asEnvelope) {
+        return reply.code(200).send(response);
+      }
+
+      const flatResponse: LegacyFlatProjectionResponse = {
+        schema_version: LEGACY_FLAT_SCHEMA_VERSION,
+        generated_at,
+        ...stages,
+      };
+      return reply.code(200).send(flatResponse);
     } catch {
       const reason_code = "projection_unavailable";
       return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));

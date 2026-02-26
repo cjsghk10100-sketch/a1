@@ -57,7 +57,29 @@ type ProjectionResponse = {
   "3_execute_workspace": RunStageItem[];
   "4_review_evidence": RunStageItem[];
   "5_promoted": Array<Record<string, never>>;
-  "6_demoted": Array<Record<string, never>>;
+  "6_demoted": RunStageItem[];
+};
+
+type EnvelopeProjectionResponse = {
+  meta: {
+    schema_version: string;
+    generated_at: string;
+    limit: number;
+    truncated: boolean;
+    stage_stats: Record<
+      "1_inbox" | "2_pending_approval" | "3_execute_workspace" | "4_review_evidence" | "5_promoted" | "6_demoted",
+      { returned: number; truncated: boolean }
+    >;
+    watermark_event_id: string | null;
+  };
+  stages: {
+    "1_inbox": Array<Record<string, never>>;
+    "2_pending_approval": ApprovalStageItem[];
+    "3_execute_workspace": RunStageItem[];
+    "4_review_evidence": RunStageItem[];
+    "5_promoted": Array<Record<string, never>>;
+    "6_demoted": RunStageItem[];
+  };
 };
 
 function requireEnv(name: string): string {
@@ -294,7 +316,6 @@ async function main(): Promise<void> {
     assert.ok(Array.isArray(projection["6_demoted"]));
     assert.equal(projection["1_inbox"].length, 0);
     assert.equal(projection["5_promoted"].length, 0);
-    assert.equal(projection["6_demoted"].length, 0);
 
     const approvalIds = new Set(projection["2_pending_approval"].map((item) => item.entity_id));
     assert.ok(approvalIds.has(pendingApproval.approval_id));
@@ -327,7 +348,7 @@ async function main(): Promise<void> {
 
     const reviewRunIds = new Set(projection["4_review_evidence"].map((item) => item.entity_id));
     assert.ok(reviewRunIds.has(succeededRun.run_id));
-    assert.ok(reviewRunIds.has(failedRun.run_id));
+    assert.ok(!reviewRunIds.has(failedRun.run_id));
     for (const item of projection["4_review_evidence"]) {
       assert.ok(item.status === "succeeded" || item.status === "failed");
       assert.equal(item.entity_type, "run");
@@ -339,6 +360,35 @@ async function main(): Promise<void> {
       [...projection["4_review_evidence"]].sort(compareByUpdatedAtDescAndEntityIdAsc),
     );
     assertNoLeaseFields(projection["4_review_evidence"]);
+
+    const demotedRunIds = new Set(projection["6_demoted"].map((item) => item.entity_id));
+    assert.ok(demotedRunIds.has(failedRun.run_id));
+    for (const item of projection["6_demoted"]) {
+      assert.equal(item.status, "failed");
+      assert.equal(item.entity_type, "run");
+      assert.equal(typeof item.title, "string");
+      assertLinksShape(item);
+    }
+    assert.deepEqual(
+      projection["6_demoted"],
+      [...projection["6_demoted"]].sort(compareByUpdatedAtDescAndEntityIdAsc),
+    );
+    assertNoLeaseFields(projection["6_demoted"]);
+
+    const envelope = await getJson<EnvelopeProjectionResponse>(
+      baseUrl,
+      "/v1/pipeline/projection?limit=200&format=envelope",
+      workspaceHeader,
+    );
+    assert.equal(envelope.meta.schema_version, "2.1");
+    assert.equal(envelope.meta.limit, 200);
+    assert.ok(!Number.isNaN(new Date(envelope.meta.generated_at).getTime()));
+    assert.ok(Array.isArray(envelope.stages["1_inbox"]));
+    assert.ok(Array.isArray(envelope.stages["2_pending_approval"]));
+    assert.ok(Array.isArray(envelope.stages["3_execute_workspace"]));
+    assert.ok(Array.isArray(envelope.stages["4_review_evidence"]));
+    assert.ok(Array.isArray(envelope.stages["5_promoted"]));
+    assert.ok(Array.isArray(envelope.stages["6_demoted"]));
   } finally {
     await app.close();
   }
