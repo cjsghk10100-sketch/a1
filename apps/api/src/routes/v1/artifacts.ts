@@ -8,6 +8,7 @@ import { newArtifactId } from "@agentapp/shared";
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { applyArtifactEvent } from "../../projectors/artifactProjector.js";
+import { assertSupportedSchemaVersion } from "../../contracts/schemaVersion.js";
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -27,6 +28,7 @@ export async function registerArtifactRoutes(app: FastifyInstance, pool: DbPool)
   app.post<{
     Params: { stepId: string };
     Body: {
+      schema_version?: string;
       kind: string;
       title?: string;
       mime_type?: string;
@@ -37,6 +39,15 @@ export async function registerArtifactRoutes(app: FastifyInstance, pool: DbPool)
     };
   }>("/v1/steps/:stepId/artifacts", async (req, reply) => {
     const workspace_id = workspaceIdFromReq(req);
+
+    try {
+      assertSupportedSchemaVersion(req.body.schema_version);
+    } catch (err) {
+      return reply.code(400).send({
+        error: "invalid_schema_version",
+        message: err instanceof Error ? err.message : "unsupported schema_version",
+      });
+    }
 
     if (!req.body.kind?.trim()) {
       return reply.code(400).send({ error: "missing_kind" });
