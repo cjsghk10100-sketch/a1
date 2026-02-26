@@ -3,8 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
-// @ts-ignore TS2835: extensionless import is required by CI fix request.
-import { SCHEMA_VERSION, SUPPORTED_VERSIONS } from '../src/contracts/schemaVersion'
+import { SCHEMA_VERSION, SUPPORTED_VERSIONS } from './_contracts.js'
 
 // ── Safety guard ─────────────────────────────────────────────────────────────
 // Refuse to run against anything that doesn't look like a local test DB.
@@ -92,9 +91,10 @@ async function run() {
        LIMIT 1`
     )
     const previousVersion: string = t5.rows[0].version
+    const supportedVersions: readonly string[] = SUPPORTED_VERSIONS
 
     assert.ok(
-      SUPPORTED_VERSIONS.includes(previousVersion),
+      supportedVersions.includes(previousVersion),
       `SUPPORTED_VERSIONS must include previous (${previousVersion}). Got: ${JSON.stringify(SUPPORTED_VERSIONS)}`
     )
     assert.ok(
