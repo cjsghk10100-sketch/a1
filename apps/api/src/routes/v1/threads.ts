@@ -7,6 +7,7 @@ import { newMessageId, newThreadId } from "@agentapp/shared";
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { applyCoreEvent } from "../../projectors/coreProjector.js";
+import { assertSupportedSchemaVersion } from "../../contracts/schemaVersion.js";
 
 export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.get<{
@@ -79,6 +80,7 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
   app.post<{
     Params: { threadId: string };
     Body: {
+      schema_version?: string;
       sender_type?: string;
       sender_id?: string;
       content_md: string;
@@ -87,6 +89,16 @@ export async function registerThreadRoutes(app: FastifyInstance, pool: DbPool): 
       labels?: string[];
     };
   }>("/v1/threads/:threadId/messages", async (req, reply) => {
+    try {
+      assertSupportedSchemaVersion(req.body.schema_version);
+    } catch (err) {
+      return reply.code(400).send({
+        error: "invalid_schema_version",
+        reason_code: "unsupported_version",
+        message: err instanceof Error ? err.message : "unsupported schema_version",
+      });
+    }
+
     const thread = await pool.query<{ workspace_id: string; room_id: string }>(
       "SELECT workspace_id, room_id FROM proj_threads WHERE thread_id = $1",
       [req.params.threadId],

@@ -45,6 +45,7 @@ export async function registerArtifactRoutes(app: FastifyInstance, pool: DbPool)
     } catch (err) {
       return reply.code(400).send({
         error: "invalid_schema_version",
+        reason_code: "unsupported_version",
         message: err instanceof Error ? err.message : "unsupported schema_version",
       });
     }
