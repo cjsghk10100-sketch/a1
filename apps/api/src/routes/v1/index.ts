@@ -18,6 +18,7 @@ import { registerEventRoutes } from "./events.js";
 import { registerExperimentRoutes } from "./experiments.js";
 import { registerIncidentRoutes } from "./incidents.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
+import { registerMessageRoutes } from "./messages.js";
 import { registerPipelineRoutes } from "./pipeline.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerPrincipalRoutes } from "./principals.js";
@@ -57,6 +58,7 @@ export async function registerV1Routes(
   await registerExperimentRoutes(app, pool);
   await registerIncidentRoutes(app, pool);
   await registerLifecycleRoutes(app, pool);
+  await registerMessageRoutes(app, pool);
   await registerPipelineRoutes(app, pool);
   await registerPolicyRoutes(app, pool);
   await registerPrincipalRoutes(app, pool);

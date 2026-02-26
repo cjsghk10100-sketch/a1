@@ -1,6 +1,20 @@
 import type { FastifyInstance } from "fastify";
 
 import type { DbPool } from "../../db/pool.js";
+import {
+  buildContractError,
+  httpStatusForReasonCode,
+} from "../../contracts/pipeline_v2_contract.js";
+import { SCHEMA_VERSION } from "../../contracts/schemaVersion.js";
+import type { PipelineProjectionResponseV2_1 } from "../../contracts/pipeline_v2_contract.js";
+
+type StageKey =
+  | "1_inbox"
+  | "2_pending_approval"
+  | "3_execute_workspace"
+  | "4_review_evidence"
+  | "5_promoted"
+  | "6_demoted";
 
 type ApprovalStageRow = {
   approval_id: string;
@@ -24,6 +38,7 @@ type RunStageRow = {
   correlation_id: string;
   updated_at: string;
   last_event_id: string | null;
+  open_incident_id: string | null;
 };
 
 type PipelineItemLinks = {
@@ -61,16 +76,31 @@ type RunStageItem = {
   links: PipelineItemLinks;
 };
 
-type PipelineProjectionResponse = {
-  schema_version: "pipeline_projection.v0.1";
-  generated_at: string;
+type PipelineStageStats = Record<
+  StageKey,
+  {
+    returned: number;
+    truncated: boolean;
+  }
+>;
+
+type PipelineProjectionStages = {
   "1_inbox": Array<Record<string, never>>;
   "2_pending_approval": ApprovalStageItem[];
   "3_execute_workspace": RunStageItem[];
   "4_review_evidence": RunStageItem[];
   "5_promoted": Array<Record<string, never>>;
-  "6_demoted": Array<Record<string, never>>;
+  "6_demoted": RunStageItem[];
 };
+
+type PipelineProjectionResponse = PipelineProjectionResponseV2_1;
+type LegacyFlatProjectionResponse = {
+  schema_version: "pipeline_projection.v0.1";
+  generated_at: string;
+} & PipelineProjectionStages;
+
+const LEGACY_FLAT_SCHEMA_VERSION = "pipeline_projection.v0.1" as const;
+// projection schema_version is namespaced (pipeline_projection.v0.1) and intentionally differs from write API schema_version (2.1).
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -86,6 +116,10 @@ function parseLimit(raw: unknown): number {
   const n = Number(raw ?? "200");
   if (!Number.isFinite(n)) return 200;
   return Math.max(1, Math.min(500, Math.floor(n)));
+}
+
+function wantsEnvelopeFormat(raw: unknown): boolean {
+  return typeof raw === "string" && raw.trim().toLowerCase() === "envelope";
 }
 
 function toApprovalStageItem(row: ApprovalStageRow): ApprovalStageItem {
@@ -127,86 +161,288 @@ function toRunStageItem(row: RunStageRow): RunStageItem {
       run_id: row.run_id,
       evidence_id: null,
       scorecard_id: null,
-      incident_id: null,
+      incident_id: row.open_incident_id,
     },
   };
 }
 
+const TRIAGE_ERROR_CODES = [
+  "policy_denied",
+  "approval_required",
+  "permission_denied",
+  "external_write_kill_switch",
+] as const;
+
+type WatermarkCandidate = {
+  updated_at: string;
+  entity_id: string;
+  last_event_id: string | null;
+};
+
+type StageFetchResult<T> = {
+  items: T[];
+  truncated: boolean;
+};
+
+function pickMostRecentWatermarkItem(
+  current: WatermarkCandidate | null,
+  next: WatermarkCandidate,
+): WatermarkCandidate {
+  if (!current) return next;
+  const currentTime = Date.parse(current.updated_at);
+  const nextTime = Date.parse(next.updated_at);
+  if (Number.isFinite(nextTime) && Number.isFinite(currentTime) && nextTime !== currentTime) {
+    return nextTime > currentTime ? next : current;
+  }
+  if (Number.isFinite(nextTime) && !Number.isFinite(currentTime)) return next;
+  if (!Number.isFinite(nextTime) && Number.isFinite(currentTime)) return current;
+  return next.entity_id.localeCompare(current.entity_id) < 0 ? next : current;
+}
+
+function computeWatermarkEventId(stages: PipelineProjectionStages): string | null {
+  let candidate: WatermarkCandidate | null = null;
+  const stageItems: Array<ApprovalStageItem | RunStageItem> = [
+    ...stages["2_pending_approval"],
+    ...stages["3_execute_workspace"],
+    ...stages["4_review_evidence"],
+    ...stages["6_demoted"],
+  ];
+  for (const item of stageItems) {
+    candidate = pickMostRecentWatermarkItem(candidate, {
+      updated_at: item.updated_at,
+      entity_id: item.entity_id,
+      last_event_id: item.last_event_id,
+    });
+  }
+  return candidate?.last_event_id ?? null;
+}
+
+async function fetchApprovalStage(
+  pool: DbPool,
+  workspace_id: string,
+  limit: number,
+): Promise<StageFetchResult<ApprovalStageItem>> {
+  const res = await pool.query<ApprovalStageRow>(
+    `SELECT
+       approval_id,
+       title,
+       status,
+       room_id,
+       thread_id,
+       run_id,
+       correlation_id,
+       updated_at::text AS updated_at,
+       last_event_id
+     FROM proj_approvals
+     WHERE workspace_id = $1
+       AND status IN ('pending', 'held')
+     ORDER BY updated_at DESC, approval_id ASC
+     LIMIT $2`,
+    [workspace_id, limit + 1],
+  );
+  const truncated = res.rows.length > limit;
+  const rows = truncated ? res.rows.slice(0, limit) : res.rows;
+  return { items: rows.map(toApprovalStageItem), truncated };
+}
+
+async function fetchExecuteRunsStage(
+  pool: DbPool,
+  workspace_id: string,
+  limit: number,
+): Promise<StageFetchResult<RunStageItem>> {
+  const res = await pool.query<RunStageRow>(
+    `SELECT
+       r.run_id,
+       r.title,
+       r.status,
+       r.room_id,
+       r.thread_id,
+       r.experiment_id,
+       r.correlation_id,
+       r.updated_at::text AS updated_at,
+       r.last_event_id,
+       oi.incident_id AS open_incident_id
+     FROM proj_runs AS r
+     LEFT JOIN LATERAL (
+       SELECT i.incident_id
+       FROM proj_incidents AS i
+       WHERE i.workspace_id = r.workspace_id
+         AND i.status = 'open'
+         AND (i.run_id = r.run_id OR i.correlation_id = r.correlation_id)
+       ORDER BY i.updated_at DESC, i.incident_id ASC
+       LIMIT 1
+     ) AS oi ON TRUE
+     WHERE r.workspace_id = $1
+       AND r.status IN ('queued', 'running')
+     ORDER BY r.updated_at DESC, r.run_id ASC
+     LIMIT $2`,
+    [workspace_id, limit + 1],
+  );
+  const truncated = res.rows.length > limit;
+  const rows = truncated ? res.rows.slice(0, limit) : res.rows;
+  return { items: rows.map(toRunStageItem), truncated };
+}
+
+async function fetchReviewRunsStage(
+  pool: DbPool,
+  workspace_id: string,
+  limit: number,
+): Promise<StageFetchResult<RunStageItem>> {
+  const res = await pool.query<RunStageRow>(
+    `SELECT
+       r.run_id,
+       r.title,
+       r.status,
+       r.room_id,
+       r.thread_id,
+       r.experiment_id,
+       r.correlation_id,
+       r.updated_at::text AS updated_at,
+       r.last_event_id,
+       oi.incident_id AS open_incident_id
+     FROM proj_runs AS r
+     LEFT JOIN LATERAL (
+       SELECT i.incident_id
+       FROM proj_incidents AS i
+       WHERE i.workspace_id = r.workspace_id
+         AND i.status = 'open'
+         AND (i.run_id = r.run_id OR i.correlation_id = r.correlation_id)
+       ORDER BY i.updated_at DESC, i.incident_id ASC
+       LIMIT 1
+     ) AS oi ON TRUE
+     WHERE r.workspace_id = $1
+       AND (
+         r.status = 'succeeded'
+         OR (
+           r.status = 'failed'
+           AND (
+             oi.incident_id IS NOT NULL
+             OR COALESCE(r.error->>'code', '') = ANY($3::text[])
+             OR COALESCE(r.error->>'kind', '') = 'policy'
+           )
+         )
+       )
+     ORDER BY r.updated_at DESC, r.run_id ASC
+     LIMIT $2`,
+    [workspace_id, limit + 1, TRIAGE_ERROR_CODES],
+  );
+  const truncated = res.rows.length > limit;
+  const rows = truncated ? res.rows.slice(0, limit) : res.rows;
+  return { items: rows.map(toRunStageItem), truncated };
+}
+
+async function fetchDemotedRunsStage(
+  pool: DbPool,
+  workspace_id: string,
+  limit: number,
+): Promise<StageFetchResult<RunStageItem>> {
+  const res = await pool.query<RunStageRow>(
+    `SELECT
+       r.run_id,
+       r.title,
+       r.status,
+       r.room_id,
+       r.thread_id,
+       r.experiment_id,
+       r.correlation_id,
+       r.updated_at::text AS updated_at,
+       r.last_event_id,
+       oi.incident_id AS open_incident_id
+     FROM proj_runs AS r
+     LEFT JOIN LATERAL (
+       SELECT i.incident_id
+       FROM proj_incidents AS i
+       WHERE i.workspace_id = r.workspace_id
+         AND i.status = 'open'
+         AND (i.run_id = r.run_id OR i.correlation_id = r.correlation_id)
+       ORDER BY i.updated_at DESC, i.incident_id ASC
+       LIMIT 1
+     ) AS oi ON TRUE
+     WHERE r.workspace_id = $1
+       AND r.status = 'failed'
+       AND NOT (
+         oi.incident_id IS NOT NULL
+         OR COALESCE(r.error->>'code', '') = ANY($3::text[])
+         OR COALESCE(r.error->>'kind', '') = 'policy'
+       )
+     ORDER BY r.updated_at DESC, r.run_id ASC
+     LIMIT $2`,
+    [workspace_id, limit + 1, TRIAGE_ERROR_CODES],
+  );
+  const truncated = res.rows.length > limit;
+  const rows = truncated ? res.rows.slice(0, limit) : res.rows;
+  return { items: rows.map(toRunStageItem), truncated };
+}
+
 export async function registerPipelineRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
   app.get<{
-    Querystring: { limit?: string };
+    Querystring: { limit?: string; format?: string };
   }>("/v1/pipeline/projection", async (req, reply) => {
-    const workspace_id = workspaceIdFromReq(req);
-    const limit = parseLimit(req.query.limit);
+    try {
+      const workspace_id = workspaceIdFromReq(req);
+      const limit = parseLimit(req.query.limit);
+      const asEnvelope = wantsEnvelopeFormat(req.query.format);
+      const generated_at = new Date().toISOString();
 
-    const approvals = await pool.query<ApprovalStageRow>(
-      `SELECT
-         approval_id,
-         title,
-         status,
-         room_id,
-         thread_id,
-         run_id,
-         correlation_id,
-         updated_at::text AS updated_at,
-         last_event_id
-       FROM proj_approvals
-       WHERE workspace_id = $1
-         AND status IN ('pending', 'held')
-       ORDER BY updated_at DESC, approval_id ASC
-       LIMIT $2`,
-      [workspace_id, limit],
-    );
+      const [approvalStage, executeStage, reviewStage, demotedStage] = await Promise.all([
+        fetchApprovalStage(pool, workspace_id, limit),
+        fetchExecuteRunsStage(pool, workspace_id, limit),
+        fetchReviewRunsStage(pool, workspace_id, limit),
+        fetchDemotedRunsStage(pool, workspace_id, limit),
+      ]);
 
-    const executeRuns = await pool.query<RunStageRow>(
-      `SELECT
-         run_id,
-         title,
-         status,
-         room_id,
-         thread_id,
-         experiment_id,
-         correlation_id,
-         updated_at::text AS updated_at,
-         last_event_id
-       FROM proj_runs
-       WHERE workspace_id = $1
-         AND status IN ('queued', 'running')
-       ORDER BY updated_at DESC, run_id ASC
-       LIMIT $2`,
-      [workspace_id, limit],
-    );
+      const stages: PipelineProjectionStages = {
+        "1_inbox": [],
+        "2_pending_approval": approvalStage.items,
+        "3_execute_workspace": executeStage.items,
+        "4_review_evidence": reviewStage.items,
+        "5_promoted": [],
+        "6_demoted": demotedStage.items,
+      };
 
-    const reviewRuns = await pool.query<RunStageRow>(
-      `SELECT
-         run_id,
-         title,
-         status,
-         room_id,
-         thread_id,
-         experiment_id,
-         correlation_id,
-         updated_at::text AS updated_at,
-         last_event_id
-       FROM proj_runs
-       WHERE workspace_id = $1
-         AND status IN ('succeeded', 'failed')
-       ORDER BY updated_at DESC, run_id ASC
-       LIMIT $2`,
-      [workspace_id, limit],
-    );
+      const stage_stats: PipelineStageStats = {
+        "1_inbox": { returned: stages["1_inbox"].length, truncated: false },
+        "2_pending_approval": {
+          returned: stages["2_pending_approval"].length,
+          truncated: approvalStage.truncated,
+        },
+        "3_execute_workspace": {
+          returned: stages["3_execute_workspace"].length,
+          truncated: executeStage.truncated,
+        },
+        "4_review_evidence": {
+          returned: stages["4_review_evidence"].length,
+          truncated: reviewStage.truncated,
+        },
+        "5_promoted": { returned: stages["5_promoted"].length, truncated: false },
+        "6_demoted": { returned: stages["6_demoted"].length, truncated: demotedStage.truncated },
+      };
 
-    const response: PipelineProjectionResponse = {
-      schema_version: "pipeline_projection.v0.1",
-      generated_at: new Date().toISOString(),
-      "1_inbox": [] as Array<Record<string, never>>,
-      "2_pending_approval": approvals.rows.map(toApprovalStageItem),
-      "3_execute_workspace": executeRuns.rows.map(toRunStageItem),
-      "4_review_evidence": reviewRuns.rows.map(toRunStageItem),
-      "5_promoted": [] as Array<Record<string, never>>,
-      "6_demoted": [] as Array<Record<string, never>>,
-    };
+      const response: PipelineProjectionResponse = {
+        meta: {
+          schema_version: SCHEMA_VERSION,
+          generated_at,
+          limit,
+          truncated: Object.values(stage_stats).some((stage) => stage.truncated),
+          stage_stats,
+          watermark_event_id: computeWatermarkEventId(stages),
+        },
+        stages,
+      };
 
-    return reply.code(200).send(response);
+      if (asEnvelope) {
+        return reply.code(200).send(response);
+      }
+
+      const flatResponse: LegacyFlatProjectionResponse = {
+        schema_version: LEGACY_FLAT_SCHEMA_VERSION,
+        generated_at,
+        ...stages,
+      };
+      return reply.code(200).send(flatResponse);
+    } catch {
+      const reason_code = "projection_unavailable";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
+    }
   });
 }
