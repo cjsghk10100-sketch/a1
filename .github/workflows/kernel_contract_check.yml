@@ -1,0 +1,48 @@
+name: Kernel Contract Check
+
+on:
+  pull_request:
+    branches: [main, develop]
+    # no `types:` filter → runs on draft PRs too
+
+jobs:
+  kernel-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Run kernel contract check
+        run: bash scripts/ci/check_kernel_contract.sh
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_REF: ${{ github.base_ref }}
+
+  kernel-contract-test:
+    runs-on: ubuntu-latest
+    needs: kernel-check
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_kernel
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 10.29.3
+      - run: pnpm install --frozen-lockfile
+      - name: Run kernel contract test
+        working-directory: apps/api
+        run: pnpm exec tsx test/contract_kernel_contract.ts
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/test_kernel
