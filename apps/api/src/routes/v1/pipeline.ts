@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 
 import type { DbPool } from "../../db/pool.js";
 import { SCHEMA_VERSION } from "../../contracts/schemaVersion.js";
+import type { PipelineProjectionResponseV2_1 } from "../../contracts/pipeline_v2_contract.js";
 
 type StageKey =
   | "1_inbox"
@@ -88,16 +89,7 @@ type PipelineProjectionStages = {
   "6_demoted": RunStageItem[];
 };
 
-type PipelineProjectionResponse = {
-  meta: {
-    schema_version: string;
-    generated_at: string;
-    limit: number;
-    stage_stats: PipelineStageStats;
-    watermark_event_id: string | null;
-  };
-  stages: PipelineProjectionStages;
-};
+type PipelineProjectionResponse = PipelineProjectionResponseV2_1;
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
