@@ -3,10 +3,8 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Client } from 'pg'
-import {
-  SCHEMA_VERSION,
-  SUPPORTED_VERSIONS,
-} from '../src/contracts/schemaVersion.js'
+// @ts-ignore TS2835: extensionless import is required by CI fix request.
+import { SCHEMA_VERSION, SUPPORTED_VERSIONS } from '../src/contracts/schemaVersion'
 
 // ── Safety guard ─────────────────────────────────────────────────────────────
 // Refuse to run against anything that doesn't look like a local test DB.
@@ -30,12 +28,16 @@ async function run() {
   await client.connect()
 
   try {
-    // ── Apply all migrations in numeric order ────────────────────────────────
+    // ── Apply only kernel schema migration(s) ────────────────────────────────
     const migrationsDir = path.resolve(__dir, '../migrations')
     const files = fs
       .readdirSync(migrationsDir)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()  // lexicographic = numeric order for zero-padded names
+      .filter((f) => f.endsWith('kernel_schema_versions.sql'))
+      .sort()
+
+    if (files.length === 0) {
+      throw new Error('kernel schema migration not found: *kernel_schema_versions.sql')
+    }
 
     for (const file of files) {
       const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8')
