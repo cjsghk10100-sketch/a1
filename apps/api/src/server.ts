@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
 import type { AppConfig } from "./config.js";
+import { startHeartCron } from "./cron/heartCron.js";
 import type { DbPool } from "./db/pool.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerV1Routes } from "./routes/v1/index.js";
@@ -19,6 +20,7 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
   let workerTimer: NodeJS.Timeout | undefined;
   let workerStopped = false;
   let workerInFlight = false;
+  let stopHeartCron: (() => void) | null = null;
   const embeddedWorkerEnabled = ctx.config.runWorkerEmbedded === true;
   const workerPollMs = ctx.config.runWorkerPollMs ?? 1000;
   function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
@@ -215,6 +217,8 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
   }
 
   app.addHook("onReady", async () => {
+    stopHeartCron = startHeartCron(ctx.pool, app.log) ?? null;
+
     if (!embeddedWorkerEnabled) return;
     workerStopped = false;
     workerTimer = setInterval(() => {
@@ -234,6 +238,8 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
 
   // Keep process lifecycle explicit.
   app.addHook("onClose", async () => {
+    stopHeartCron?.();
+    stopHeartCron = null;
     workerStopped = true;
     if (workerTimer) {
       clearInterval(workerTimer);
