@@ -200,11 +200,30 @@ async function appendEventRedactedEvent(
 export async function appendToStream(
   pool: DbPool,
   envelope: EventEnvelopeV1,
-  options: AppendToStreamOptions = {},
+  optionsOrClient: AppendToStreamOptions | DbClient = {},
+  maybeClient?: DbClient,
 ): Promise<EnvelopeWithSeq> {
-  const client = await pool.connect();
+  let options: AppendToStreamOptions = {};
+  let externalClient: DbClient | undefined;
+
+  if (
+    optionsOrClient &&
+    typeof optionsOrClient === "object" &&
+    typeof (optionsOrClient as DbClient).query === "function"
+  ) {
+    externalClient = optionsOrClient as DbClient;
+  } else {
+    options = optionsOrClient as AppendToStreamOptions;
+    externalClient = maybeClient;
+  }
+
+  const ownsClient = !externalClient;
+  const client = externalClient ?? (await pool.connect());
+
   try {
-    await client.query("BEGIN");
+    if (ownsClient) {
+      await client.query("BEGIN");
+    }
 
     const dlpResult = options.skipDlp ? null : scanForSecrets(envelope.data);
     const redactionResult =
@@ -266,12 +285,18 @@ export async function appendToStream(
       }
     }
 
-    await client.query("COMMIT");
+    if (ownsClient) {
+      await client.query("COMMIT");
+    }
     return appended;
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (ownsClient) {
+      await client.query("ROLLBACK");
+    }
     throw err;
   } finally {
-    client.release();
+    if (ownsClient) {
+      client.release();
+    }
   }
 }

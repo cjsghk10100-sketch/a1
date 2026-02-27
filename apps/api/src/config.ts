@@ -1,6 +1,10 @@
 export interface AppConfig {
   port: number;
   databaseUrl: string;
+  leaseDurationSeconds?: number;
+  heartbeatMinIntervalSec?: number;
+  heartbeatMinIntervalSecTest?: number;
+  maxClaimAgeSec?: number;
   runWorkerEmbedded?: boolean;
   runWorkerPollMs?: number;
   runWorkerBatchLimit?: number;
@@ -13,6 +17,11 @@ export interface AppConfig {
   authBootstrapToken?: string;
   authBootstrapAllowLoopback?: boolean;
 }
+
+export const LEASE_DURATION_SECONDS = 1800;
+export const HEARTBEAT_MIN_INTERVAL_SEC = 10;
+export const HEARTBEAT_MIN_INTERVAL_SEC_TEST = 0;
+export const MAX_CLAIM_AGE_SEC = 900;
 
 function parsePort(raw: string | undefined): number {
   if (!raw) return 3000;
@@ -73,6 +82,26 @@ export function loadConfig(): AppConfig {
   return {
     port: parsePort(process.env.PORT),
     databaseUrl: requireEnv("DATABASE_URL"),
+    leaseDurationSeconds: parsePositiveInt(
+      process.env.LEASE_DURATION_SECONDS,
+      "LEASE_DURATION_SECONDS",
+      LEASE_DURATION_SECONDS,
+    ),
+    heartbeatMinIntervalSec: parsePositiveInt(
+      process.env.HEARTBEAT_MIN_INTERVAL_SEC,
+      "HEARTBEAT_MIN_INTERVAL_SEC",
+      HEARTBEAT_MIN_INTERVAL_SEC,
+    ),
+    heartbeatMinIntervalSecTest: parsePositiveInt(
+      process.env.HEARTBEAT_MIN_INTERVAL_SEC_TEST,
+      "HEARTBEAT_MIN_INTERVAL_SEC_TEST",
+      HEARTBEAT_MIN_INTERVAL_SEC_TEST,
+    ),
+    maxClaimAgeSec: parsePositiveInt(
+      process.env.MAX_CLAIM_AGE_SEC,
+      "MAX_CLAIM_AGE_SEC",
+      MAX_CLAIM_AGE_SEC,
+    ),
     runWorkerEmbedded: parseBoolean(process.env.RUN_WORKER_EMBEDDED, false),
     runWorkerPollMs: parsePositiveInt(process.env.RUN_WORKER_POLL_MS, "RUN_WORKER_POLL_MS", 1000),
     runWorkerBatchLimit: parseOptionalPositiveInt(
