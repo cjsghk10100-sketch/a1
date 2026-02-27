@@ -1,6 +1,7 @@
 export const SCHEMA_VERSION = "2.1" as const;
 
 // Contract policy: output current, input accepts current + previous one.
+// Kernel minor changes in PR-1 keep the same schema version baseline (2.1).
 export const SUPPORTED_VERSIONS = ["2.0", "2.1"] as const;
 export type SupportedSchemaVersion = (typeof SUPPORTED_VERSIONS)[number];
 
