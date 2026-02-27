@@ -56,4 +56,5 @@ git revert <merge_commit_sha>
 | 2026-02-27 | MINOR | initial kernel version table | 2.1 | #N/A |
 | 2026-02-27 | MINOR | work-item lease v0.1 claim/heartbeat/release | 2.1 | #69 |
 | 2026-02-27 | MINOR | cron v0 heart with lock fencing and watchdog health | 2.1 | #TBD |
+| 2026-02-27 | MINOR | lease-write enforcement and terminal auto-release in messages API | 2.1 | #TBD |
 ---
