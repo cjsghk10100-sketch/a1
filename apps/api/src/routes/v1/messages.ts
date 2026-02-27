@@ -12,8 +12,11 @@ import {
   httpStatusForReasonCode,
   type MessageCreateRequest,
 } from "../../contracts/pipeline_v2_contract.js";
+import { RATE_LIMIT_SCOPE_MESSAGES } from "../../config.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
+import { recordMessageProcessingFailure } from "../../dlq/poisonMessageDlq.js";
 import { appendToStream } from "../../eventStore/index.js";
+import { enforceMessageRateLimitTx } from "../../ratelimit/enforceMessageRateLimit.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
 type AgentRow = {
@@ -53,8 +56,12 @@ type MessageCreateBody = MessageCreateRequest & {
   work_links?: WorkLinks;
 };
 
+type Queryable = Pick<DbPool, "query"> | Pick<DbClient, "query">;
+
 const TERMINAL_INTENTS = new Set(["resolve", "reject"]);
 const LEASE_REQUIRED_INTENTS = new Set(["message", "resolve", "reject"]);
+const RATE_LIMIT_SCOPE =
+  process.env.RATE_LIMIT_SCOPE_MESSAGES?.trim() || RATE_LIMIT_SCOPE_MESSAGES;
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -145,11 +152,11 @@ async function artifactObjectExists(object_key: string): Promise<ArtifactHeadChe
 }
 
 async function findExistingMessageByIdempotency(
-  pool: DbPool,
+  queryable: Queryable,
   workspace_id: string,
   idempotency_key: string,
 ): Promise<{ message_id: string; from_agent_id: string | null } | null> {
-  const existing = await pool.query<ExistingMessageRow>(
+  const existing = await queryable.query<ExistingMessageRow>(
     `SELECT
        data->>'message_id' AS message_id,
        data->>'from_agent_id' AS from_agent_id
@@ -170,6 +177,30 @@ async function findExistingMessageByIdempotency(
 
   const from_agent_id = existing.rows[0].from_agent_id?.trim() || null;
   return { message_id, from_agent_id };
+}
+
+function extractExperimentId(rawBody: Record<string, unknown>, workLinks?: WorkLinks): string | null {
+  const fromWorkLinks = normalizeOptionalString(workLinks?.experiment_id);
+  if (fromWorkLinks) return fromWorkLinks;
+  const payload = rawBody.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  return normalizeOptionalString((payload as Record<string, unknown>).experiment_id) ?? null;
+}
+
+async function resetRateLimitStreakTx(
+  client: DbClient,
+  workspace_id: string,
+  agent_id: string,
+): Promise<void> {
+  await client.query(
+    `UPDATE rate_limit_streaks
+     SET consecutive_429 = 0,
+         updated_at = now()
+     WHERE workspace_id = $1
+       AND agent_id = $2
+       AND scope = $3`,
+    [workspace_id, agent_id, RATE_LIMIT_SCOPE],
+  );
 }
 
 export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -246,6 +277,7 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
     const workLinks = rawWorkLinks && typeof rawWorkLinks === "object" && !Array.isArray(rawWorkLinks)
       ? (rawWorkLinks as WorkLinks)
       : undefined;
+    const experiment_id = extractExperimentId(req.body as Record<string, unknown>, workLinks);
     const hasWorkLinks = Boolean(workLinks && Object.keys(workLinks).length > 0);
     const leaseEnforcementApplies = hasWorkLinks && LEASE_REQUIRED_INTENTS.has(normalizedIntent);
 
@@ -283,6 +315,7 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
     let txClient: DbClient | undefined;
     let committed = false;
     let missingLease = false;
+    let replayHandled = false;
     let responseStatus = 201;
     let responseBody: unknown = {
       message_id,
@@ -324,6 +357,15 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         }
       }
 
+      await enforceMessageRateLimitTx(txClient, {
+        pool,
+        workspace_id,
+        agent_id: authenticatedAgentId,
+        intent: normalizedIntent,
+        experiment_id,
+        correlation_id,
+      });
+
       try {
         await appendToStream(
           pool,
@@ -353,10 +395,15 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         }
 
         await txClient.query("ROLLBACK");
-        committed = true;
+        replayHandled = true;
 
-        const existing = await findExistingMessageByIdempotency(pool, workspace_id, body.idempotency_key);
+        await txClient.query("BEGIN");
+        const existing = await findExistingMessageByIdempotency(txClient, workspace_id, body.idempotency_key);
         if (existing && existing.from_agent_id === authenticatedAgentId) {
+          await resetRateLimitStreakTx(txClient, workspace_id, authenticatedAgentId);
+          await txClient.query("COMMIT");
+          committed = true;
+
           const reason_code = "duplicate_idempotent_replay";
           responseStatus = httpStatusForReasonCode(reason_code);
           responseBody = {
@@ -365,13 +412,15 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
             reason_code,
           };
         } else {
+          await txClient.query("ROLLBACK");
+          committed = true;
           const reason_code = "idempotency_conflict_unresolved";
           responseStatus = httpStatusForReasonCode(reason_code);
           responseBody = buildContractError(reason_code);
         }
       }
 
-      if (!committed) {
+      if (!committed && !replayHandled) {
         if (
           terminalIntent &&
           resolvedWorkItem &&
@@ -388,13 +437,21 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
           );
         }
 
+        await resetRateLimitStreakTx(txClient, workspace_id, authenticatedAgentId);
         await txClient.query("COMMIT");
         committed = true;
       }
     } catch (err) {
       if (!committed && txClient) {
-        await txClient.query("ROLLBACK").catch(() => {});
-        committed = true;
+        if (err instanceof ContractViolationError && err.reason_code === "rate_limited") {
+          await txClient.query("COMMIT").catch(async () => {
+            await txClient?.query("ROLLBACK").catch(() => {});
+          });
+          committed = true;
+        } else {
+          await txClient.query("ROLLBACK").catch(() => {});
+          committed = true;
+        }
       }
 
       if (isNowaitLockUnavailable(err)) {
@@ -409,6 +466,15 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       }
 
       const payload = errorPayloadFromUnknown(err, "internal_error");
+      if (payload.reason_code === "internal_error") {
+        await recordMessageProcessingFailure(pool, {
+          workspace_id,
+          message_id,
+          last_error: payload.reason,
+          source_intent: normalizedIntent,
+          source_kind: "messages_route",
+        }).catch(() => {});
+      }
       return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
     } finally {
       txClient?.release();

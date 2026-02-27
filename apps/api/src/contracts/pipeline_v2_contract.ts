@@ -19,6 +19,7 @@ export const REASON_CODE_TO_HTTP = {
   lease_not_owned: 409,
   lease_expired_or_preempted: 403,
   heartbeat_rate_limited: 429,
+  rate_limited: 429,
   lease_version_mismatch: 409,
   missing_work_link: 400,
   invalid_intent_for_type: 400,

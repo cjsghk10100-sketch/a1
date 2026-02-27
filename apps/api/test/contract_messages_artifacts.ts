@@ -213,17 +213,28 @@ async function main(): Promise<void> {
       );
       assert.equal(legacyPrincipal.rowCount, 1);
       const principal_id = legacyPrincipal.rows[0].principal_id;
-      const authenticatedAgentId = "agt_contract_sender";
+      let authenticatedAgentId = "agt_contract_sender";
 
-      await db.query(
-        `INSERT INTO sec_agents (agent_id, principal_id, display_name)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (principal_id) DO UPDATE SET
-           agent_id = EXCLUDED.agent_id,
-           display_name = EXCLUDED.display_name,
-           revoked_at = NULL`,
-        [authenticatedAgentId, principal_id, "Contract Sender"],
+      const existingAgent = await db.query<{ agent_id: string }>(
+        `SELECT agent_id
+         FROM sec_agents
+         WHERE principal_id = $1
+         LIMIT 1`,
+        [principal_id],
       );
+
+      if ((existingAgent.rowCount ?? 0) > 0) {
+        authenticatedAgentId = existingAgent.rows[0].agent_id;
+      }
+
+      if ((existingAgent.rowCount ?? 0) === 0) {
+        await db.query(
+          `INSERT INTO sec_agents (agent_id, principal_id, display_name)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (principal_id) DO NOTHING`,
+          [authenticatedAgentId, principal_id, "Contract Sender"],
+        );
+      }
 
       const unsupported = await postJsonAny(
         baseUrl,
