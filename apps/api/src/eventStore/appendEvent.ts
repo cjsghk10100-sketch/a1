@@ -14,6 +14,10 @@ function toJsonb(value: unknown): string {
 }
 
 export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Promise<void> {
+  const extendedEnvelope = envelope as EnvelopeWithSeq & {
+    entity_type?: string;
+    entity_id?: string;
+  };
   const {
     event_id,
     event_type,
@@ -41,6 +45,9 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
     data,
     idempotency_key,
   } = envelope;
+  const entity_type = extendedEnvelope.entity_type ?? null;
+  const entity_id = extendedEnvelope.entity_id ?? null;
+  const actor_text = `${actor.actor_type}:${actor.actor_id}`;
 
   await tx.query(
     `INSERT INTO evt_events (
@@ -54,7 +61,8 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
       prev_event_hash, event_hash,
       policy_context, model_context, display,
       data,
-      idempotency_key
+      idempotency_key,
+      entity_type, entity_id, actor
     ) VALUES (
       $1, $2, $3, $4,
       $5, $6, $7, $8,
@@ -66,7 +74,8 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
       $22, $23,
       $24::jsonb, $25::jsonb, $26::jsonb,
       $27::jsonb,
-      $28
+      $28,
+      $29, $30, $31
     )`,
     [
       event_id,
@@ -97,6 +106,9 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
       toJsonb(display),
       JSON.stringify(data),
       idempotency_key ?? null,
+      entity_type,
+      entity_id,
+      actor_text,
     ],
   );
 }

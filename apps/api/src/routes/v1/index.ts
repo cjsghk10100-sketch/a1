@@ -36,6 +36,7 @@ import { registerRoomRoutes } from "./rooms.js";
 import { registerStreamRoutes } from "./streams.js";
 import { registerThreadRoutes } from "./threads.js";
 import { registerTrustRoutes } from "./trust.js";
+import { registerWorkItemsRoutes } from "./work-items.js";
 
 export async function registerV1Routes(
   app: FastifyInstance,
@@ -76,4 +77,5 @@ export async function registerV1Routes(
   await registerStreamRoutes(app, pool);
   await registerThreadRoutes(app, pool);
   await registerTrustRoutes(app, pool);
+  await registerWorkItemsRoutes(app, pool);
 }
