@@ -5,13 +5,14 @@ import type { FastifyInstance } from "fastify";
 import { newMessageId } from "@agentapp/shared";
 
 import {
+  ContractViolationError,
   assertMessageCreateRequest,
   buildContractError,
   errorPayloadFromUnknown,
   httpStatusForReasonCode,
   type MessageCreateRequest,
 } from "../../contracts/pipeline_v2_contract.js";
-import type { DbPool } from "../../db/pool.js";
+import type { DbClient, DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
@@ -21,7 +22,39 @@ type AgentRow = {
 
 type ExistingMessageRow = {
   message_id: string | null;
+  from_agent_id: string | null;
 };
+
+type ArtifactHeadCheck = {
+  exists: boolean;
+  unavailable: boolean;
+};
+
+type WorkLinks = {
+  approval_id?: unknown;
+  experiment_id?: unknown;
+  incident_id?: unknown;
+  run_id?: unknown;
+};
+
+type ResolvedWorkItem =
+  | { type: "approval"; id: string; skip_lease?: false }
+  | { type: "experiment"; id: string; skip_lease?: false }
+  | { type: "incident"; id: string; skip_lease?: false }
+  | { type: "run"; id: string; skip_lease: true };
+
+type LeaseRow = {
+  agent_id: string;
+  expires_at: string;
+  is_expired: boolean;
+};
+
+type MessageCreateBody = MessageCreateRequest & {
+  work_links?: WorkLinks;
+};
+
+const TERMINAL_INTENTS = new Set(["resolve", "reject"]);
+const LEASE_REQUIRED_INTENTS = new Set(["message", "resolve", "reject"]);
 
 function getHeaderString(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) return value[0];
@@ -34,12 +67,36 @@ function workspaceIdFromHeader(req: { headers: Record<string, unknown> }): strin
   return normalized && normalized.length > 0 ? normalized : null;
 }
 
+function normalizeOptionalString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function isIdempotencyUniqueViolation(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
-  const pgError = err as { code?: string; constraint?: string };
-  if (pgError.code !== "23505") return false;
-  if (typeof pgError.constraint !== "string") return false;
-  return pgError.constraint.includes("idempotency");
+  return (err as { code?: string }).code === "23505";
+}
+
+function isNowaitLockUnavailable(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  return (err as { code?: string }).code === "55P03";
+}
+
+function resolveWorkItem(workLinks: WorkLinks): ResolvedWorkItem | null {
+  const approval_id = normalizeOptionalString(workLinks.approval_id);
+  if (approval_id) return { type: "approval", id: approval_id };
+
+  const experiment_id = normalizeOptionalString(workLinks.experiment_id);
+  if (experiment_id) return { type: "experiment", id: experiment_id };
+
+  const incident_id = normalizeOptionalString(workLinks.incident_id);
+  if (incident_id) return { type: "incident", id: incident_id };
+
+  const run_id = normalizeOptionalString(workLinks.run_id);
+  if (run_id) return { type: "run", id: run_id, skip_lease: true };
+
+  return null;
 }
 
 async function findAuthenticatedAgentId(pool: DbPool, principal_id: string): Promise<string | null> {
@@ -54,14 +111,11 @@ async function findAuthenticatedAgentId(pool: DbPool, principal_id: string): Pro
   return res.rows[0]?.agent_id ?? null;
 }
 
-type ArtifactHeadCheck = {
-  exists: boolean;
-  unavailable: boolean;
-};
-
 function artifactHeadUrl(object_key: string): string | null {
   const raw = process.env.ARTIFACT_STORAGE_HEAD_URL?.trim() || process.env.ARTIFACT_UPLOAD_BASE_URL?.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   if (raw.includes("{object_key}")) {
     return raw.replaceAll("{object_key}", encodeURIComponent(object_key));
   }
@@ -94,9 +148,11 @@ async function findExistingMessageByIdempotency(
   pool: DbPool,
   workspace_id: string,
   idempotency_key: string,
-): Promise<string | null> {
+): Promise<{ message_id: string; from_agent_id: string | null } | null> {
   const existing = await pool.query<ExistingMessageRow>(
-    `SELECT data->>'message_id' AS message_id
+    `SELECT
+       data->>'message_id' AS message_id,
+       data->>'from_agent_id' AS from_agent_id
      FROM evt_events
      WHERE workspace_id = $1
        AND stream_type = 'workspace'
@@ -107,8 +163,13 @@ async function findExistingMessageByIdempotency(
      LIMIT 1`,
     [workspace_id, idempotency_key],
   );
-  const message_id = existing.rows[0]?.message_id?.trim();
-  return message_id && message_id.length > 0 ? message_id : null;
+  if (existing.rowCount !== 1) return null;
+
+  const message_id = existing.rows[0].message_id?.trim();
+  if (!message_id) return null;
+
+  const from_agent_id = existing.rows[0].from_agent_id?.trim() || null;
+  return { message_id, from_agent_id };
 }
 
 export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -123,10 +184,10 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       );
     }
 
-    let body: MessageCreateRequest;
+    let body: MessageCreateBody;
     try {
       assertMessageCreateRequest(req.body);
-      body = req.body;
+      body = req.body as MessageCreateBody;
     } catch (err) {
       const payload = errorPayloadFromUnknown(err, "internal_error");
       return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
@@ -144,7 +205,16 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
 
     const auth = getRequestAuth(req);
     const authenticatedAgentId = await findAuthenticatedAgentId(pool, auth.principal_id);
-    if (!authenticatedAgentId || authenticatedAgentId !== body.from_agent_id) {
+    if (!authenticatedAgentId) {
+      const reason_code = "unknown_agent";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(
+        buildContractError(reason_code, {
+          from_agent_id: body.from_agent_id,
+        }),
+      );
+    }
+
+    if (normalizeOptionalString(body.from_agent_id) !== authenticatedAgentId) {
       const reason_code = "unknown_agent";
       return reply.code(httpStatusForReasonCode(reason_code)).send(
         buildContractError(reason_code, {
@@ -169,6 +239,34 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       }
     }
 
+    const normalizedIntent = normalizeOptionalString((req.body as Record<string, unknown>)?.intent) ?? "message";
+    const terminalIntent = TERMINAL_INTENTS.has(normalizedIntent);
+
+    const rawWorkLinks = (req.body as Record<string, unknown>)?.work_links;
+    const workLinks = rawWorkLinks && typeof rawWorkLinks === "object" && !Array.isArray(rawWorkLinks)
+      ? (rawWorkLinks as WorkLinks)
+      : undefined;
+    const hasWorkLinks = Boolean(workLinks && Object.keys(workLinks).length > 0);
+    const leaseEnforcementApplies = hasWorkLinks && LEASE_REQUIRED_INTENTS.has(normalizedIntent);
+
+    let resolvedWorkItem: ResolvedWorkItem | null = null;
+    if (leaseEnforcementApplies) {
+      resolvedWorkItem = resolveWorkItem(workLinks as WorkLinks);
+      if (!resolvedWorkItem) {
+        const reason_code = "missing_work_link";
+        return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
+      }
+      if (terminalIntent && resolvedWorkItem.type === "run") {
+        const reason_code = "invalid_intent_for_type";
+        return reply.code(httpStatusForReasonCode(reason_code)).send(
+          buildContractError(reason_code, {
+            intent: normalizedIntent,
+            work_item_type: resolvedWorkItem.type,
+          }),
+        );
+      }
+    }
+
     const message_id = newMessageId();
     const occurred_at = new Date().toISOString();
     const correlation_id = body.correlation_id?.trim() || randomUUID();
@@ -177,55 +275,149 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       message_id,
       workspace_id,
       from_agent_id: authenticatedAgentId,
-      intent: body.intent ?? "message",
+      intent: normalizedIntent,
       payload: body.payload ?? null,
       payload_ref: body.payload_ref ?? null,
     };
 
-    try {
-      await appendToStream(pool, {
-        event_id: randomUUID(),
-        event_type: "message.created",
-        event_version: 1,
-        occurred_at,
-        workspace_id,
-        room_id: body.room_id?.trim() || undefined,
-        thread_id: body.thread_id?.trim() || undefined,
-        actor: { actor_type: "agent", actor_id: authenticatedAgentId },
-        actor_principal_id: auth.principal_id,
-        stream: { stream_type: "workspace", stream_id: workspace_id },
-        correlation_id,
-        data: storedMessage,
-        idempotency_key: body.idempotency_key,
-        policy_context: {},
-        model_context: {},
-        display: {},
-      });
-    } catch (err) {
-      if (isIdempotencyUniqueViolation(err)) {
-        const existing_message_id = await findExistingMessageByIdempotency(
-          pool,
-          workspace_id,
-          body.idempotency_key,
-        );
-        if (existing_message_id) {
-          const reason_code = "duplicate_idempotent_replay";
-          return reply.code(httpStatusForReasonCode(reason_code)).send({
-            message_id: existing_message_id,
-            idempotent_replay: true,
-            reason_code,
-          });
-        }
-        const reason_code = "idempotency_conflict_unresolved";
-        return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
-      }
-      const payload = errorPayloadFromUnknown(err, "internal_error");
-      return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
-    }
-
-    return reply.code(201).send({
+    let txClient: DbClient | undefined;
+    let committed = false;
+    let missingLease = false;
+    let responseStatus = 201;
+    let responseBody: unknown = {
       message_id,
       idempotent_replay: false,
-    });
+    };
+
+    try {
+      txClient = await pool.connect();
+      await txClient.query("BEGIN");
+
+      if (leaseEnforcementApplies && resolvedWorkItem && resolvedWorkItem.skip_lease !== true) {
+        const lease = await txClient.query<LeaseRow>(
+          `SELECT
+             agent_id,
+             expires_at::text AS expires_at,
+             (expires_at <= now()) AS is_expired
+           FROM work_item_leases
+           WHERE workspace_id = $1
+             AND work_item_type = $2
+             AND work_item_id = $3
+           FOR UPDATE NOWAIT
+           LIMIT 1`,
+          [workspace_id, resolvedWorkItem.type, resolvedWorkItem.id],
+        );
+
+        if (lease.rowCount === 1) {
+          const row = lease.rows[0];
+          if (row.agent_id !== authenticatedAgentId || row.is_expired === true) {
+            throw new ContractViolationError("lease_expired_or_preempted", "lease_expired_or_preempted", {
+              work_item_type: resolvedWorkItem.type,
+              work_item_id: resolvedWorkItem.id,
+              lease_agent_id: row.agent_id,
+              caller_agent_id: authenticatedAgentId,
+              lease_expires_at: row.expires_at,
+            });
+          }
+        } else {
+          missingLease = true;
+        }
+      }
+
+      try {
+        await appendToStream(
+          pool,
+          {
+            event_id: randomUUID(),
+            event_type: "message.created",
+            event_version: 1,
+            occurred_at,
+            workspace_id,
+            room_id: body.room_id?.trim() || undefined,
+            thread_id: body.thread_id?.trim() || undefined,
+            actor: { actor_type: "agent", actor_id: authenticatedAgentId },
+            actor_principal_id: auth.principal_id,
+            stream: { stream_type: "workspace", stream_id: workspace_id },
+            correlation_id,
+            data: storedMessage,
+            idempotency_key: body.idempotency_key,
+            policy_context: {},
+            model_context: {},
+            display: {},
+          },
+          txClient,
+        );
+      } catch (err) {
+        if (!isIdempotencyUniqueViolation(err)) {
+          throw err;
+        }
+
+        await txClient.query("ROLLBACK");
+        committed = true;
+
+        const existing = await findExistingMessageByIdempotency(pool, workspace_id, body.idempotency_key);
+        if (existing && existing.from_agent_id === authenticatedAgentId) {
+          const reason_code = "duplicate_idempotent_replay";
+          responseStatus = httpStatusForReasonCode(reason_code);
+          responseBody = {
+            message_id: existing.message_id,
+            idempotent_replay: true,
+            reason_code,
+          };
+        } else {
+          const reason_code = "idempotency_conflict_unresolved";
+          responseStatus = httpStatusForReasonCode(reason_code);
+          responseBody = buildContractError(reason_code);
+        }
+      }
+
+      if (!committed) {
+        if (
+          terminalIntent &&
+          resolvedWorkItem &&
+          resolvedWorkItem.skip_lease !== true &&
+          missingLease !== true
+        ) {
+          await txClient.query(
+            `DELETE FROM work_item_leases
+             WHERE workspace_id = $1
+               AND work_item_type = $2
+               AND work_item_id = $3
+               AND agent_id = $4`,
+            [workspace_id, resolvedWorkItem.type, resolvedWorkItem.id, authenticatedAgentId],
+          );
+        }
+
+        await txClient.query("COMMIT");
+        committed = true;
+      }
+    } catch (err) {
+      if (!committed && txClient) {
+        await txClient.query("ROLLBACK").catch(() => {});
+        committed = true;
+      }
+
+      if (isNowaitLockUnavailable(err)) {
+        const reason_code = "heartbeat_rate_limited";
+        // TODO: add dedicated reason_code for lease_lock_contention in a follow-up PR.
+        return reply.code(httpStatusForReasonCode(reason_code)).send(
+          buildContractError(reason_code, {
+            work_item_type: resolvedWorkItem?.type,
+            work_item_id: resolvedWorkItem?.id,
+          }),
+        );
+      }
+
+      const payload = errorPayloadFromUnknown(err, "internal_error");
+      return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
+    } finally {
+      txClient?.release();
+    }
+
+    if (missingLease === true) {
+      reply.header("X-Lease-Warning", "missing_lease");
+    }
+
+    return reply.code(responseStatus).send(responseBody);
   });
 }
