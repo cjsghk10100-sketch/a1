@@ -6,7 +6,8 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────────────
 BASE_REF="${BASE_REF:-${GITHUB_BASE_REF:-main}}"
 
-git fetch origin "${BASE_REF}" --depth=1 2>/dev/null \
+# Keep full ancestry for merge-base computation used by triple-dot diff.
+git fetch origin "${BASE_REF}" 2>/dev/null \
   || git fetch --unshallow 2>/dev/null \
   || true
 
