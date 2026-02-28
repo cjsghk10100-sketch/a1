@@ -57,4 +57,5 @@ git revert <merge_commit_sha>
 | 2026-02-27 | MINOR | work-item lease v0.1 claim/heartbeat/release | 2.1 | #69 |
 | 2026-02-27 | MINOR | cron v0 heart with lock fencing and watchdog health | 2.1 | #TBD |
 | 2026-02-27 | MINOR | lease-write enforcement and terminal auto-release in messages API | 2.1 | #TBD |
+| 2026-02-27 | MINOR | add rate_limited(429) + rate_limit/DLQ tables for PR-4 | 2.1 | #TBD |
 ---

@@ -16,12 +16,28 @@ export interface AppConfig {
   authSessionRefreshTtlSec?: number;
   authBootstrapToken?: string;
   authBootstrapAllowLoopback?: boolean;
+  messagesRateLimitAgentPerMin?: number;
+  messagesRateLimitAgentPerHour?: number;
+  messagesRateLimitExperimentPerHour?: number;
+  messagesRateLimitGlobalPerMin?: number;
+  messagesHeartbeatLimitPerMin?: number;
+  rateLimitStreakThreshold?: number;
+  rateLimitIncidentMuteSec?: number;
+  rateLimitScopeMessages?: string;
 }
 
 export const LEASE_DURATION_SECONDS = 1800;
 export const HEARTBEAT_MIN_INTERVAL_SEC = 10;
 export const HEARTBEAT_MIN_INTERVAL_SEC_TEST = 0;
 export const MAX_CLAIM_AGE_SEC = 900;
+export const MESSAGES_RATE_LIMIT_AGENT_PER_MIN = 60;
+export const MESSAGES_RATE_LIMIT_AGENT_PER_HOUR = 500;
+export const MESSAGES_RATE_LIMIT_EXPERIMENT_PER_HOUR = 200;
+export const MESSAGES_RATE_LIMIT_GLOBAL_PER_MIN = 300;
+export const MESSAGES_HEARTBEAT_LIMIT_PER_MIN = 10;
+export const RATE_LIMIT_STREAK_THRESHOLD = 3;
+export const RATE_LIMIT_INCIDENT_MUTE_SEC = 3600;
+export const RATE_LIMIT_SCOPE_MESSAGES = "messages_write";
 
 function parsePort(raw: string | undefined): number {
   if (!raw) return 3000;
@@ -127,5 +143,42 @@ export function loadConfig(): AppConfig {
     ),
     authBootstrapToken: authBootstrapToken && authBootstrapToken.length > 0 ? authBootstrapToken : undefined,
     authBootstrapAllowLoopback: parseBoolean(process.env.AUTH_BOOTSTRAP_ALLOW_LOOPBACK, false),
+    messagesRateLimitAgentPerMin: parsePositiveInt(
+      process.env.MESSAGES_RATE_LIMIT_AGENT_PER_MIN,
+      "MESSAGES_RATE_LIMIT_AGENT_PER_MIN",
+      MESSAGES_RATE_LIMIT_AGENT_PER_MIN,
+    ),
+    messagesRateLimitAgentPerHour: parsePositiveInt(
+      process.env.MESSAGES_RATE_LIMIT_AGENT_PER_HOUR,
+      "MESSAGES_RATE_LIMIT_AGENT_PER_HOUR",
+      MESSAGES_RATE_LIMIT_AGENT_PER_HOUR,
+    ),
+    messagesRateLimitExperimentPerHour: parsePositiveInt(
+      process.env.MESSAGES_RATE_LIMIT_EXPERIMENT_PER_HOUR,
+      "MESSAGES_RATE_LIMIT_EXPERIMENT_PER_HOUR",
+      MESSAGES_RATE_LIMIT_EXPERIMENT_PER_HOUR,
+    ),
+    messagesRateLimitGlobalPerMin: parsePositiveInt(
+      process.env.MESSAGES_RATE_LIMIT_GLOBAL_PER_MIN,
+      "MESSAGES_RATE_LIMIT_GLOBAL_PER_MIN",
+      MESSAGES_RATE_LIMIT_GLOBAL_PER_MIN,
+    ),
+    messagesHeartbeatLimitPerMin: parsePositiveInt(
+      process.env.MESSAGES_HEARTBEAT_LIMIT_PER_MIN,
+      "MESSAGES_HEARTBEAT_LIMIT_PER_MIN",
+      MESSAGES_HEARTBEAT_LIMIT_PER_MIN,
+    ),
+    rateLimitStreakThreshold: parsePositiveInt(
+      process.env.RATE_LIMIT_STREAK_THRESHOLD,
+      "RATE_LIMIT_STREAK_THRESHOLD",
+      RATE_LIMIT_STREAK_THRESHOLD,
+    ),
+    rateLimitIncidentMuteSec: parsePositiveInt(
+      process.env.RATE_LIMIT_INCIDENT_MUTE_SEC,
+      "RATE_LIMIT_INCIDENT_MUTE_SEC",
+      RATE_LIMIT_INCIDENT_MUTE_SEC,
+    ),
+    rateLimitScopeMessages:
+      process.env.RATE_LIMIT_SCOPE_MESSAGES?.trim() || RATE_LIMIT_SCOPE_MESSAGES,
   };
 }
