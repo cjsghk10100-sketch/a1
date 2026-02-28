@@ -54,7 +54,7 @@ type DlqBacklogSupport =
       supported: true;
       tableName: "public.dead_letter_messages" | "public.dlq_messages";
       createdAtColumn: "created_at";
-      pendingColumns: Array<"handled_at" | "resolved_at">;
+      pendingColumns: Array<"handled_at" | "resolved_at" | "reviewed_at">;
     };
 
 type RateLimitFloodSupport =
@@ -220,9 +220,10 @@ function detectDlqSupport(tableColumns: Map<string, Set<string>>): DlqBacklogSup
     const cols = tableColumns.get(table);
     if (!cols || !cols.has("created_at")) continue;
 
-    const pendingColumns: Array<"handled_at" | "resolved_at"> = [];
+    const pendingColumns: Array<"handled_at" | "resolved_at" | "reviewed_at"> = [];
     if (cols.has("handled_at")) pendingColumns.push("handled_at");
     if (cols.has("resolved_at")) pendingColumns.push("resolved_at");
+    if (cols.has("reviewed_at")) pendingColumns.push("reviewed_at");
     if (pendingColumns.length === 0) continue;
 
     return {
@@ -547,10 +548,9 @@ async function checkDlqBacklog(
     };
   }
 
-  const pendingFilter =
-    support.pendingColumns.length === 2
-      ? `(${support.pendingColumns[0]} IS NULL OR ${support.pendingColumns[1]} IS NULL)`
-      : `${support.pendingColumns[0]} IS NULL`;
+  const pendingFilter = `(${support.pendingColumns
+    .map((column) => `${column} IS NULL`)
+    .join(" OR ")})`;
 
   try {
     const row = await runTimedRead(client, async () => {
@@ -689,8 +689,6 @@ export async function registerSystemHealthRoutes(
   app: FastifyInstance,
   pool: DbPool,
 ): Promise<void> {
-  schemaCache = await runSchemaChecks(pool);
-
   app.get("/health", async (_req, reply) => {
     try {
       const nowText = await queryNowText(pool, HEALTH_QUERY_TIMEOUT_MS, "health_db_now");
