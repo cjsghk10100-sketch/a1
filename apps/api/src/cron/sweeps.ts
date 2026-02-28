@@ -28,6 +28,10 @@ type RunCandidate = {
   run_id: string;
 };
 
+type WorkspaceRow = {
+  workspace_id: string;
+};
+
 type ApprovalLockedRow = {
   approval_id: string;
   room_id: string | null;
@@ -489,51 +493,96 @@ export async function listCandidateWorkspaces(
   const runStuckTimeoutSec = msToWholeSeconds(cfg.runStuckTimeoutMs);
   const demotedStaleSec = msToWholeSeconds(cfg.demotedStaleMs);
 
-  const [approvalWs, runWs, demotedWs] = await Promise.all([
-    pool.query<{ workspace_id: string }>(
-      `SELECT DISTINCT workspace_id
-       FROM proj_approvals
-       WHERE status IN ('pending', 'held')
-         AND updated_at < (now() - make_interval(secs => $1))
-       ORDER BY workspace_id ASC
-       LIMIT $2`,
-      [approvalTimeoutSec, WORKSPACE_DISCOVERY_LIMIT],
-    ),
-    pool.query<{ workspace_id: string }>(
-      `SELECT DISTINCT workspace_id
-       FROM proj_runs
-       WHERE status IN ('queued', 'running')
-         AND updated_at < (now() - make_interval(secs => $1))
-       ORDER BY workspace_id ASC
-       LIMIT $2`,
-      [runStuckTimeoutSec, WORKSPACE_DISCOVERY_LIMIT],
-    ),
-    pool.query<{ workspace_id: string }>(
-      `SELECT DISTINCT r.workspace_id
-       FROM proj_runs AS r
-       WHERE r.status = 'failed'
-         AND r.updated_at < (now() - make_interval(secs => $1))
-         AND NOT (
-           EXISTS (
-             SELECT 1
-             FROM proj_incidents AS i
-             WHERE i.workspace_id = r.workspace_id
-               AND i.status = 'open'
-               AND (i.run_id = r.run_id OR i.correlation_id = r.correlation_id)
+  const listApprovalWorkspaces = async (): Promise<string[]> => {
+    const workspaceIds: string[] = [];
+    let cursor: string | null = null;
+    while (true) {
+      const res: { rowCount: number | null; rows: WorkspaceRow[] } = await pool.query<WorkspaceRow>(
+        `SELECT DISTINCT workspace_id
+         FROM proj_approvals
+         WHERE status IN ('pending', 'held')
+           AND updated_at < (now() - make_interval(secs => $1))
+           AND ($2::text IS NULL OR workspace_id > $2)
+         ORDER BY workspace_id ASC
+         LIMIT $3`,
+        [approvalTimeoutSec, cursor, WORKSPACE_DISCOVERY_LIMIT],
+      );
+      if (res.rowCount === 0) break;
+      for (const row of res.rows) workspaceIds.push(row.workspace_id);
+      if ((res.rowCount ?? 0) < WORKSPACE_DISCOVERY_LIMIT) break;
+      cursor = res.rows[res.rows.length - 1]?.workspace_id ?? null;
+      if (!cursor) break;
+    }
+    return workspaceIds;
+  };
+
+  const listRunWorkspaces = async (): Promise<string[]> => {
+    const workspaceIds: string[] = [];
+    let cursor: string | null = null;
+    while (true) {
+      const res: { rowCount: number | null; rows: WorkspaceRow[] } = await pool.query<WorkspaceRow>(
+        `SELECT DISTINCT workspace_id
+         FROM proj_runs
+         WHERE status IN ('queued', 'running')
+           AND updated_at < (now() - make_interval(secs => $1))
+           AND ($2::text IS NULL OR workspace_id > $2)
+         ORDER BY workspace_id ASC
+         LIMIT $3`,
+        [runStuckTimeoutSec, cursor, WORKSPACE_DISCOVERY_LIMIT],
+      );
+      if (res.rowCount === 0) break;
+      for (const row of res.rows) workspaceIds.push(row.workspace_id);
+      if ((res.rowCount ?? 0) < WORKSPACE_DISCOVERY_LIMIT) break;
+      cursor = res.rows[res.rows.length - 1]?.workspace_id ?? null;
+      if (!cursor) break;
+    }
+    return workspaceIds;
+  };
+
+  const listDemotedWorkspaces = async (): Promise<string[]> => {
+    const workspaceIds: string[] = [];
+    let cursor: string | null = null;
+    while (true) {
+      const res: { rowCount: number | null; rows: WorkspaceRow[] } = await pool.query<WorkspaceRow>(
+        `SELECT DISTINCT r.workspace_id
+         FROM proj_runs AS r
+         WHERE r.status = 'failed'
+           AND r.updated_at < (now() - make_interval(secs => $1))
+           AND NOT (
+             EXISTS (
+               SELECT 1
+               FROM proj_incidents AS i
+               WHERE i.workspace_id = r.workspace_id
+                 AND i.status = 'open'
+                 AND (i.run_id = r.run_id OR i.correlation_id = r.correlation_id)
+             )
+             OR COALESCE(r.error->>'code', '') = ANY($2::text[])
+             OR COALESCE(r.error->>'kind', '') = 'policy'
            )
-           OR COALESCE(r.error->>'code', '') = ANY($2::text[])
-           OR COALESCE(r.error->>'kind', '') = 'policy'
-         )
-       ORDER BY r.workspace_id ASC
-       LIMIT $3`,
-      [demotedStaleSec, TRIAGE_ERROR_CODES, WORKSPACE_DISCOVERY_LIMIT],
-    ),
+           AND ($3::text IS NULL OR r.workspace_id > $3)
+         ORDER BY r.workspace_id ASC
+         LIMIT $4`,
+        [demotedStaleSec, TRIAGE_ERROR_CODES, cursor, WORKSPACE_DISCOVERY_LIMIT],
+      );
+      if (res.rowCount === 0) break;
+      for (const row of res.rows) workspaceIds.push(row.workspace_id);
+      if ((res.rowCount ?? 0) < WORKSPACE_DISCOVERY_LIMIT) break;
+      cursor = res.rows[res.rows.length - 1]?.workspace_id ?? null;
+      if (!cursor) break;
+    }
+    return workspaceIds;
+  };
+
+  const [approvalWs, runWs, demotedWs] = await Promise.all([
+    listApprovalWorkspaces(),
+    listRunWorkspaces(),
+    listDemotedWorkspaces(),
   ]);
 
   const workspaces = new Set<string>();
-  for (const row of approvalWs.rows) workspaces.add(row.workspace_id);
-  for (const row of runWs.rows) workspaces.add(row.workspace_id);
-  for (const row of demotedWs.rows) workspaces.add(row.workspace_id);
+  for (const workspaceId of approvalWs) workspaces.add(workspaceId);
+  for (const workspaceId of runWs) workspaces.add(workspaceId);
+  for (const workspaceId of demotedWs) workspaces.add(workspaceId);
 
   return [...workspaces].sort((a, b) => a.localeCompare(b));
 }
