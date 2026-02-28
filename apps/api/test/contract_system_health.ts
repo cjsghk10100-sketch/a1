@@ -219,6 +219,11 @@ async function main(): Promise<void> {
       assert.equal(typeof value.supported, "boolean", `${key}.supported must be boolean`);
       assert.equal(typeof value.ok, "boolean", `${key}.ok must be boolean`);
     }
+    assert.equal(
+      happy.json.checks.optional.dlq_backlog.supported,
+      true,
+      "dlq_backlog must be supported on default schema",
+    );
 
     // T5
     assert.equal(HTTP_OK, httpStatusForReasonCode("duplicate_idempotent_replay"));
