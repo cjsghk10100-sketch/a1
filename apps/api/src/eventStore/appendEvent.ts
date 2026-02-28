@@ -1,6 +1,7 @@
 import type { EventEnvelopeV1, StreamRefV1 } from "@agentapp/shared";
 
 import type { DbClient } from "../db/pool.js";
+import { getTraceContext, getTraceLogger } from "../observability/traceContext.js";
 
 type StreamWithSeq = StreamRefV1 & { stream_seq: number };
 export type EnvelopeWithSeq = EventEnvelopeV1 & {
@@ -14,7 +15,15 @@ function toJsonb(value: unknown): string {
 }
 
 export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Promise<void> {
-  const extendedEnvelope = envelope as EnvelopeWithSeq & {
+  const traceCtx = getTraceContext();
+  const hasCorrelationId =
+    typeof envelope.correlation_id === "string" && envelope.correlation_id.trim().length > 0;
+  const eventToPersist =
+    traceCtx && !hasCorrelationId
+      ? ({ ...envelope, correlation_id: traceCtx.correlation_id } as EnvelopeWithSeq)
+      : envelope;
+
+  const extendedEnvelope = eventToPersist as EnvelopeWithSeq & {
     entity_type?: string;
     entity_id?: string;
   };
@@ -44,7 +53,7 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
     display,
     data,
     idempotency_key,
-  } = envelope;
+  } = eventToPersist;
   const entity_type = extendedEnvelope.entity_type ?? null;
   const entity_id = extendedEnvelope.entity_id ?? null;
   const actor_text = `${actor.actor_type}:${actor.actor_id}`;
@@ -111,4 +120,18 @@ export async function appendEvent(tx: DbClient, envelope: EnvelopeWithSeq): Prom
       actor_text,
     ],
   );
+
+  const persistedCorrelationId =
+    typeof eventToPersist.correlation_id === "string" && eventToPersist.correlation_id.trim().length > 0
+      ? eventToPersist.correlation_id
+      : "unknown";
+  getTraceLogger()?.info?.({
+    event: "evt.append",
+    request_id: traceCtx?.request_id ?? "unknown",
+    correlation_id: traceCtx?.correlation_id ?? persistedCorrelationId,
+    event_type: eventToPersist.event_type,
+    entity_type: extendedEnvelope.entity_type ?? null,
+    entity_id: extendedEnvelope.entity_id ?? null,
+    idempotency_key: eventToPersist.idempotency_key ?? null,
+  });
 }
