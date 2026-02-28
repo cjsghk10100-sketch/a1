@@ -266,6 +266,55 @@ async function main(): Promise<void> {
       assertContractError(third.json, "rate_limited");
     }
 
+    // T1b Idempotent replay must bypass rate limit and return duplicate replay
+    {
+      await resetRateLimitState(db, WORKSPACE_BASE);
+      process.env.MESSAGES_RATE_LIMIT_AGENT_PER_MIN = "1";
+      process.env.MESSAGES_RATE_LIMIT_AGENT_PER_HOUR = "20";
+      process.env.MESSAGES_RATE_LIMIT_GLOBAL_PER_MIN = "20";
+
+      const workspace = `${WORKSPACE_BASE}_t1b`;
+      const headers = { "x-workspace-id": workspace };
+      const idempotency_key = `t1b:stable:${RUN_SUFFIX}`;
+
+      const first = await postJson(
+        baseUrl,
+        "/v1/messages",
+        msgBody({
+          from_agent_id: agentId,
+          idempotency_key,
+        }),
+        headers,
+      );
+      assert.equal(first.status, 201, first.text);
+
+      const replay = await postJson(
+        baseUrl,
+        "/v1/messages",
+        msgBody({
+          from_agent_id: agentId,
+          idempotency_key,
+        }),
+        headers,
+      );
+      assert.equal(replay.status, 200, replay.text);
+      const replayJson = replay.json as { idempotent_replay: boolean; reason_code?: string };
+      assert.equal(replayJson.idempotent_replay, true);
+      assert.equal(replayJson.reason_code, "duplicate_idempotent_replay");
+
+      const blocked = await postJson(
+        baseUrl,
+        "/v1/messages",
+        msgBody({
+          from_agent_id: agentId,
+          idempotency_key: `t1b:new:${RUN_SUFFIX}`,
+        }),
+        headers,
+      );
+      assert.equal(blocked.status, 429, blocked.text);
+      assertContractError(blocked.json, "rate_limited");
+    }
+
     // T2 Heartbeat rules
     {
       await resetRateLimitState(db, WORKSPACE_BASE);
