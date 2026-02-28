@@ -299,6 +299,32 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       }
     }
 
+    const existingReplay = await findExistingMessageByIdempotency(pool, workspace_id, body.idempotency_key);
+    if (existingReplay) {
+      if (existingReplay.from_agent_id === authenticatedAgentId) {
+        let replayClient: DbClient | undefined;
+        try {
+          replayClient = await pool.connect();
+          await replayClient.query("BEGIN");
+          await resetRateLimitStreakTx(replayClient, workspace_id, authenticatedAgentId);
+          await replayClient.query("COMMIT");
+        } catch {
+          await replayClient?.query("ROLLBACK").catch(() => {});
+        } finally {
+          replayClient?.release();
+        }
+
+        const reason_code = "duplicate_idempotent_replay";
+        return reply.code(httpStatusForReasonCode(reason_code)).send({
+          message_id: existingReplay.message_id,
+          idempotent_replay: true,
+          reason_code,
+        });
+      }
+      const reason_code = "idempotency_conflict_unresolved";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
+    }
+
     const message_id = newMessageId();
     const occurred_at = new Date().toISOString();
     const correlation_id = body.correlation_id?.trim() || randomUUID();
@@ -467,9 +493,12 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
 
       const payload = errorPayloadFromUnknown(err, "internal_error");
       if (payload.reason_code === "internal_error") {
+        const failureMessageId = body.idempotency_key?.trim()
+          ? `msgreq:${body.idempotency_key.trim()}`
+          : message_id;
         await recordMessageProcessingFailure(pool, {
           workspace_id,
-          message_id,
+          message_id: failureMessageId,
           last_error: payload.reason,
           source_intent: normalizedIntent,
           source_kind: "messages_route",

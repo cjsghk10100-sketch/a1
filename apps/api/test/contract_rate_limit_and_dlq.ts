@@ -266,6 +266,54 @@ async function main(): Promise<void> {
       assertContractError(third.json, "rate_limited");
     }
 
+    // T1b Idempotent replay must bypass rate limit
+    {
+      await resetRateLimitState(db, WORKSPACE_BASE);
+      const workspace = `${WORKSPACE_BASE}_t1b`;
+      const headers = { "x-workspace-id": workspace };
+      process.env.MESSAGES_RATE_LIMIT_AGENT_PER_MIN = "1";
+      process.env.MESSAGES_RATE_LIMIT_GLOBAL_PER_MIN = "20";
+
+      const replayKey = `t1b:idem:${RUN_SUFFIX}`;
+
+      const first = await postJson(
+        baseUrl,
+        "/v1/messages",
+        msgBody({
+          from_agent_id: agentId,
+          idempotency_key: replayKey,
+        }),
+        headers,
+      );
+      assert.equal(first.status, 201, first.text);
+
+      const replay = await postJson(
+        baseUrl,
+        "/v1/messages",
+        msgBody({
+          from_agent_id: agentId,
+          idempotency_key: replayKey,
+        }),
+        headers,
+      );
+      assert.equal(replay.status, 200, replay.text);
+      const replayPayload = replay.json as { reason_code?: string; idempotent_replay?: boolean };
+      assert.equal(replayPayload.reason_code, "duplicate_idempotent_replay");
+      assert.equal(replayPayload.idempotent_replay, true);
+
+      const limited = await postJson(
+        baseUrl,
+        "/v1/messages",
+        msgBody({
+          from_agent_id: agentId,
+          idempotency_key: `t1b:new:${RUN_SUFFIX}`,
+        }),
+        headers,
+      );
+      assert.equal(limited.status, 429, limited.text);
+      assertContractError(limited.json, "rate_limited");
+    }
+
     // T2 Heartbeat rules
     {
       await resetRateLimitState(db, WORKSPACE_BASE);
