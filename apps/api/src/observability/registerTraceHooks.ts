@@ -79,8 +79,9 @@ export function registerTraceHooks(app: FastifyInstance): void {
         return;
       }
 
-      if (!ctx.workspace_id) {
-        ctx.workspace_id = readWorkspaceId(req);
+      const latestWorkspaceId = readWorkspaceId(req);
+      if (latestWorkspaceId) {
+        ctx.workspace_id = latestWorkspaceId;
       }
 
       const fromHeader = (req as { _traceCorrelationFromHeader?: boolean })._traceCorrelationFromHeader === true;
@@ -115,7 +116,10 @@ export function registerTraceHooks(app: FastifyInstance): void {
       const ctx = getTraceContext();
       const request_id = ctx?.request_id ?? fallbackRequestId(req);
       const correlation_id = ctx?.correlation_id ?? request_id;
-      const workspace_id = ctx?.workspace_id ?? readWorkspaceId(req);
+      const workspace_id = readWorkspaceId(req) ?? ctx?.workspace_id;
+      if (ctx && workspace_id) {
+        ctx.workspace_id = workspace_id;
+      }
 
       reply.header("x-request-id", request_id);
       reply.header("x-correlation-id", correlation_id);

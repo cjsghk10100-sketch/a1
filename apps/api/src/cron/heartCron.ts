@@ -113,30 +113,33 @@ export async function tickHeartCron(
   const jitterMs = randomJitterMs(cfg.jitterMaxMs);
   await sleep(jitterMs);
 
-  const window_anchor = await getWindowAnchor(pool, cfg.windowSec);
   const logger = options.logger ?? getTraceLogger();
+  const request_id = `cron_${HEART_CRON_CHECK_NAME}_${randomUUID()}`;
 
   await runWithTraceContext(
     {
       source: "cron",
-      request_id: `cron_${HEART_CRON_CHECK_NAME}_${randomUUID()}`,
-      correlation_id: `cron:${HEART_CRON_CHECK_NAME}:${window_anchor}`,
+      request_id,
+      correlation_id: `cron:${HEART_CRON_CHECK_NAME}:pending`,
     },
     async () => {
       const startNs = process.hrtime.bigint();
       const ctx = getTraceContext();
-      const request_id = ctx?.request_id ?? "unknown";
-      const correlation_id = ctx?.correlation_id ?? "unknown";
-
-      logger?.info?.({
-        event: "cron.start",
-        request_id,
-        correlation_id,
-        cron_job: HEART_CRON_CHECK_NAME,
-        window_anchor,
-      });
-
       try {
+        const window_anchor = await getWindowAnchor(pool, cfg.windowSec);
+        if (ctx) {
+          ctx.correlation_id = `cron:${HEART_CRON_CHECK_NAME}:${window_anchor}`;
+        }
+        const correlation_id = ctx?.correlation_id ?? "unknown";
+
+        logger?.info?.({
+          event: "cron.start",
+          request_id,
+          correlation_id,
+          cron_job: HEART_CRON_CHECK_NAME,
+          window_anchor,
+        });
+
         const canRun = await shouldRunCron(pool, HEART_CRON_CHECK_NAME, cfg.watchdogHaltThreshold);
         if (!canRun) {
           const duration_ms = Number((process.hrtime.bigint() - startNs) / 1000000n);
@@ -266,7 +269,7 @@ export async function tickHeartCron(
         logger?.info?.({
           event: "cron.finish",
           request_id,
-          correlation_id,
+          correlation_id: ctx?.correlation_id ?? "unknown",
           cron_job: HEART_CRON_CHECK_NAME,
           window_anchor,
           duration_ms,
@@ -275,9 +278,12 @@ export async function tickHeartCron(
         logger?.error?.({
           event: "cron.error",
           request_id,
-          correlation_id,
+          correlation_id: ctx?.correlation_id ?? "unknown",
           cron_job: HEART_CRON_CHECK_NAME,
-          window_anchor,
+          window_anchor:
+            ctx?.correlation_id?.startsWith(`cron:${HEART_CRON_CHECK_NAME}:`)
+              ? ctx.correlation_id.slice(`cron:${HEART_CRON_CHECK_NAME}:`.length)
+              : "unknown",
           err_name: err instanceof Error ? err.name : "Error",
           err_message: err instanceof Error ? err.message : String(err),
         });
