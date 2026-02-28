@@ -278,30 +278,18 @@ export type PipelineItemLinks = {
   incident_id: string | null;
 };
 
-export type PipelineApprovalItem = {
-  entity_type: "approval";
+export type PipelineStageItem = {
+  entity_type: string;
   entity_id: string;
   title: string;
-  status: "pending" | "held";
+  status: string;
   room_id: string | null;
   thread_id: string | null;
   correlation_id: string;
   updated_at: string;
   last_event_id: string | null;
   links: PipelineItemLinks;
-};
-
-export type PipelineRunItem = {
-  entity_type: "run";
-  entity_id: string;
-  title: string;
-  status: "queued" | "running" | "succeeded" | "failed";
-  room_id: string | null;
-  thread_id: string | null;
-  correlation_id: string;
-  updated_at: string;
-  last_event_id: string | null;
-  links: PipelineItemLinks;
+  diagnostics?: string[];
 };
 
 export type PipelineStageStats = Record<
@@ -313,20 +301,28 @@ export type PipelineStageStats = Record<
 >;
 
 export type PipelineProjectionStages = {
-  "1_inbox": Array<Record<string, never>>;
-  "2_pending_approval": PipelineApprovalItem[];
-  "3_execute_workspace": PipelineRunItem[];
-  "4_review_evidence": PipelineRunItem[];
-  "5_promoted": Array<Record<string, never>>;
-  "6_demoted": PipelineRunItem[];
+  "1_inbox": PipelineStageItem[];
+  "2_pending_approval": PipelineStageItem[];
+  "3_execute_workspace": PipelineStageItem[];
+  "4_review_evidence": PipelineStageItem[];
+  "5_promoted": PipelineStageItem[];
+  "6_demoted": PipelineStageItem[];
+};
+
+export type PipelineProjectionCursor = {
+  updated_at: string;
+  entity_type: string;
+  entity_id: string;
 };
 
 export type PipelineProjectionResponseV2_1 = {
   meta: {
     schema_version: typeof PIPELINE_CONTRACT_VERSION;
+    workspace_id: string;
     generated_at: string;
     limit: number;
     truncated: boolean;
+    next_cursor: PipelineProjectionCursor | null;
     stage_stats: PipelineStageStats;
     watermark_event_id: string | null;
   };
