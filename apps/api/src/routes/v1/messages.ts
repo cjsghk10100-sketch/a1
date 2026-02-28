@@ -17,8 +17,7 @@ import type { DbClient, DbPool } from "../../db/pool.js";
 import { recordMessageProcessingFailure } from "../../dlq/poisonMessageDlq.js";
 import { appendToStream } from "../../eventStore/index.js";
 import {
-  enforceMessageRateLimit,
-  refundMessageRateLimitCharges,
+  enforceMessageRateLimitTx,
 } from "../../ratelimit/enforceMessageRateLimit.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
@@ -236,13 +235,11 @@ function extractExperimentId(rawBody: Record<string, unknown>, workLinks?: WorkL
 }
 
 async function resetRateLimitStreakAfterSuccess(
-  pool: DbPool,
+  queryable: Queryable,
   workspace_id: string,
   agent_id: string,
 ): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query(
+  await queryable.query(
     `UPDATE rate_limit_streaks
      SET consecutive_429 = 0,
          updated_at = now()
@@ -252,9 +249,6 @@ async function resetRateLimitStreakAfterSuccess(
        AND consecutive_429 > 0`,
     [workspace_id, agent_id, RATE_LIMIT_SCOPE],
   );
-  } finally {
-    client.release();
-  }
 }
 
 export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -390,35 +384,6 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
     }
 
-    let chargedRateLimitBuckets: Array<{
-      bucket_key: string;
-      window_start: string;
-      window_sec: number;
-    }> = [];
-    try {
-      const rateLimitResult = await enforceMessageRateLimit(pool, {
-        workspace_id,
-        agent_id: authenticatedAgentId,
-        intent: normalizedIntent,
-        experiment_id,
-        correlation_id: body.correlation_id?.trim() || randomUUID(),
-      });
-      chargedRateLimitBuckets = rateLimitResult.charged_buckets;
-    } catch (err) {
-      const payload = errorPayloadFromUnknown(err, "internal_error");
-      if (payload.reason_code === "internal_error") {
-        await recordMessageProcessingFailure(pool, {
-          workspace_id,
-          message_id: body.idempotency_key?.trim() || "unknown_idempotency",
-          last_error: payload.reason,
-          source_intent: normalizedIntent,
-          source_kind: "messages_route",
-          raw_payload: JSON.stringify(req.body ?? null),
-        }).catch(() => {});
-      }
-      return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
-    }
-
     const message_id = newMessageId();
     const occurred_at = new Date().toISOString();
     const correlation_id = normalizeOptionalString(body.correlation_id) ?? randomUUID();
@@ -440,7 +405,6 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
     let txClient: DbClient | undefined;
     let committed = false;
     let missingLease = false;
-    let replayHandled = false;
     let shouldResetRateLimitStreak = false;
     let responseStatus = 201;
     let responseBody: unknown = {
@@ -483,6 +447,15 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         }
       }
 
+      await enforceMessageRateLimitTx(txClient, {
+        pool,
+        workspace_id,
+        agent_id: authenticatedAgentId,
+        intent: normalizedIntent,
+        experiment_id,
+        correlation_id,
+      });
+
       try {
         if (committed) {
           // no-op; duplicate replay/conflict already handled in this transaction
@@ -516,18 +489,10 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         }
 
         await txClient.query("ROLLBACK");
-        replayHandled = true;
-
-        await txClient.query("BEGIN");
+        committed = true;
         const existing = await findExistingMessageByIdempotency(txClient, workspace_id, body.idempotency_key);
         if (existing && existing.from_agent_id === authenticatedAgentId) {
-          await txClient.query("COMMIT");
-          committed = true;
           shouldResetRateLimitStreak = true;
-          if (chargedRateLimitBuckets.length > 0) {
-            await refundMessageRateLimitCharges(pool, chargedRateLimitBuckets).catch(() => {});
-          }
-
           const reason_code = "duplicate_idempotent_replay";
           responseStatus = httpStatusForReasonCode(reason_code);
           responseBody = {
@@ -536,15 +501,13 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
             reason_code,
           };
         } else {
-          await txClient.query("ROLLBACK");
-          committed = true;
           const reason_code = "idempotency_conflict_unresolved";
           responseStatus = httpStatusForReasonCode(reason_code);
           responseBody = buildContractError(reason_code);
         }
       }
 
-      if (!committed && !replayHandled) {
+      if (!committed) {
         if (
           terminalIntent &&
           resolvedWorkItem &&
@@ -561,13 +524,20 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
           );
         }
 
+        await resetRateLimitStreakAfterSuccess(txClient, workspace_id, authenticatedAgentId);
         await txClient.query("COMMIT");
         committed = true;
-        shouldResetRateLimitStreak = true;
       }
     } catch (err) {
+      const payload = errorPayloadFromUnknown(err, "internal_error");
       if (!committed && txClient) {
-        await txClient.query("ROLLBACK").catch(() => {});
+        if (payload.reason_code === "rate_limited") {
+          await txClient.query("COMMIT").catch(async () => {
+            await txClient?.query("ROLLBACK").catch(() => {});
+          });
+        } else {
+          await txClient.query("ROLLBACK").catch(() => {});
+        }
         committed = true;
       }
 
@@ -582,7 +552,6 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         );
       }
 
-      const payload = errorPayloadFromUnknown(err, "internal_error");
       if (payload.reason_code === "internal_error") {
         await recordMessageProcessingFailure(pool, {
           workspace_id,
