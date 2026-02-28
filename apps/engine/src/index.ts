@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+
+import { runIngestOnce, startIngestLoop, type IngestConfig } from "./ingestDrop.js";
+
 type JsonRecord = Record<string, unknown>;
 
 type ClaimedRun = {
@@ -36,6 +40,7 @@ type EngineConfig = {
   workspaceId: string;
   roomId?: string;
   actorId: string;
+  agentId: string;
   bearerToken?: string;
   refreshToken?: string;
   engineId?: string;
@@ -43,6 +48,15 @@ type EngineConfig = {
   pollMs: number;
   maxClaimsPerCycle: number;
   runOnce: boolean;
+  ingestEnabled: boolean;
+  pipelineRoot?: string;
+  dropRoot?: string;
+  maxItemConcurrency: number;
+  maxAttempts: number;
+  maxIngestFileBytes: number;
+  maxArtifactBytes: number;
+  httpTimeoutSec: number;
+  stableCheckMs: number;
 };
 
 const LEASE_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -64,6 +78,13 @@ function readBoolEnv(name: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function readOptionalStringEnv(name: string): string | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function getConfig(): EngineConfig {
   const roomId = process.env.ENGINE_ROOM_ID?.trim();
   const engineId = process.env.ENGINE_ID?.trim();
@@ -81,6 +102,7 @@ function getConfig(): EngineConfig {
     workspaceId: process.env.ENGINE_WORKSPACE_ID?.trim() || "ws_dev",
     roomId: roomId && roomId.length > 0 ? roomId : undefined,
     actorId: process.env.ENGINE_ACTOR_ID?.trim() || "external_engine",
+    agentId: process.env.ENGINE_AGENT_ID?.trim() || process.env.ENGINE_ACTOR_ID?.trim() || "external_engine",
     bearerToken: bearerToken.length > 0 ? bearerToken : undefined,
     refreshToken: refreshToken.length > 0 ? refreshToken : undefined,
     engineId: engineId && engineId.length > 0 ? engineId : undefined,
@@ -88,6 +110,15 @@ function getConfig(): EngineConfig {
     pollMs: readIntEnv("ENGINE_POLL_MS", 1200),
     maxClaimsPerCycle: readIntEnv("ENGINE_MAX_CLAIMS_PER_CYCLE", 1),
     runOnce: readBoolEnv("ENGINE_RUN_ONCE", false),
+    ingestEnabled: readBoolEnv("ENGINE_INGEST_ENABLED", false),
+    pipelineRoot: readOptionalStringEnv("ENGINE_PIPELINE_ROOT"),
+    dropRoot: readOptionalStringEnv("ENGINE_DROP_ROOT"),
+    maxItemConcurrency: readIntEnv("ENGINE_INGEST_MAX_ITEM_CONCURRENCY", 2),
+    maxAttempts: readIntEnv("ENGINE_INGEST_MAX_ATTEMPTS", 5),
+    maxIngestFileBytes: readIntEnv("ENGINE_INGEST_MAX_INGEST_FILE_BYTES", 1_048_576),
+    maxArtifactBytes: readIntEnv("ENGINE_INGEST_MAX_ARTIFACT_BYTES", 20 * 1024 * 1024),
+    httpTimeoutSec: readIntEnv("ENGINE_INGEST_HTTP_TIMEOUT_SEC", 15),
+    stableCheckMs: readIntEnv("ENGINE_INGEST_STABLE_CHECK_MS", 250),
   };
 }
 
@@ -422,19 +453,64 @@ async function runCycle(cfg: EngineConfig): Promise<number> {
   return handled;
 }
 
+function toIngestConfig(cfg: EngineConfig): IngestConfig {
+  return {
+    apiBaseUrl: cfg.apiBaseUrl,
+    workspaceId: cfg.workspaceId,
+    agentId: cfg.agentId,
+    runId: randomUUID(),
+    bearerToken: cfg.bearerToken,
+    refreshToken: cfg.refreshToken,
+    getBearerToken: () => cfg.bearerToken,
+    setBearerToken: (token: string) => {
+      cfg.bearerToken = token;
+    },
+    getRefreshToken: () => cfg.refreshToken,
+    setRefreshToken: (token: string) => {
+      cfg.refreshToken = token;
+    },
+    engineId: cfg.engineId,
+    engineToken: cfg.engineToken,
+    ingestEnabled: cfg.ingestEnabled,
+    pipelineRoot: cfg.pipelineRoot,
+    dropRoot: cfg.dropRoot,
+    maxItemConcurrency: cfg.maxItemConcurrency,
+    maxAttempts: cfg.maxAttempts,
+    maxIngestFileBytes: cfg.maxIngestFileBytes,
+    maxArtifactBytes: cfg.maxArtifactBytes,
+    httpTimeoutSec: cfg.httpTimeoutSec,
+    stableCheckMs: cfg.stableCheckMs,
+    pollMs: cfg.pollMs,
+  };
+}
+
 async function main(): Promise<void> {
   const initialCfg = getConfig();
   const cfg = await ensureEngineIdentity(initialCfg);
+  const ingestCfg = toIngestConfig(cfg);
   // eslint-disable-next-line no-console
   console.log(
     `[engine] started (api=${cfg.apiBaseUrl}, workspace=${cfg.workspaceId}, room=${cfg.roomId ?? "*"}, actor=${cfg.actorId}, engine_id=${cfg.engineId ?? "-"}, poll=${cfg.pollMs}ms)`,
   );
+  if (cfg.ingestEnabled) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[engine] ingest enabled (drop_root=${cfg.dropRoot ?? (cfg.pipelineRoot ?? process.cwd()) + "/_drop"}, concurrency=${cfg.maxItemConcurrency})`,
+    );
+  }
 
   if (cfg.runOnce) {
+    if (cfg.ingestEnabled) {
+      await runIngestOnce(ingestCfg);
+    }
     const count = await runCycle(cfg);
     // eslint-disable-next-line no-console
     console.log(`[engine] run-once handled ${count} run(s)`);
     return;
+  }
+
+  if (cfg.ingestEnabled) {
+    startIngestLoop(ingestCfg);
   }
 
   while (true) {
