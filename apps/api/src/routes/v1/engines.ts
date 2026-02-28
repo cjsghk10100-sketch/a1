@@ -349,8 +349,6 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         tokenSecret,
       });
 
-      await tx.query("COMMIT");
-
       await appendToStream(pool, {
         event_id: randomUUID(),
         event_type: "engine.registered",
@@ -371,7 +369,9 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         policy_context: {},
         model_context: {},
         display: {},
-      }).catch(() => {});
+      }, tx);
+
+      await tx.query("COMMIT");
 
       const tokenRow = await pool.query<{
         token_id: string;
@@ -494,8 +494,6 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         tokenSecret,
       });
 
-      await tx.query("COMMIT");
-
       await appendToStream(pool, {
         event_id: randomUUID(),
         event_type: "engine.token.issued",
@@ -514,7 +512,9 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         policy_context: {},
         model_context: {},
         display: {},
-      }).catch(() => {});
+      }, tx);
+
+      await tx.query("COMMIT");
 
       const tokenRow = await pool.query<{
         token_id: string;
@@ -614,7 +614,6 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         );
       }
 
-      await tx.query("COMMIT");
       if (revokedCapabilityTokenId) {
         await appendToStream(pool, {
           event_id: randomUUID(),
@@ -635,8 +634,9 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
           policy_context: {},
           model_context: {},
           display: {},
-        }).catch(() => {});
+        }, tx);
       }
+      await tx.query("COMMIT");
       return reply.code(200).send({ ok: true, already_revoked });
     } catch (err) {
       await tx.query("ROLLBACK");
@@ -732,7 +732,6 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         );
       }
 
-      await tx.query("COMMIT");
       await appendToStream(pool, {
         event_id: randomUUID(),
         event_type: "engine.deactivated",
@@ -752,7 +751,8 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         policy_context: {},
         model_context: {},
         display: {},
-      }).catch(() => {});
+      }, tx);
+      await tx.query("COMMIT");
       return reply.code(200).send({
         ok: true,
         engine: serializeEngineRow(engineUpdate.rows[0]),

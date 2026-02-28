@@ -171,6 +171,11 @@ export async function tickHeartCron(
     );
 
     const totals = sumCounts(perWorkspaceCounts);
+    const totalErrors =
+      totals.approval_timeout.errors + totals.run_stuck.errors + totals.demoted_stale.errors;
+    if (totalErrors > 0) {
+      throw new Error(`heart_cron_sweep_errors:${totalErrors}`);
+    }
     await recordCronSuccess(pool, HEART_CRON_CHECK_NAME, {
       source: "cron",
       lock_name: HEART_CRON_LOCK_NAME,

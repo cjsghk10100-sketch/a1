@@ -458,20 +458,7 @@ export async function evaluatePromotionLoopForScorecard(
   const room_id = runContext && runContext.rowCount === 1 ? runContext.rows[0].room_id : null;
   const thread_id = runContext && runContext.rowCount === 1 ? runContext.rows[0].thread_id : null;
 
-  if (pass_count >= PASS_THRESHOLD && fail_ratio <= PASS_FAIL_RATIO_MAX) {
-    const recommendation = await ensurePendingRecommendation(pool, {
-      workspace_id: input.workspace_id,
-      agent_id: row.agent_id,
-      correlation_id: row.correlation_id,
-      actor: input.actor,
-      actor_principal_id: input.actor_principal_id,
-      pass_count,
-      fail_count,
-    });
-    recommendation_id = recommendation.recommendation_id;
-    decision = recommendation.created ? "recommend_upgrade" : "none";
-    reason = recommendation.created ? "pass_threshold_met" : "pending_recommendation_exists";
-  } else if (fail_count >= FAIL_THRESHOLD) {
+  if (fail_count >= FAIL_THRESHOLD) {
     const incident = await ensureLoopIncident(pool, {
       workspace_id: input.workspace_id,
       agent_id: row.agent_id,
@@ -512,6 +499,19 @@ export async function evaluatePromotionLoopForScorecard(
         reason = "quarantine_threshold_met";
       }
     }
+  } else if (pass_count >= PASS_THRESHOLD && fail_ratio <= PASS_FAIL_RATIO_MAX) {
+    const recommendation = await ensurePendingRecommendation(pool, {
+      workspace_id: input.workspace_id,
+      agent_id: row.agent_id,
+      correlation_id: row.correlation_id,
+      actor: input.actor,
+      actor_principal_id: input.actor_principal_id,
+      pass_count,
+      fail_count,
+    });
+    recommendation_id = recommendation.recommendation_id;
+    decision = recommendation.created ? "recommend_upgrade" : "none";
+    reason = recommendation.created ? "pass_threshold_met" : "pending_recommendation_exists";
   }
 
   await appendPromotionEvaluated(pool, {

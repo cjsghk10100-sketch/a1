@@ -23,6 +23,15 @@ type AgentRow = {
   agent_id: string;
 };
 
+type RoomRow = {
+  workspace_id: string;
+};
+
+type ThreadRow = {
+  workspace_id: string;
+  room_id: string;
+};
+
 type ExistingMessageRow = {
   message_id: string | null;
   from_agent_id: string | null;
@@ -162,11 +171,9 @@ async function findExistingMessageByIdempotency(
        data->>'from_agent_id' AS from_agent_id
      FROM evt_events
      WHERE workspace_id = $1
-       AND stream_type = 'workspace'
-       AND stream_id = $1
        AND event_type = 'message.created'
        AND idempotency_key = $2
-     ORDER BY occurred_at DESC, stream_seq DESC
+     ORDER BY recorded_at DESC
      LIMIT 1`,
     [workspace_id, idempotency_key],
   );
@@ -177,6 +184,44 @@ async function findExistingMessageByIdempotency(
 
   const from_agent_id = existing.rows[0].from_agent_id?.trim() || null;
   return { message_id, from_agent_id };
+}
+
+async function validateRoomWorkspace(
+  pool: DbPool,
+  workspace_id: string,
+  room_id: string | undefined,
+): Promise<boolean> {
+  if (!room_id) return true;
+  const room = await pool.query<RoomRow>(
+    `SELECT workspace_id
+     FROM proj_rooms
+     WHERE room_id = $1
+     LIMIT 1`,
+    [room_id],
+  );
+  if (room.rowCount !== 1) return false;
+  return room.rows[0].workspace_id === workspace_id;
+}
+
+async function validateThreadWorkspace(
+  pool: DbPool,
+  workspace_id: string,
+  thread_id: string | undefined,
+  room_id: string | undefined,
+): Promise<boolean> {
+  if (!thread_id) return true;
+  const thread = await pool.query<ThreadRow>(
+    `SELECT workspace_id, room_id
+     FROM proj_threads
+     WHERE thread_id = $1
+     LIMIT 1`,
+    [thread_id],
+  );
+  if (thread.rowCount !== 1) return false;
+  const row = thread.rows[0];
+  if (row.workspace_id !== workspace_id) return false;
+  if (room_id && row.room_id !== room_id) return false;
+  return true;
 }
 
 function extractExperimentId(rawBody: Record<string, unknown>, workLinks?: WorkLinks): string | null {
@@ -254,6 +299,28 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       );
     }
 
+    const room_id = normalizeOptionalString(body.room_id);
+    const thread_id = normalizeOptionalString(body.thread_id);
+    if (!(await validateRoomWorkspace(pool, workspace_id, room_id))) {
+      const reason_code = "unauthorized_workspace";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(
+        buildContractError(reason_code, {
+          room_id,
+          workspace_id,
+        }),
+      );
+    }
+    if (!(await validateThreadWorkspace(pool, workspace_id, thread_id, room_id))) {
+      const reason_code = "unauthorized_workspace";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(
+        buildContractError(reason_code, {
+          thread_id,
+          room_id,
+          workspace_id,
+        }),
+      );
+    }
+
     if (body.payload_ref) {
       const head = await artifactObjectExists(body.payload_ref.object_key);
       if (head.unavailable) {
@@ -301,11 +368,16 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
 
     const message_id = newMessageId();
     const occurred_at = new Date().toISOString();
-    const correlation_id = body.correlation_id?.trim() || randomUUID();
+    const correlation_id = normalizeOptionalString(body.correlation_id) ?? randomUUID();
+    const stream = room_id
+      ? ({ stream_type: "room", stream_id: room_id } as const)
+      : ({ stream_type: "workspace", stream_id: workspace_id } as const);
     const storedMessage = {
       ...body,
       message_id,
       workspace_id,
+      room_id: room_id ?? null,
+      thread_id: thread_id ?? null,
       from_agent_id: authenticatedAgentId,
       intent: normalizedIntent,
       payload: body.payload ?? null,
@@ -326,7 +398,33 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       txClient = await pool.connect();
       await txClient.query("BEGIN");
 
-      if (leaseEnforcementApplies && resolvedWorkItem && resolvedWorkItem.skip_lease !== true) {
+      const existingBeforeWrite = await findExistingMessageByIdempotency(
+        txClient,
+        workspace_id,
+        body.idempotency_key,
+      );
+      if (existingBeforeWrite && existingBeforeWrite.from_agent_id === authenticatedAgentId) {
+        await resetRateLimitStreakTx(txClient, workspace_id, authenticatedAgentId);
+        await txClient.query("COMMIT");
+        committed = true;
+        replayHandled = true;
+        const reason_code = "duplicate_idempotent_replay";
+        responseStatus = httpStatusForReasonCode(reason_code);
+        responseBody = {
+          message_id: existingBeforeWrite.message_id,
+          idempotent_replay: true,
+          reason_code,
+        };
+      } else if (existingBeforeWrite) {
+        await txClient.query("ROLLBACK");
+        committed = true;
+        replayHandled = true;
+        const reason_code = "idempotency_conflict_unresolved";
+        responseStatus = httpStatusForReasonCode(reason_code);
+        responseBody = buildContractError(reason_code);
+      }
+
+      if (!committed && leaseEnforcementApplies && resolvedWorkItem && resolvedWorkItem.skip_lease !== true) {
         const lease = await txClient.query<LeaseRow>(
           `SELECT
              agent_id,
@@ -357,38 +455,44 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         }
       }
 
-      await enforceMessageRateLimitTx(txClient, {
-        pool,
-        workspace_id,
-        agent_id: authenticatedAgentId,
-        intent: normalizedIntent,
-        experiment_id,
-        correlation_id,
-      });
+      if (!committed) {
+        await enforceMessageRateLimitTx(txClient, {
+          pool,
+          workspace_id,
+          agent_id: authenticatedAgentId,
+          intent: normalizedIntent,
+          experiment_id,
+          correlation_id,
+        });
+      }
 
       try {
-        await appendToStream(
-          pool,
-          {
-            event_id: randomUUID(),
-            event_type: "message.created",
-            event_version: 1,
-            occurred_at,
-            workspace_id,
-            room_id: body.room_id?.trim() || undefined,
-            thread_id: body.thread_id?.trim() || undefined,
-            actor: { actor_type: "agent", actor_id: authenticatedAgentId },
-            actor_principal_id: auth.principal_id,
-            stream: { stream_type: "workspace", stream_id: workspace_id },
-            correlation_id,
-            data: storedMessage,
-            idempotency_key: body.idempotency_key,
-            policy_context: {},
-            model_context: {},
-            display: {},
-          },
-          txClient,
-        );
+        if (committed) {
+          // no-op; duplicate replay/conflict already handled in this transaction
+        } else {
+          await appendToStream(
+            pool,
+            {
+              event_id: randomUUID(),
+              event_type: "message.created",
+              event_version: 1,
+              occurred_at,
+              workspace_id,
+              room_id: room_id ?? undefined,
+              thread_id: thread_id ?? undefined,
+              actor: { actor_type: "agent", actor_id: authenticatedAgentId },
+              actor_principal_id: auth.principal_id,
+              stream,
+              correlation_id,
+              data: storedMessage,
+              idempotency_key: body.idempotency_key,
+              policy_context: {},
+              model_context: {},
+              display: {},
+            },
+            txClient,
+          );
+        }
       } catch (err) {
         if (!isIdempotencyUniqueViolation(err)) {
           throw err;
@@ -469,7 +573,7 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       if (payload.reason_code === "internal_error") {
         await recordMessageProcessingFailure(pool, {
           workspace_id,
-          message_id,
+          message_id: body.idempotency_key,
           last_error: payload.reason,
           source_intent: normalizedIntent,
           source_kind: "messages_route",
