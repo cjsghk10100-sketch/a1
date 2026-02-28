@@ -135,6 +135,65 @@ type ErrorResponse = {
   details: Record<string, unknown>;
 };
 
+const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+function assertIsoUtc(value: string, field: string): void {
+  assert.match(value, ISO_UTC_RE, `${field} must be ISO8601 UTC`);
+}
+
+async function withEnvOverride(
+  name: string,
+  value: string | undefined,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const previous = process.env[name];
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+  try {
+    await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
+}
+
+async function installForcedEventInsertFailure(
+  db: pg.Client,
+  eventType: string,
+  entityType: string,
+  entityId: string,
+): Promise<() => Promise<void>> {
+  const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+  const triggerName = `trg_force_evt_insert_${randomUUID().replaceAll("-", "")}`;
+  await db.query(
+    `CREATE OR REPLACE FUNCTION force_evt_insert_failure() RETURNS trigger AS $$
+     BEGIN
+       IF NEW.event_type = TG_ARGV[0]
+          AND NEW.entity_type = TG_ARGV[1]
+          AND NEW.entity_id = TG_ARGV[2] THEN
+         RAISE EXCEPTION 'forced_evt_insert_failure';
+       END IF;
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
+  );
+  await db.query(
+    `CREATE TRIGGER ${triggerName}
+     BEFORE INSERT ON evt_events
+     FOR EACH ROW
+     EXECUTE FUNCTION force_evt_insert_failure(${quote(eventType)}, ${quote(entityType)}, ${quote(entityId)})`,
+  );
+  return async () => {
+    await db.query(`DROP TRIGGER IF EXISTS ${triggerName} ON evt_events`);
+  };
+}
+
 async function claimWithRetry(
   baseUrl: string,
   headers: Record<string, string>,
@@ -215,6 +274,7 @@ async function main(): Promise<void> {
     assert.equal(created.length + replayed.length, 20, "all claim attempts should be create/replay");
 
     const firstClaim = created[0].json as LeaseResponse;
+    assertIsoUtc(firstClaim.server_time, "claim.server_time");
 
     const preemptFirst = await requestJson(
       baseUrl,
@@ -231,6 +291,7 @@ async function main(): Promise<void> {
     );
     assert.equal(preemptFirst.status, 201);
     const preemptFirstJson = preemptFirst.json as LeaseResponse;
+    assertIsoUtc(preemptFirstJson.server_time, "preemptFirst.server_time");
 
     await db.query(
       `UPDATE work_item_leases
@@ -256,6 +317,7 @@ async function main(): Promise<void> {
     );
     assert.equal(preemptSecond.status, 201);
     const preemptSecondJson = preemptSecond.json as LeaseResponse;
+    assertIsoUtc(preemptSecondJson.server_time, "preemptSecond.server_time");
     assert.notEqual(preemptFirstJson.lease.lease_id, preemptSecondJson.lease.lease_id);
     assert.equal(preemptSecondJson.lease.version, 1);
 
@@ -296,42 +358,47 @@ async function main(): Promise<void> {
     assert.equal(hbClaim.status, 201);
     const hbLease = (hbClaim.json as LeaseResponse).lease;
 
-    process.env.HEARTBEAT_MIN_INTERVAL_SEC = "0";
-    const hb1 = await requestJson(
-      baseUrl,
-      "POST",
-      "/v1/work-items/heartbeat",
-      {
-        schema_version: "2.1",
-        from_agent_id: agentId,
-        work_item_type: "incident",
-        work_item_id: "inc_heartbeat",
-        lease_id: hbLease.lease_id,
-        version: hbLease.version,
-      },
-      headers,
-    );
-    assert.equal(hb1.status, 200);
-    const hb1Json = hb1.json as LeaseResponse;
+    let hb1Json!: LeaseResponse;
+    await withEnvOverride("HEARTBEAT_MIN_INTERVAL_SEC", "0", async () => {
+      const hb1 = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/work-items/heartbeat",
+        {
+          schema_version: "2.1",
+          from_agent_id: agentId,
+          work_item_type: "incident",
+          work_item_id: "inc_heartbeat",
+          lease_id: hbLease.lease_id,
+          version: hbLease.version,
+        },
+        headers,
+      );
+      assert.equal(hb1.status, 200);
+      hb1Json = hb1.json as LeaseResponse;
+      assertIsoUtc(hb1Json.server_time, "heartbeat.server_time");
+    });
 
-    process.env.HEARTBEAT_MIN_INTERVAL_SEC = "1";
-    const hb2 = await requestJson(
-      baseUrl,
-      "POST",
-      "/v1/work-items/heartbeat",
-      {
-        schema_version: "2.1",
-        from_agent_id: agentId,
-        work_item_type: "incident",
-        work_item_id: "inc_heartbeat",
-        lease_id: hbLease.lease_id,
-        version: hb1Json.lease.version,
-      },
-      headers,
-    );
-    assert.equal(hb2.status, 429);
-    assert.equal((hb2.json as ErrorResponse).reason_code, "heartbeat_rate_limited");
-    delete process.env.HEARTBEAT_MIN_INTERVAL_SEC;
+    await withEnvOverride("HEARTBEAT_MIN_INTERVAL_SEC", "1", async () => {
+      const hb2 = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/work-items/heartbeat",
+        {
+          schema_version: "2.1",
+          from_agent_id: agentId,
+          work_item_type: "incident",
+          work_item_id: "inc_heartbeat",
+          lease_id: hbLease.lease_id,
+          version: hb1Json.lease.version,
+        },
+        headers,
+      );
+      assert.equal(hb2.status, 429);
+      assert.equal((hb2.json as ErrorResponse).reason_code, "heartbeat_rate_limited");
+      const details = (hb2.json as ErrorResponse).details;
+      assertIsoUtc(String(details.server_time), "heartbeat.rate_limit.server_time");
+    });
 
     const releaseA = await requestJson(
       baseUrl,
@@ -416,6 +483,7 @@ async function main(): Promise<void> {
     );
     assert.equal(activeRelease.status, 200);
     assert.equal((activeRelease.json as { released: boolean }).released, true);
+    assertIsoUtc(String((activeRelease.json as { server_time: string }).server_time), "release.server_time");
 
     const releasedRow = await db.query<{ count: string }>(
       `SELECT count(*)::text AS count
@@ -426,6 +494,99 @@ async function main(): Promise<void> {
       [workspaceId],
     );
     assert.equal(Number.parseInt(releasedRow.rows[0].count, 10), 0);
+
+    // appendToStream must share tx client with claim: if append fails, lease insert must rollback.
+    {
+      const dropTrigger = await installForcedEventInsertFailure(
+        db,
+        "lease.claimed",
+        "incident",
+        "inc_claim_append_fail",
+      );
+      try {
+        const claimFailure = await requestJson(
+          baseUrl,
+          "POST",
+          "/v1/work-items/claim",
+          {
+            schema_version: "2.1",
+            from_agent_id: agentId,
+            work_item_type: "incident",
+            work_item_id: "inc_claim_append_fail",
+            correlation_id: "corr:inc_claim_append_fail",
+          },
+          headers,
+        );
+        assert.equal(claimFailure.status, 500);
+      } finally {
+        await dropTrigger();
+      }
+
+      const claimRollbackCheck = await db.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+         FROM work_item_leases
+         WHERE workspace_id = $1
+           AND work_item_type = 'incident'
+           AND work_item_id = 'inc_claim_append_fail'`,
+        [workspaceId],
+      );
+      assert.equal(Number.parseInt(claimRollbackCheck.rows[0].count, 10), 0);
+    }
+
+    // appendToStream must share tx client with release: if append fails, lease delete must rollback.
+    {
+      const releaseClaim = await requestJson(
+        baseUrl,
+        "POST",
+        "/v1/work-items/claim",
+        {
+          schema_version: "2.1",
+          from_agent_id: agentId,
+          work_item_type: "incident",
+          work_item_id: "inc_release_append_fail",
+          correlation_id: "corr:inc_release_append_fail",
+        },
+        headers,
+      );
+      assert.equal(releaseClaim.status, 201);
+      const releaseLease = (releaseClaim.json as LeaseResponse).lease;
+
+      const dropTrigger = await installForcedEventInsertFailure(
+        db,
+        "lease.released",
+        "incident",
+        "inc_release_append_fail",
+      );
+      try {
+        const releaseFailure = await requestJson(
+          baseUrl,
+          "POST",
+          "/v1/work-items/release",
+          {
+            schema_version: "2.1",
+            from_agent_id: agentId,
+            work_item_type: "incident",
+            work_item_id: "inc_release_append_fail",
+            lease_id: releaseLease.lease_id,
+          },
+          headers,
+        );
+        assert.equal(releaseFailure.status, 500);
+      } finally {
+        await dropTrigger();
+      }
+
+      const releaseRollbackCheck = await db.query<{ lease_id: string }>(
+        `SELECT lease_id
+         FROM work_item_leases
+         WHERE workspace_id = $1
+           AND work_item_type = 'incident'
+           AND work_item_id = 'inc_release_append_fail'`,
+        [workspaceId],
+      );
+      assert.equal(releaseRollbackCheck.rowCount, 1);
+      assert.equal(releaseRollbackCheck.rows[0].lease_id, releaseLease.lease_id);
+    }
 
     const eventCounts = await db.query<{ event_type: string; count: string }>(
       `SELECT event_type, count(*)::text AS count
