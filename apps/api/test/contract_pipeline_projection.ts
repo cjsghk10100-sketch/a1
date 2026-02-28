@@ -4,21 +4,29 @@ import path from "node:path";
 
 import pg from "pg";
 
+import { SCHEMA_VERSION } from "../src/contracts/schemaVersion.js";
 import { createPool } from "../src/db/pool.js";
 import { buildServer } from "../src/server.js";
 
 const { Client } = pg;
 
-type ApprovalStageItem = {
-  entity_type: "approval";
+type ProjectionCursor = {
+  updated_at: string;
+  entity_type: string;
+  entity_id: string;
+};
+
+type ProjectionItem = {
+  entity_type: string;
   entity_id: string;
   title: string;
-  status: "pending" | "held";
+  status: string;
   room_id: string | null;
   thread_id: string | null;
   correlation_id: string;
   updated_at: string;
   last_event_id: string | null;
+  diagnostics?: string[];
   links: {
     experiment_id: string | null;
     approval_id: string | null;
@@ -29,57 +37,35 @@ type ApprovalStageItem = {
   };
 };
 
-type RunStageItem = {
-  entity_type: "run";
-  entity_id: string;
-  title: string;
-  status: "queued" | "running" | "succeeded" | "failed";
-  room_id: string | null;
-  thread_id: string | null;
-  correlation_id: string;
-  updated_at: string;
-  last_event_id: string | null;
-  links: {
-    experiment_id: string | null;
-    approval_id: string | null;
-    run_id: string | null;
-    evidence_id: string | null;
-    scorecard_id: string | null;
-    incident_id: string | null;
-  };
-};
+type StageKey =
+  | "1_inbox"
+  | "2_pending_approval"
+  | "3_execute_workspace"
+  | "4_review_evidence"
+  | "5_promoted"
+  | "6_demoted";
 
-type ProjectionResponse = {
+type FlatProjectionResponse = {
   schema_version: string;
   generated_at: string;
-  "1_inbox": Array<Record<string, never>>;
-  "2_pending_approval": ApprovalStageItem[];
-  "3_execute_workspace": RunStageItem[];
-  "4_review_evidence": RunStageItem[];
-  "5_promoted": Array<Record<string, never>>;
-  "6_demoted": RunStageItem[];
+  "1_inbox": ProjectionItem[];
+  "2_pending_approval": ProjectionItem[];
+  "3_execute_workspace": ProjectionItem[];
+  "4_review_evidence": ProjectionItem[];
+  "5_promoted": ProjectionItem[];
+  "6_demoted": ProjectionItem[];
 };
 
 type EnvelopeProjectionResponse = {
   meta: {
     schema_version: string;
+    workspace_id: string;
     generated_at: string;
     limit: number;
     truncated: boolean;
-    stage_stats: Record<
-      "1_inbox" | "2_pending_approval" | "3_execute_workspace" | "4_review_evidence" | "5_promoted" | "6_demoted",
-      { returned: number; truncated: boolean }
-    >;
-    watermark_event_id: string | null;
+    next_cursor: ProjectionCursor | null;
   };
-  stages: {
-    "1_inbox": Array<Record<string, never>>;
-    "2_pending_approval": ApprovalStageItem[];
-    "3_execute_workspace": RunStageItem[];
-    "4_review_evidence": RunStageItem[];
-    "5_promoted": Array<Record<string, never>>;
-    "6_demoted": RunStageItem[];
-  };
+  stages: Record<StageKey, ProjectionItem[]>;
 };
 
 function requireEnv(name: string): string {
@@ -135,13 +121,13 @@ async function postJson<T>(
   baseUrl: string,
   urlPath: string,
   body: unknown,
-  headers?: Record<string, string>,
+  headers: Record<string, string>,
 ): Promise<T> {
   const res = await fetch(`${baseUrl}${urlPath}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      ...(headers ?? {}),
+      ...headers,
     },
     body: JSON.stringify(body),
   });
@@ -155,11 +141,11 @@ async function postJson<T>(
 async function getJson<T>(
   baseUrl: string,
   urlPath: string,
-  headers?: Record<string, string>,
+  headers: Record<string, string>,
 ): Promise<T> {
   const res = await fetch(`${baseUrl}${urlPath}`, {
     method: "GET",
-    headers: { ...(headers ?? {}) },
+    headers,
   });
   const text = await res.text();
   if (!res.ok) {
@@ -168,32 +154,59 @@ async function getJson<T>(
   return JSON.parse(text) as T;
 }
 
-function compareByUpdatedAtDescAndEntityIdAsc<T extends { updated_at: string; entity_id: string }>(
-  a: T,
-  b: T,
-): number {
-  const timeDiff = new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-  if (timeDiff !== 0) return timeDiff;
-  return a.entity_id.localeCompare(b.entity_id);
-}
-
-function assertNoLeaseFields(items: RunStageItem[]): void {
-  for (const item of items) {
-    assert.ok(!("lease_heartbeat_at" in item));
-    assert.ok(!("lease_expires_at" in item));
-    assert.ok(!("claim_token" in item));
-    assert.ok(!("claimed_by_actor_id" in item));
+function findItem(stages: Record<StageKey, ProjectionItem[]>, entityId: string): ProjectionItem | null {
+  const keys: StageKey[] = [
+    "1_inbox",
+    "2_pending_approval",
+    "3_execute_workspace",
+    "4_review_evidence",
+    "5_promoted",
+    "6_demoted",
+  ];
+  for (const key of keys) {
+    const stage = stages[key];
+    const found = stage.find((item) => item.entity_id === entityId);
+    if (found) return found;
   }
+  return null;
 }
 
-function assertLinksShape(item: ApprovalStageItem | RunStageItem): void {
-  assert.ok(typeof item.links === "object" && item.links != null);
-  assert.ok("experiment_id" in item.links);
-  assert.ok("approval_id" in item.links);
-  assert.ok("run_id" in item.links);
-  assert.ok("evidence_id" in item.links);
-  assert.ok("scorecard_id" in item.links);
-  assert.ok("incident_id" in item.links);
+function findStageFor(stages: FlatProjectionResponse, entityId: string): StageKey | null {
+  const keys: StageKey[] = [
+    "1_inbox",
+    "2_pending_approval",
+    "3_execute_workspace",
+    "4_review_evidence",
+    "5_promoted",
+    "6_demoted",
+  ];
+  for (const key of keys) {
+    if (stages[key].some((item) => item.entity_id === entityId)) return key;
+  }
+  return null;
+}
+
+function assertStageKeys(stages: FlatProjectionResponse): void {
+  assert.ok(Array.isArray(stages["1_inbox"]));
+  assert.ok(Array.isArray(stages["2_pending_approval"]));
+  assert.ok(Array.isArray(stages["3_execute_workspace"]));
+  assert.ok(Array.isArray(stages["4_review_evidence"]));
+  assert.ok(Array.isArray(stages["5_promoted"]));
+  assert.ok(Array.isArray(stages["6_demoted"]));
+}
+
+async function lookupEvidenceId(pool: ReturnType<typeof createPool>, workspace_id: string, run_id: string): Promise<string> {
+  const row = await pool.query<{ evidence_id: string }>(
+    `SELECT evidence_id
+     FROM proj_evidence_manifests
+     WHERE workspace_id = $1
+       AND run_id = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [workspace_id, run_id],
+  );
+  if (row.rowCount !== 1) throw new Error(`missing evidence for run ${run_id}`);
+  return row.rows[0].evidence_id;
 }
 
 async function main(): Promise<void> {
@@ -212,72 +225,44 @@ async function main(): Promise<void> {
     throw new Error("expected server to listen on a TCP port");
   }
   const baseUrl = `http://127.0.0.1:${address.port}`;
-
-  const workspaceHeader = { "x-workspace-id": `ws_contract_pipeline_projection_${Date.now()}` };
+  const workspace_id = `ws_contract_projection_gate_${Date.now()}`;
+  const workspaceHeader = { "x-workspace-id": workspace_id };
 
   try {
     const { room_id } = await postJson<{ room_id: string }>(
       baseUrl,
       "/v1/rooms",
-      { title: "Pipeline Projection Contract Room", room_mode: "default", default_lang: "en" },
+      { title: "Projection Gate Contract", room_mode: "default", default_lang: "en" },
       workspaceHeader,
     );
 
-    const queuedRun = await postJson<{ run_id: string }>(
+    const draftExperiment = await postJson<{ experiment_id: string }>(
       baseUrl,
-      "/v1/runs",
-      { room_id, title: "Queued run for projection" },
+      "/v1/experiments",
+      {
+        room_id,
+        title: "Draft Experiment",
+        hypothesis: "test",
+        success_criteria: {},
+        stop_conditions: {},
+        budget_cap_units: 10,
+        risk_tier: "low",
+      },
       workspaceHeader,
     );
 
-    const runningRun = await postJson<{ run_id: string }>(
+    const activeExperiment = await postJson<{ experiment_id: string }>(
       baseUrl,
-      "/v1/runs",
-      { room_id, title: "Running run for projection" },
-      workspaceHeader,
-    );
-    await postJson<{ ok: boolean }>(
-      baseUrl,
-      `/v1/runs/${runningRun.run_id}/start`,
-      {},
-      workspaceHeader,
-    );
-
-    const succeededRun = await postJson<{ run_id: string }>(
-      baseUrl,
-      "/v1/runs",
-      { room_id, title: "Succeeded run for projection" },
-      workspaceHeader,
-    );
-    await postJson<{ ok: boolean }>(
-      baseUrl,
-      `/v1/runs/${succeededRun.run_id}/start`,
-      {},
-      workspaceHeader,
-    );
-    await postJson<{ ok: boolean }>(
-      baseUrl,
-      `/v1/runs/${succeededRun.run_id}/complete`,
-      { summary: "done", output: { ok: true } },
-      workspaceHeader,
-    );
-
-    const failedRun = await postJson<{ run_id: string }>(
-      baseUrl,
-      "/v1/runs",
-      { room_id, title: "Failed run for projection" },
-      workspaceHeader,
-    );
-    await postJson<{ ok: boolean }>(
-      baseUrl,
-      `/v1/runs/${failedRun.run_id}/start`,
-      {},
-      workspaceHeader,
-    );
-    await postJson<{ ok: boolean }>(
-      baseUrl,
-      `/v1/runs/${failedRun.run_id}/fail`,
-      { message: "failed", error: { code: "test_failure" } },
+      "/v1/experiments",
+      {
+        room_id,
+        title: "Active Experiment",
+        hypothesis: "active",
+        success_criteria: {},
+        stop_conditions: {},
+        budget_cap_units: 10,
+        risk_tier: "low",
+      },
       workspaceHeader,
     );
 
@@ -287,108 +272,335 @@ async function main(): Promise<void> {
       { action: "external.write", title: "Pending approval", room_id },
       workspaceHeader,
     );
-    const holdApproval = await postJson<{ approval_id: string }>(
+
+    const executeRun = await postJson<{ run_id: string }>(
       baseUrl,
-      "/v1/approvals",
-      { action: "external.write", title: "Hold approval", room_id },
+      "/v1/runs",
+      { room_id, title: "Execute Run", experiment_id: activeExperiment.experiment_id },
       workspaceHeader,
     );
-    await postJson<{ ok: boolean }>(
+    await postJson<{ ok: true }>(baseUrl, `/v1/runs/${executeRun.run_id}/start`, {}, workspaceHeader);
+
+    const reviewRun = await postJson<{ run_id: string }>(
       baseUrl,
-      `/v1/approvals/${holdApproval.approval_id}/decide`,
-      { decision: "hold", reason: "manual review" },
+      "/v1/runs",
+      { room_id, title: "Review Run", experiment_id: activeExperiment.experiment_id },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(baseUrl, `/v1/runs/${reviewRun.run_id}/start`, {}, workspaceHeader);
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/runs/${reviewRun.run_id}/complete`,
+      { summary: "done", output: { ok: true } },
+      workspaceHeader,
+    );
+    const reviewEvidenceId = await lookupEvidenceId(pool, workspace_id, reviewRun.run_id);
+
+    const promoteRun = await postJson<{ run_id: string }>(
+      baseUrl,
+      "/v1/runs",
+      { room_id, title: "Promote Run", experiment_id: activeExperiment.experiment_id },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(baseUrl, `/v1/runs/${promoteRun.run_id}/start`, {}, workspaceHeader);
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/runs/${promoteRun.run_id}/complete`,
+      { summary: "done", output: { ok: true } },
+      workspaceHeader,
+    );
+    const promoteEvidenceId = await lookupEvidenceId(pool, workspace_id, promoteRun.run_id);
+    await postJson<{ scorecard_id: string }>(
+      baseUrl,
+      "/v1/scorecards",
+      {
+        run_id: promoteRun.run_id,
+        evidence_id: promoteEvidenceId,
+        template_key: "default",
+        template_version: "1",
+        metrics: [{ key: "quality", value: 1, weight: 1 }],
+      },
       workspaceHeader,
     );
 
-    const projection = await getJson<ProjectionResponse>(
+    const failRun = await postJson<{ run_id: string }>(
+      baseUrl,
+      "/v1/runs",
+      { room_id, title: "Fail Run", experiment_id: activeExperiment.experiment_id },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(baseUrl, `/v1/runs/${failRun.run_id}/start`, {}, workspaceHeader);
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/runs/${failRun.run_id}/fail`,
+      { message: "failed", error: { code: "test_failure" } },
+      workspaceHeader,
+    );
+
+    const ghostRun = await postJson<{ run_id: string }>(
+      baseUrl,
+      "/v1/runs",
+      { room_id, title: "Ghost Run", experiment_id: activeExperiment.experiment_id },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(baseUrl, `/v1/runs/${ghostRun.run_id}/start`, {}, workspaceHeader);
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/runs/${ghostRun.run_id}/complete`,
+      { summary: "done", output: { ok: true } },
+      workspaceHeader,
+    );
+    const ghostEvidenceId = await lookupEvidenceId(pool, workspace_id, ghostRun.run_id);
+    const ghostScorecard = await postJson<{ scorecard_id: string }>(
+      baseUrl,
+      "/v1/scorecards",
+      {
+        run_id: ghostRun.run_id,
+        evidence_id: ghostEvidenceId,
+        template_key: "default",
+        template_version: "1",
+        metrics: [{ key: "quality", value: 1, weight: 1 }],
+      },
+      workspaceHeader,
+    );
+    await pool.query(
+      `UPDATE proj_scorecards
+       SET evidence_id = $3,
+           updated_at = now()
+       WHERE workspace_id = $1
+         AND scorecard_id = $2`,
+      [workspace_id, ghostScorecard.scorecard_id, reviewEvidenceId],
+    );
+
+    const flat = await getJson<FlatProjectionResponse>(
       baseUrl,
       "/v1/pipeline/projection?limit=200",
       workspaceHeader,
     );
+    assert.equal(flat.schema_version, SCHEMA_VERSION);
+    assert.ok(!Number.isNaN(Date.parse(flat.generated_at)));
+    assertStageKeys(flat);
 
-    assert.equal(projection.schema_version, "pipeline_projection.v0.1");
-    assert.ok(!Number.isNaN(new Date(projection.generated_at).getTime()));
-    assert.ok(Array.isArray(projection["1_inbox"]));
-    assert.ok(Array.isArray(projection["2_pending_approval"]));
-    assert.ok(Array.isArray(projection["3_execute_workspace"]));
-    assert.ok(Array.isArray(projection["4_review_evidence"]));
-    assert.ok(Array.isArray(projection["5_promoted"]));
-    assert.ok(Array.isArray(projection["6_demoted"]));
-    assert.equal(projection["1_inbox"].length, 0);
-    assert.equal(projection["5_promoted"].length, 0);
+    assert.equal(findStageFor(flat, draftExperiment.experiment_id), "1_inbox");
+    assert.equal(findStageFor(flat, pendingApproval.approval_id), "2_pending_approval");
+    assert.equal(findStageFor(flat, executeRun.run_id), "3_execute_workspace");
+    assert.equal(findStageFor(flat, reviewRun.run_id), "4_review_evidence");
+    assert.equal(findStageFor(flat, promoteRun.run_id), "5_promoted");
+    assert.equal(findStageFor(flat, failRun.run_id), "6_demoted");
 
-    const approvalIds = new Set(projection["2_pending_approval"].map((item) => item.entity_id));
-    assert.ok(approvalIds.has(pendingApproval.approval_id));
-    assert.ok(approvalIds.has(holdApproval.approval_id));
-    for (const item of projection["2_pending_approval"]) {
-      assert.equal(item.entity_type, "approval");
-      assert.ok(item.status === "pending" || item.status === "held");
-      assert.equal(typeof item.title, "string");
-      assertLinksShape(item);
-    }
-    assert.deepEqual(
-      projection["2_pending_approval"],
-      [...projection["2_pending_approval"]].sort(compareByUpdatedAtDescAndEntityIdAsc),
-    );
+    const ghostStage = findStageFor(flat, ghostRun.run_id);
+    assert.equal(ghostStage, "4_review_evidence");
+    const ghostItem = findItem(flat, ghostRun.run_id);
+    assert.ok(ghostItem);
+    assert.ok(Array.isArray(ghostItem?.diagnostics));
+    assert.ok(ghostItem?.diagnostics?.includes("ghost_evidence_or_mismatch"));
 
-    const executeRunIds = new Set(projection["3_execute_workspace"].map((item) => item.entity_id));
-    assert.ok(executeRunIds.has(queuedRun.run_id));
-    assert.ok(executeRunIds.has(runningRun.run_id));
-    for (const item of projection["3_execute_workspace"]) {
-      assert.ok(item.status === "queued" || item.status === "running");
-      assert.equal(item.entity_type, "run");
-      assert.equal(typeof item.title, "string");
-      assertLinksShape(item);
-    }
-    assert.deepEqual(
-      projection["3_execute_workspace"],
-      [...projection["3_execute_workspace"]].sort(compareByUpdatedAtDescAndEntityIdAsc),
-    );
-    assertNoLeaseFields(projection["3_execute_workspace"]);
-
-    const reviewRunIds = new Set(projection["4_review_evidence"].map((item) => item.entity_id));
-    assert.ok(reviewRunIds.has(succeededRun.run_id));
-    assert.ok(!reviewRunIds.has(failedRun.run_id));
-    for (const item of projection["4_review_evidence"]) {
-      assert.ok(item.status === "succeeded" || item.status === "failed");
-      assert.equal(item.entity_type, "run");
-      assert.equal(typeof item.title, "string");
-      assertLinksShape(item);
-    }
-    assert.deepEqual(
-      projection["4_review_evidence"],
-      [...projection["4_review_evidence"]].sort(compareByUpdatedAtDescAndEntityIdAsc),
-    );
-    assertNoLeaseFields(projection["4_review_evidence"]);
-
-    const demotedRunIds = new Set(projection["6_demoted"].map((item) => item.entity_id));
-    assert.ok(demotedRunIds.has(failedRun.run_id));
-    for (const item of projection["6_demoted"]) {
-      assert.equal(item.status, "failed");
-      assert.equal(item.entity_type, "run");
-      assert.equal(typeof item.title, "string");
-      assertLinksShape(item);
-    }
-    assert.deepEqual(
-      projection["6_demoted"],
-      [...projection["6_demoted"]].sort(compareByUpdatedAtDescAndEntityIdAsc),
-    );
-    assertNoLeaseFields(projection["6_demoted"]);
-
-    const envelope = await getJson<EnvelopeProjectionResponse>(
+    const opened = await postJson<{ incident_id: string }>(
       baseUrl,
-      "/v1/pipeline/projection?limit=200&format=envelope",
+      "/v1/incidents",
+      {
+        title: "Promote run incident",
+        summary: "gate demotion",
+        run_id: promoteRun.run_id,
+      },
       workspaceHeader,
     );
-    assert.equal(envelope.meta.schema_version, "2.1");
-    assert.equal(envelope.meta.limit, 200);
-    assert.ok(!Number.isNaN(new Date(envelope.meta.generated_at).getTime()));
-    assert.ok(Array.isArray(envelope.stages["1_inbox"]));
-    assert.ok(Array.isArray(envelope.stages["2_pending_approval"]));
-    assert.ok(Array.isArray(envelope.stages["3_execute_workspace"]));
-    assert.ok(Array.isArray(envelope.stages["4_review_evidence"]));
-    assert.ok(Array.isArray(envelope.stages["5_promoted"]));
-    assert.ok(Array.isArray(envelope.stages["6_demoted"]));
+    const withOpenIncident = await getJson<FlatProjectionResponse>(
+      baseUrl,
+      "/v1/pipeline/projection?limit=200",
+      workspaceHeader,
+    );
+    assert.equal(findStageFor(withOpenIncident, promoteRun.run_id), "6_demoted");
+
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/incidents/${opened.incident_id}/rca`,
+      { summary: "rca summary" },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/incidents/${opened.incident_id}/learning`,
+      { note: "close gate", tags: ["test"] },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/incidents/${opened.incident_id}/close`,
+      { reason: "resolved" },
+      workspaceHeader,
+    );
+    const afterClose = await getJson<FlatProjectionResponse>(
+      baseUrl,
+      "/v1/pipeline/projection?limit=200",
+      workspaceHeader,
+    );
+    assert.equal(findStageFor(afterClose, promoteRun.run_id), "5_promoted");
+
+    const archivedExperiment = await postJson<{ experiment_id: string }>(
+      baseUrl,
+      "/v1/experiments",
+      {
+        room_id,
+        title: "Archived Experiment",
+        hypothesis: "archived",
+        success_criteria: {},
+        stop_conditions: {},
+        budget_cap_units: 1,
+        risk_tier: "low",
+      },
+      workspaceHeader,
+    );
+    const archivedRun = await postJson<{ run_id: string }>(
+      baseUrl,
+      "/v1/runs",
+      { room_id, title: "Archived Run", experiment_id: archivedExperiment.experiment_id },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(baseUrl, `/v1/runs/${archivedRun.run_id}/start`, {}, workspaceHeader);
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/runs/${archivedRun.run_id}/complete`,
+      { summary: "archive-ready", output: { ok: true } },
+      workspaceHeader,
+    );
+    await postJson<{ ok: true }>(
+      baseUrl,
+      `/v1/experiments/${archivedExperiment.experiment_id}/close`,
+      { status: "closed" },
+      workspaceHeader,
+    );
+    await pool.query(
+      `UPDATE proj_runs
+       SET status = 'running',
+           updated_at = now() + interval '1 minute'
+       WHERE workspace_id = $1
+         AND run_id = $2`,
+      [workspace_id, archivedRun.run_id],
+    );
+    const noZombie = await getJson<FlatProjectionResponse>(
+      baseUrl,
+      "/v1/pipeline/projection?limit=200",
+      workspaceHeader,
+    );
+    assert.equal(findStageFor(noZombie, archivedExperiment.experiment_id), null);
+    assert.equal(findStageFor(noZombie, archivedRun.run_id), null);
+
+    await pool.query(
+      `INSERT INTO proj_scorecards (
+        scorecard_id, workspace_id, experiment_id, run_id, evidence_id, agent_id, principal_id,
+        template_key, template_version, metrics, metrics_hash, score, decision, rationale, metadata,
+        created_by_type, created_by_id, created_at, updated_at, correlation_id, last_event_id
+      ) VALUES (
+        $1,$2,NULL,NULL,NULL,NULL,NULL,$3,$4,'[]'::jsonb,$5,$6,$7,NULL,'{}'::jsonb,
+        'service','contract_test',now(),now(),'',$8
+      )`,
+      [
+        `sc_partial_${Date.now()}`,
+        workspace_id,
+        "partial",
+        "1",
+        "sha256:partial",
+        0.5,
+        "warn",
+        `evt_partial_${Date.now()}`,
+      ],
+    );
+    const partialScorecardId = (
+      await pool.query<{ scorecard_id: string }>(
+        `SELECT scorecard_id
+         FROM proj_scorecards
+         WHERE workspace_id = $1
+           AND template_key = 'partial'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [workspace_id],
+      )
+    ).rows[0]?.scorecard_id;
+    assert.ok(partialScorecardId);
+    const partialSafe = await getJson<FlatProjectionResponse>(
+      baseUrl,
+      "/v1/pipeline/projection?limit=200",
+      workspaceHeader,
+    );
+    const partialItem = findItem(partialSafe, partialScorecardId as string);
+    assert.ok(partialItem);
+    assert.equal(findStageFor(partialSafe, partialScorecardId as string), "1_inbox");
+    assert.ok(partialItem?.diagnostics?.includes("missing_data"));
+
+    const tieApprovals: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const approval = await postJson<{ approval_id: string }>(
+        baseUrl,
+        "/v1/approvals",
+        { action: "external.write", title: `Tie Approval ${i}`, room_id },
+        workspaceHeader,
+      );
+      tieApprovals.push(approval.approval_id);
+    }
+    await pool.query(
+      `UPDATE proj_approvals
+       SET updated_at = '2026-01-01T00:00:00.000Z'::timestamptz
+       WHERE workspace_id = $1
+         AND approval_id = ANY($2::text[])`,
+      [workspace_id, tieApprovals],
+    );
+
+    const page1 = await getJson<EnvelopeProjectionResponse>(
+      baseUrl,
+      "/v1/pipeline/projection?format=envelope&limit=2",
+      workspaceHeader,
+    );
+    assert.equal(page1.meta.schema_version, SCHEMA_VERSION);
+    assert.equal(page1.meta.workspace_id, workspace_id);
+    assert.equal(page1.meta.limit, 2);
+    assert.equal(page1.meta.truncated, true);
+    assert.ok(page1.meta.next_cursor);
+    assert.equal(typeof page1.meta.next_cursor?.updated_at, "string");
+    assert.equal(typeof page1.meta.next_cursor?.entity_type, "string");
+    assert.equal(typeof page1.meta.next_cursor?.entity_id, "string");
+
+    const page1Ids = new Set(
+      [
+        ...page1.stages["1_inbox"],
+        ...page1.stages["2_pending_approval"],
+        ...page1.stages["3_execute_workspace"],
+        ...page1.stages["4_review_evidence"],
+        ...page1.stages["5_promoted"],
+        ...page1.stages["6_demoted"],
+      ].map((item) => `${item.entity_type}:${item.entity_id}`),
+    );
+
+    const cursor = page1.meta.next_cursor as ProjectionCursor;
+    const page2 = await getJson<EnvelopeProjectionResponse>(
+      baseUrl,
+      `/v1/pipeline/projection?format=envelope&limit=2&cursor_updated_at=${encodeURIComponent(cursor.updated_at)}&cursor_entity_type=${encodeURIComponent(cursor.entity_type)}&cursor_entity_id=${encodeURIComponent(cursor.entity_id)}`,
+      workspaceHeader,
+    );
+    const page2Ids = new Set(
+      [
+        ...page2.stages["1_inbox"],
+        ...page2.stages["2_pending_approval"],
+        ...page2.stages["3_execute_workspace"],
+        ...page2.stages["4_review_evidence"],
+        ...page2.stages["5_promoted"],
+        ...page2.stages["6_demoted"],
+      ].map((item) => `${item.entity_type}:${item.entity_id}`),
+    );
+    for (const id of page2Ids) {
+      assert.equal(page1Ids.has(id), false);
+    }
+
+    const missingCursorRes = await fetch(
+      `${baseUrl}/v1/pipeline/projection?format=envelope&limit=2&cursor_updated_at=${encodeURIComponent(cursor.updated_at)}`,
+      { headers: workspaceHeader },
+    );
+    assert.equal(missingCursorRes.status, 400);
+    const missingCursorBody = (await missingCursorRes.json()) as { reason_code: string };
+    assert.equal(missingCursorBody.reason_code, "missing_required_field");
+
+    const missingWorkspaceRes = await fetch(`${baseUrl}/v1/pipeline/projection?limit=10`);
+    assert.equal(missingWorkspaceRes.status, 401);
   } finally {
     await app.close();
   }

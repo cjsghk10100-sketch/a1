@@ -5,11 +5,13 @@ import { newIncidentId, newMessageId } from "@agentapp/shared";
 import { SCHEMA_VERSION } from "../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../db/pool.js";
 import { appendToStream } from "../eventStore/index.js";
+import { redactSecrets } from "../security/dlp.js";
 
 const DLQ_THRESHOLD = 3;
 const WORKSPACE_FALLBACK = "SYS_GLOBAL";
 const LOOP_GUARD_INTENTS = new Set(["request_human_decision", "resolve", "reject"]);
 const LOOP_GUARD_KINDS = new Set(["incident_control", "poison_message_control"]);
+const DLQ_RAW_PAYLOAD_MAX_BYTES = 10 * 1024;
 
 type DlqCounterRow = {
   consecutive_failures: number;
@@ -22,6 +24,7 @@ type RecordFailureParams = {
   workspace_id?: string | null;
   message_id: string;
   last_error: string;
+  raw_payload?: string;
   source_intent?: string;
   source_kind?: string;
 };
@@ -52,6 +55,42 @@ function shouldSkipHumanDecision(source_intent?: string, source_kind?: string): 
   if (source_intent && LOOP_GUARD_INTENTS.has(source_intent)) return true;
   if (source_kind && LOOP_GUARD_KINDS.has(source_kind)) return true;
   return false;
+}
+
+function truncateUtf8Bytes(input: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(input, "utf8") <= maxBytes) return input;
+
+  let out = "";
+  for (const ch of input) {
+    const candidate = out + ch;
+    if (Buffer.byteLength(candidate, "utf8") > maxBytes) break;
+    out = candidate;
+  }
+  return out;
+}
+
+function redactRawPayload(raw: string): string {
+  if (!raw) return raw;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const redacted = redactSecrets(parsed);
+    return JSON.stringify(redacted.redacted);
+  } catch {
+    return raw
+      .replace(/\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b/gi, "Bearer [redacted]")
+      .replace(/\bsk-[A-Za-z0-9]{20,}\b/g, "[redacted]")
+      .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "[redacted]")
+      .replace(/\bAKIA[0-9A-Z]{16}\b/g, "[redacted]")
+      .replace(/"(api[_-]?key|token|secret|password)"\s*:\s*"[^"]*"/gi, "\"$1\":\"[redacted]\"");
+  }
+}
+
+async function hourBucketUtc(client: DbClient): Promise<string> {
+  const row = await client.query<{ bucket: string }>(
+    `SELECT to_char(date_trunc('hour', (now() AT TIME ZONE 'UTC')), 'YYYYMMDDHH24') AS bucket`,
+  );
+  return row.rows[0]?.bucket ?? "unknown";
 }
 
 async function appendWithIdempotentReplayTx(
@@ -132,6 +171,9 @@ export async function recordMessageProcessingFailureTx(
   const source_kind = normalizeOptionalString(params.source_kind);
   const message_id = params.message_id.trim();
   const last_error = params.last_error;
+  const raw_payload = params.raw_payload
+    ? truncateUtf8Bytes(redactRawPayload(params.raw_payload), DLQ_RAW_PAYLOAD_MAX_BYTES)
+    : undefined;
 
   const counter = await upsertFailureCounterTx(client, {
     workspace_id,
@@ -160,14 +202,16 @@ export async function recordMessageProcessingFailureTx(
        first_failed_at,
        last_failed_at,
        failure_count,
-       last_error
+       last_error,
+       raw_payload
      ) VALUES (
        $1,
        $2,
        $3::timestamptz,
        $4::timestamptz,
        $5,
-       $6
+       $6,
+       $7
      )
      ON CONFLICT (workspace_id, message_id) DO NOTHING`,
     [
@@ -177,6 +221,7 @@ export async function recordMessageProcessingFailureTx(
       counter.last_failed_at,
       counter.consecutive_failures,
       last_error,
+      raw_payload ?? null,
     ],
   );
 
@@ -198,7 +243,8 @@ export async function recordMessageProcessingFailureTx(
   }
 
   const correlation_id = `dlq:${workspace_id}:${message_id}`;
-  const poisonIncidentKey = `incident:poison_message:${workspace_id}:${message_id}`;
+  const bucket = await hourBucketUtc(client);
+  const poisonIncidentKey = `incident:poison_message:${workspace_id}:${message_id}:${bucket}`;
 
   await appendWithIdempotentReplayTx(params.pool, client, {
     event_id: randomUUID(),
@@ -222,7 +268,9 @@ export async function recordMessageProcessingFailureTx(
       workspace_id,
       message_id,
       last_error,
+      raw_payload: raw_payload ?? null,
       failure_count: counter.consecutive_failures,
+      bucket,
     },
     policy_context: {},
     model_context: {},

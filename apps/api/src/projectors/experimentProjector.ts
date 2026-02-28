@@ -56,11 +56,67 @@ async function applyExperimentCreated(tx: DbClient, event: ExperimentCreatedV1):
       closed_at,
       updated_at,
       correlation_id,
-      last_event_id
+      last_event_id,
+      last_event_occurred_at
     ) VALUES (
-      $1,$2,$3,'open',$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10::jsonb,$11,$12,$13,NULL,$13,$14,$15
+      $1,$2,$3,'open',$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10::jsonb,$11,$12,$13,NULL,$13,$14,$15,$13
     )
-    ON CONFLICT (experiment_id) DO NOTHING`,
+    ON CONFLICT (experiment_id) DO UPDATE SET
+      status = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.status
+        ELSE proj_experiments.status
+      END,
+      title = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.title
+        ELSE proj_experiments.title
+      END,
+      hypothesis = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.hypothesis
+        ELSE proj_experiments.hypothesis
+      END,
+      success_criteria = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.success_criteria
+        ELSE proj_experiments.success_criteria
+      END,
+      stop_conditions = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.stop_conditions
+        ELSE proj_experiments.stop_conditions
+      END,
+      budget_cap_units = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.budget_cap_units
+        ELSE proj_experiments.budget_cap_units
+      END,
+      risk_tier = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.risk_tier
+        ELSE proj_experiments.risk_tier
+      END,
+      metadata = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.metadata
+        ELSE proj_experiments.metadata
+      END,
+      created_at = LEAST(proj_experiments.created_at, EXCLUDED.created_at),
+      updated_at = GREATEST(proj_experiments.updated_at, EXCLUDED.updated_at),
+      correlation_id = CASE
+        WHEN proj_experiments.correlation_id = 'unknown' THEN EXCLUDED.correlation_id
+        ELSE proj_experiments.correlation_id
+      END,
+      last_event_id = CASE
+        WHEN proj_experiments.last_event_occurred_at IS NULL OR proj_experiments.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.last_event_id
+        ELSE proj_experiments.last_event_id
+      END,
+      last_event_occurred_at = GREATEST(
+        COALESCE(proj_experiments.last_event_occurred_at, '-infinity'::timestamptz),
+        EXCLUDED.last_event_occurred_at
+      )`,
     [
       event.data.experiment_id,
       event.workspace_id,
@@ -83,6 +139,7 @@ async function applyExperimentCreated(tx: DbClient, event: ExperimentCreatedV1):
 
 async function applyExperimentUpdated(tx: DbClient, event: ExperimentUpdatedV1): Promise<void> {
   if (!event.data.experiment_id) throw new Error("experiment.updated requires experiment_id");
+  const workspace_id = event.workspace_id || "unknown";
 
   const res = await tx.query(
     `UPDATE proj_experiments
@@ -95,8 +152,11 @@ async function applyExperimentUpdated(tx: DbClient, event: ExperimentUpdatedV1):
        risk_tier = COALESCE($7, risk_tier),
        metadata = CASE WHEN $8::jsonb = '{}'::jsonb THEN metadata ELSE $8::jsonb END,
        updated_at = $9,
-       last_event_id = $10
-     WHERE experiment_id = $1`,
+       last_event_id = $10,
+       last_event_occurred_at = $9
+     WHERE experiment_id = $1
+       AND workspace_id = $11
+       AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $9)`,
     [
       event.data.experiment_id,
       event.data.title ?? null,
@@ -108,15 +168,56 @@ async function applyExperimentUpdated(tx: DbClient, event: ExperimentUpdatedV1):
       toJsonb(event.data.metadata),
       event.occurred_at,
       event.event_id,
+      workspace_id,
     ],
   );
-  if (res.rowCount !== 1) {
-    throw new Error("experiment.updated target not found in proj_experiments");
+  if (res.rowCount === 0) {
+    await tx.query(
+      `INSERT INTO proj_experiments (
+        experiment_id,
+        workspace_id,
+        room_id,
+        status,
+        title,
+        hypothesis,
+        success_criteria,
+        stop_conditions,
+        budget_cap_units,
+        risk_tier,
+        metadata,
+        created_by_type,
+        created_by_id,
+        created_at,
+        closed_at,
+        updated_at,
+        correlation_id,
+        last_event_id,
+        last_event_occurred_at
+      ) VALUES (
+        $1,$2,NULL,'open',$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9::jsonb,'service','projector',$10,NULL,$10,$11,$12,$10
+      )
+      ON CONFLICT (experiment_id) DO NOTHING`,
+      [
+        event.data.experiment_id,
+        workspace_id,
+        event.data.title ?? "unknown",
+        event.data.hypothesis ?? "unknown",
+        toJsonb(event.data.success_criteria),
+        toJsonb(event.data.stop_conditions),
+        event.data.budget_cap_units ?? 0,
+        event.data.risk_tier ?? "low",
+        toJsonb(event.data.metadata),
+        event.occurred_at,
+        event.correlation_id || `unknown:${event.data.experiment_id}`,
+        event.event_id,
+      ],
+    );
   }
 }
 
 async function applyExperimentClosed(tx: DbClient, event: ExperimentClosedV1): Promise<void> {
   if (!event.data.experiment_id) throw new Error("experiment.closed requires experiment_id");
+  const workspace_id = event.workspace_id || "unknown";
 
   const res = await tx.query(
     `UPDATE proj_experiments
@@ -124,13 +225,49 @@ async function applyExperimentClosed(tx: DbClient, event: ExperimentClosedV1): P
        status = $2,
        closed_at = COALESCE(closed_at, $3),
        updated_at = $3,
-       last_event_id = $4
+       last_event_id = $4,
+       last_event_occurred_at = $3
      WHERE experiment_id = $1
+       AND workspace_id = $5
+       AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $3)
        AND status = 'open'`,
-    [event.data.experiment_id, event.data.status, event.occurred_at, event.event_id],
+    [event.data.experiment_id, event.data.status, event.occurred_at, event.event_id, workspace_id],
   );
-  if (res.rowCount !== 1) {
-    throw new Error("experiment.closed target not open in proj_experiments");
+  if (res.rowCount === 0) {
+    await tx.query(
+      `INSERT INTO proj_experiments (
+        experiment_id,
+        workspace_id,
+        room_id,
+        status,
+        title,
+        hypothesis,
+        success_criteria,
+        stop_conditions,
+        budget_cap_units,
+        risk_tier,
+        metadata,
+        created_by_type,
+        created_by_id,
+        created_at,
+        closed_at,
+        updated_at,
+        correlation_id,
+        last_event_id,
+        last_event_occurred_at
+      ) VALUES (
+        $1,$2,NULL,$3,'unknown','unknown','{}'::jsonb,'{}'::jsonb,0,'low','{}'::jsonb,'service','projector',$4,$4,$4,$5,$6,$4
+      )
+      ON CONFLICT (experiment_id) DO NOTHING`,
+      [
+        event.data.experiment_id,
+        workspace_id,
+        event.data.status,
+        event.occurred_at,
+        event.correlation_id || `unknown:${event.data.experiment_id}`,
+        event.event_id,
+      ],
+    );
   }
 }
 
