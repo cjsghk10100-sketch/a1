@@ -34,6 +34,7 @@ import { registerSkillPackageRoutes } from "./skillPackages.js";
 import { registerToolCallRoutes } from "./toolcalls.js";
 import { registerRoomRoutes } from "./rooms.js";
 import { registerStreamRoutes } from "./streams.js";
+import { registerSystemHealthRoutes } from "./system-health.js";
 import { registerThreadRoutes } from "./threads.js";
 import { registerTrustRoutes } from "./trust.js";
 import { registerWorkItemsRoutes } from "./work-items.js";
@@ -43,6 +44,7 @@ export async function registerV1Routes(
   pool: DbPool,
   config: AppConfig,
 ): Promise<void> {
+  await registerSystemHealthRoutes(app, pool);
   await registerAuthRoutes(app, pool, config);
   await registerActionRegistryRoutes(app, pool);
   await registerAgentRoutes(app, pool);
