@@ -135,13 +135,26 @@ function assertHeaderPresent(headers: Headers, key: string): string {
   return value as string;
 }
 
+function readAccessToken(payload: unknown): string {
+  const root = payload as {
+    session?: {
+      access_token?: string;
+    };
+  };
+  const access = root?.session?.access_token ?? "";
+  assert.equal(typeof access, "string");
+  assert.ok(access.length > 0);
+  return access;
+}
+
 async function main(): Promise<void> {
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
+  const bootstrapToken = `trace_bootstrap_${randomUUID()}`;
 
   const pool = createPool(databaseUrl);
   const app = await buildServer({
-    config: { port: 0, databaseUrl },
+    config: { port: 0, databaseUrl, authBootstrapToken: bootstrapToken },
     pool,
   });
 
@@ -275,6 +288,36 @@ async function main(): Promise<void> {
     );
     assert.equal(evt.rowCount, 1);
     assert.equal(evt.rows[0].correlation_id, evtCorrelation);
+
+    // T8 workspace trace header must reflect session workspace after auth normalization
+    const sessionWorkspace = `ws_trace_session_${randomUUID().slice(0, 6)}`;
+    const boot = await requestJson(
+      baseUrl,
+      "POST",
+      "/v1/auth/bootstrap-owner",
+      {
+        workspace_id: sessionWorkspace,
+        display_name: "Trace Session Owner",
+        passphrase: `pass_${sessionWorkspace}`,
+      },
+      { "x-bootstrap-token": bootstrapToken },
+    );
+    assert.equal(boot.status, 201, boot.text);
+    const accessToken = readAccessToken(boot.json);
+
+    const staleWorkspace = `${sessionWorkspace}_stale`;
+    const t8 = await requestJson(
+      baseUrl,
+      "POST",
+      "/v1/rooms",
+      { title: "trace-session-room", room_mode: "default", default_lang: "en" },
+      {
+        authorization: `Bearer ${accessToken}`,
+        "x-workspace-id": staleWorkspace,
+      },
+    );
+    assert.equal(t8.status, 201, t8.text);
+    assert.equal(assertHeaderPresent(t8.headers, "x-workspace-id"), sessionWorkspace);
   } finally {
     await db.end();
     await app.close();
