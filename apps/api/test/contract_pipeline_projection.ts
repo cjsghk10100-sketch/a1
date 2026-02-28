@@ -350,17 +350,26 @@ async function main(): Promise<void> {
       { summary: "done", output: { ok: true } },
       workspaceHeader,
     );
-    await postJson<{ scorecard_id: string }>(
+    const ghostEvidenceId = await lookupEvidenceId(pool, workspace_id, ghostRun.run_id);
+    const ghostScorecard = await postJson<{ scorecard_id: string }>(
       baseUrl,
       "/v1/scorecards",
       {
         run_id: ghostRun.run_id,
-        evidence_id: reviewEvidenceId,
+        evidence_id: ghostEvidenceId,
         template_key: "default",
         template_version: "1",
         metrics: [{ key: "quality", value: 1, weight: 1 }],
       },
       workspaceHeader,
+    );
+    await pool.query(
+      `UPDATE proj_scorecards
+       SET evidence_id = $3,
+           updated_at = now()
+       WHERE workspace_id = $1
+         AND scorecard_id = $2`,
+      [workspace_id, ghostScorecard.scorecard_id, reviewEvidenceId],
     );
 
     const flat = await getJson<FlatProjectionResponse>(
