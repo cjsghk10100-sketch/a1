@@ -170,7 +170,12 @@ function buildApiHeaders(cfg: IngestConfig, includeJson: boolean): Record<string
     "x-workspace-id": cfg.workspaceId,
   };
   if (includeJson) headers["content-type"] = "application/json";
-  const bearerToken = cfg.getBearerToken?.() ?? cfg.bearerToken;
+  const liveBearer = cfg.getBearerToken?.();
+  if (typeof liveBearer === "string") {
+    const trimmed = liveBearer.trim();
+    cfg.bearerToken = trimmed.length > 0 ? trimmed : undefined;
+  }
+  const bearerToken = cfg.bearerToken;
   if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
   if (cfg.engineId && cfg.engineToken) {
     headers["x-engine-id"] = cfg.engineId;
@@ -295,6 +300,26 @@ function parseScalar(raw: string): unknown {
   return trimmed;
 }
 
+function parseInlineSequenceMapping(
+  after: string,
+): { key: string; rest: string } | null {
+  const inlineColon = after.indexOf(":");
+  if (inlineColon <= 0) return null;
+  const key = after.slice(0, inlineColon).trim();
+  if (!key) return null;
+
+  // Mapping token requires `:` separator semantics, not arbitrary colon chars.
+  const separator = after[inlineColon + 1];
+  if (separator && separator !== " " && separator !== "\t") {
+    return null;
+  }
+
+  return {
+    key,
+    rest: after.slice(inlineColon + 1).trim(),
+  };
+}
+
 type YamlLine = {
   indent: number;
   text: string;
@@ -377,10 +402,9 @@ function parseYamlDocument(input: string): unknown {
         continue;
       }
 
-      const inlineColon = after.indexOf(":");
-      if (inlineColon > 0) {
-        const key = after.slice(0, inlineColon).trim();
-        const rest = after.slice(inlineColon + 1).trim();
+      const inlineMapping = parseInlineSequenceMapping(after);
+      if (inlineMapping) {
+        const { key, rest } = inlineMapping;
         const entry: Record<string, unknown> = {};
         if (rest) {
           entry[key] = parseScalar(rest);
@@ -876,6 +900,7 @@ async function claimDropItem(
   const dst = path.join(dirs.processingDir, fileName);
 
   if (!(await fileExists(src))) return null;
+  if (await fileExists(dst)) return null;
   if (await isSymlink(src)) return null;
 
   const stable = await isStableRegularFile(src, stableCheckMs).catch(() => false);
@@ -960,6 +985,13 @@ function isPermanentError(err: unknown): boolean {
   return (err as { permanent?: boolean }).permanent === true;
 }
 
+function isLocalPermanentError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /^(invalid_|artifact_path_|ingest_file_too_large|artifact_file_too_large|artifact_presign_invalid_response)/.test(
+    err.message,
+  );
+}
+
 async function processClaimedItem(
   cfg: IngestConfig,
   dirs: DropDirs,
@@ -1019,7 +1051,7 @@ async function processClaimedItem(
       await writeStateAtomic(dirs, itemName, state);
 
       const uploadedRefs: UploadedArtifactRef[] = [];
-      for (const artifact of wrapper.artifacts ?? []) {
+      for (const [artifactIndex, artifact] of (wrapper.artifacts ?? []).entries()) {
         const artifactPath = await resolveArtifactPath(baseDir, artifact.path);
         const artifactStat = await fs.lstat(artifactPath);
         if (artifactStat.size > cfg.maxArtifactBytes) {
@@ -1032,7 +1064,7 @@ async function processClaimedItem(
         const filename = artifact.filename?.trim() || path.basename(artifactPath);
         const contentType = artifact.content_type?.trim() || guessContentType(artifactPath);
 
-        const artifactDiscriminator = `${artifact.path}|${filename}`;
+        const artifactDiscriminator = `${artifactIndex}|${artifact.path}|${filename}`;
         const presign = await postArtifactsPresign(
           cfg,
           resolvedCorrelationId,
@@ -1089,8 +1121,9 @@ async function processClaimedItem(
       const http = toHttpError(err);
       const reasonCode = http?.reasonCode;
       const reason = sanitizeErrorText(err instanceof Error ? err.message : String(err));
-      const transient = isTransientError(err);
-      const permanent = isPermanentError(err) || (!transient && !http);
+      const permanentByRule = isPermanentError(err) || isLocalPermanentError(err);
+      const transient = isTransientError(err) || (!http && !permanentByRule);
+      const permanent = permanentByRule || Boolean(http && !transient);
 
       state.last_error = {
         message: reason,
@@ -1143,10 +1176,12 @@ async function fillWorkQueue(
   activeItems: Set<string>,
 ): Promise<string[]> {
   const claimedPaths: string[] = [];
+  const reservedNames = new Set(activeItems);
 
   const processing = await listProcessingItems(dirs.processingDir);
   for (const name of processing) {
-    if (activeItems.has(name)) continue;
+    if (reservedNames.has(name)) continue;
+    reservedNames.add(name);
     claimedPaths.push(path.join(dirs.processingDir, name));
     if (claimedPaths.length >= cfg.maxItemConcurrency) {
       return claimedPaths;
@@ -1155,9 +1190,10 @@ async function fillWorkQueue(
 
   const candidates = await listCandidateItems(dirs.dropRoot);
   for (const name of candidates) {
-    if (activeItems.has(name)) continue;
+    if (reservedNames.has(name)) continue;
     const claimed = await claimDropItem(dirs, name, cfg.stableCheckMs);
     if (!claimed) continue;
+    reservedNames.add(name);
     claimedPaths.push(claimed);
     if (claimedPaths.length >= cfg.maxItemConcurrency) break;
   }

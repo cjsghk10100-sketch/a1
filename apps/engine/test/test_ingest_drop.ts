@@ -11,6 +11,7 @@ type MockState = {
   duplicateCalls: number;
   artifactCalls: number;
   uploads: number;
+  messageBodies: Record<string, unknown>[];
   permanent400: boolean;
   seenIdempotency: Set<string>;
   artifactObjectKeys: Set<string>;
@@ -125,6 +126,7 @@ async function startMockServer(state: MockState): Promise<{ baseUrl: string; clo
 
       state.messagesCalls += 1;
       const body = await readBodyJson(req);
+      state.messageBodies.push(body);
       const idempotencyKey = typeof body.idempotency_key === "string" ? body.idempotency_key : "";
 
       if (state.permanent400) {
@@ -222,6 +224,20 @@ async function writeValidItem(dropRoot: string, fileName: string, artifactNames:
   await writeFile(itemPath, `${JSON.stringify(wrapper, null, 2)}\n`, "utf8");
 }
 
+async function writeYamlItemWithUrlScalar(dropRoot: string, fileName: string): Promise<void> {
+  const yaml = `schema_version: "2.1"
+from_agent_id: "engine_agent"
+message:
+  schema_version: "2.1"
+  from_agent_id: "engine_agent"
+  intent: "message"
+  payload:
+    urls:
+      - http://example.com/a:b
+`;
+  await writeFile(path.join(dropRoot, fileName), yaml, "utf8");
+}
+
 function buildConfig(baseUrl: string, dropRoot: string, auth?: AuthHandle): IngestConfig {
   const cfg: IngestConfig = {
     apiBaseUrl: baseUrl,
@@ -270,6 +286,7 @@ async function main(): Promise<void> {
     duplicateCalls: 0,
     artifactCalls: 0,
     uploads: 0,
+    messageBodies: [],
     permanent400: false,
     seenIdempotency: new Set<string>(),
     artifactObjectKeys: new Set<string>(),
@@ -296,6 +313,15 @@ async function main(): Promise<void> {
     assert.equal(state.uploads, 2);
     assert.equal(state.artifactObjectKeys.size, 2);
 
+    await writeYamlItemWithUrlScalar(dropRoot, "item-y.ingest.yaml");
+    await runIngestOnce(cfg);
+    assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-y.ingest.yaml"), true);
+    const yamlPosted = state.messageBodies[state.messageBodies.length - 1];
+    assert.ok(yamlPosted);
+    const yamlPayload = (yamlPosted.payload ?? {}) as { urls?: unknown };
+    assert.ok(Array.isArray(yamlPayload.urls));
+    assert.equal(yamlPayload.urls?.[0], "http://example.com/a:b");
+
     await rename(
       path.join(dropRoot, "_ingested", "item-a.ingest.json"),
       path.join(dropRoot, "item-a.ingest.json"),
@@ -303,7 +329,7 @@ async function main(): Promise<void> {
 
     await runIngestOnce(cfg);
     assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-a.ingest.json"), true);
-    assert.equal(state.messagesCalls, 2);
+    assert.equal(state.messagesCalls, 3);
     assert.equal(state.duplicateCalls, 1);
     assert.equal(state.artifactCalls, 4);
     assert.equal(state.uploads, 4);
@@ -339,7 +365,26 @@ async function main(): Promise<void> {
     assert.equal(auth.bearerToken, state.acceptedAccessToken);
     assert.equal(auth.refreshToken, state.currentRefreshToken);
 
+    state.acceptedAccessToken = "token_shared_from_runner";
+    auth.bearerToken = state.acceptedAccessToken;
+    const refreshBefore = state.refreshCalls;
+    await writeValidItem(dropRoot, "item-e.ingest.json", ["artifact-e.txt"]);
+    await runIngestOnce(authCfg);
+    assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-e.ingest.json"), true);
+    assert.equal(state.refreshCalls, refreshBefore);
+
     state.requireBearer = false;
+    await writeValidItem(dropRoot, "item-f.ingest.json", ["artifact-f-existing.txt"]);
+    await mkdir(path.join(dropRoot, "_processing"), { recursive: true });
+    await rename(
+      path.join(dropRoot, "item-f.ingest.json"),
+      path.join(dropRoot, "_processing", "item-f.ingest.json"),
+    );
+    await writeValidItem(dropRoot, "item-f.ingest.json", ["artifact-f-new.txt"]);
+    await runIngestOnce(cfg);
+    assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-f.ingest.json"), true);
+    assert.equal(await existsAt(dropRoot, "item-f.ingest.json"), true);
+
     state.permanent400 = true;
     await writeValidItem(dropRoot, "item-b.ingest.json", ["artifact-bad.txt"]);
 
