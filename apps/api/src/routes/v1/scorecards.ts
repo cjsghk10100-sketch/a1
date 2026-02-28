@@ -181,6 +181,21 @@ export async function registerScorecardRoutes(app: FastifyInstance, pool: DbPool
       if (!ok) return reply.code(404).send({ error: "evidence_not_found" });
     }
 
+    if (run_id && evidence_id) {
+      const linked = await ensureRowExists(
+        pool,
+        `SELECT '1' AS found
+         FROM proj_evidence_manifests
+         WHERE workspace_id = $1
+           AND evidence_id = $2
+           AND run_id = $3`,
+        [workspace_id, evidence_id, run_id],
+      );
+      if (!linked) {
+        return reply.code(400).send({ error: "evidence_run_mismatch" });
+      }
+    }
+
     if (agent_id) {
       const ok = await ensureRowExists(
         pool,
@@ -241,12 +256,23 @@ export async function registerScorecardRoutes(app: FastifyInstance, pool: DbPool
       display: {},
     });
     await applyScorecardEvent(pool, event as ScorecardEventV1);
-    await evaluatePromotionLoopForScorecard(pool, {
-      workspace_id,
-      scorecard_id: scorecard_id as ScorecardId,
-      actor: { actor_type, actor_id },
-      actor_principal_id: principalIdFromReq(req),
-    });
+    try {
+      await evaluatePromotionLoopForScorecard(pool, {
+        workspace_id,
+        scorecard_id: scorecard_id as ScorecardId,
+        actor: { actor_type, actor_id },
+        actor_principal_id: principalIdFromReq(req),
+      });
+    } catch (err) {
+      req.log.warn(
+        {
+          err,
+          workspace_id,
+          scorecard_id,
+        },
+        "promotion loop evaluation failed after scorecard persistence",
+      );
+    }
     return reply.code(201).send({ scorecard_id });
   });
 

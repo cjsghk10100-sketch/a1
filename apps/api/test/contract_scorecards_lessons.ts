@@ -126,6 +126,29 @@ async function main(): Promise<void> {
     assert.equal(evidence.status, 200);
     const evidence_id = evidence.json.evidence.evidence_id;
 
+    const otherRun = await requestJson<{ run_id: string }>(
+      baseUrl,
+      "POST",
+      "/v1/runs",
+      { room_id, title: "score run other" },
+      headers,
+    );
+    assert.equal(otherRun.status, 201);
+    const other_run_id = otherRun.json.run_id;
+    await requestJson(baseUrl, "POST", `/v1/runs/${encodeURIComponent(other_run_id)}/start`, {}, headers);
+    await requestJson(
+      baseUrl,
+      "POST",
+      `/v1/runs/${encodeURIComponent(other_run_id)}/complete`,
+      { summary: "done", output: { ok: true } },
+      headers,
+    );
+    const otherEvidence = await requestJson<{
+      evidence: { evidence_id: string };
+    }>(baseUrl, "GET", `/v1/runs/${encodeURIComponent(other_run_id)}/evidence`, undefined, headers);
+    assert.equal(otherEvidence.status, 200);
+    const other_evidence_id = otherEvidence.json.evidence.evidence_id;
+
     const agent = await requestJson<{ agent_id: string }>(
       baseUrl,
       "POST",
@@ -173,6 +196,23 @@ async function main(): Promise<void> {
       headers,
     );
     assert.equal(scoreB.status, 201);
+
+    const mismatchedEvidence = await requestJson<{ error: string }>(
+      baseUrl,
+      "POST",
+      "/v1/scorecards",
+      {
+        run_id,
+        evidence_id: other_evidence_id,
+        agent_id,
+        template_key: "run_quality",
+        template_version: "1.0.0",
+        metrics: [{ key: "quality", value: 0.9 }],
+      },
+      headers,
+    );
+    assert.equal(mismatchedEvidence.status, 400);
+    assert.equal(mismatchedEvidence.json.error, "evidence_run_mismatch");
 
     const scoreARead = await requestJson<{
       scorecard: { metrics_hash: string; decision: string; score: number };

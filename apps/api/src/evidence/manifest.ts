@@ -56,6 +56,23 @@ type EvidenceManifestRow = {
   last_event_id: string;
 };
 
+type ExistingEvidenceManifestEventRow = {
+  event_id: string;
+  event_version: number;
+  occurred_at: string;
+  workspace_id: string;
+  room_id: string | null;
+  thread_id: string | null;
+  run_id: string | null;
+  actor_type: ActorType;
+  actor_id: string;
+  stream_type: "room" | "workspace";
+  stream_id: string;
+  correlation_id: string;
+  causation_id: string | null;
+  data: Record<string, unknown> | null;
+};
+
 export class EvidenceManifestError extends Error {
   constructor(
     public readonly code: "run_not_found" | "run_not_ended" | "run_events_missing",
@@ -91,6 +108,65 @@ function toRecord(row: EvidenceManifestRow): EvidenceManifestRecordV1 {
 
 function isUniqueViolation(err: unknown): err is Error & { code: string; constraint?: string } {
   return Boolean(err && typeof err === "object" && (err as { code?: string }).code === "23505");
+}
+
+async function findManifestCreatedEventByRunId(
+  pool: DbPool,
+  input: { workspace_id: string; run_id: string },
+): Promise<EvidenceEventV1 | null> {
+  const res = await pool.query<ExistingEvidenceManifestEventRow>(
+    `SELECT
+       event_id,
+       event_version,
+       occurred_at::text AS occurred_at,
+       workspace_id,
+       room_id,
+       thread_id,
+       run_id,
+       actor_type,
+       actor_id,
+       stream_type,
+       stream_id,
+       correlation_id,
+       causation_id,
+       data
+     FROM evt_events
+     WHERE workspace_id = $1
+       AND run_id = $2
+       AND event_type = 'evidence.manifest.created'
+     ORDER BY occurred_at DESC, stream_seq DESC
+     LIMIT 1`,
+    [input.workspace_id, input.run_id],
+  );
+  if (res.rowCount !== 1) return null;
+
+  const row = res.rows[0];
+  if (!row.data || typeof row.data !== "object") return null;
+
+  return {
+    event_id: row.event_id,
+    event_type: "evidence.manifest.created",
+    event_version: row.event_version,
+    occurred_at: row.occurred_at,
+    workspace_id: row.workspace_id,
+    room_id: row.room_id ?? undefined,
+    thread_id: row.thread_id ?? undefined,
+    run_id: row.run_id ?? undefined,
+    actor: {
+      actor_type: row.actor_type,
+      actor_id: row.actor_id,
+    },
+    stream: {
+      stream_type: row.stream_type,
+      stream_id: row.stream_id,
+    },
+    correlation_id: row.correlation_id,
+    causation_id: row.causation_id ?? undefined,
+    data: row.data,
+    policy_context: {},
+    model_context: {},
+    display: {},
+  } as unknown as EvidenceEventV1;
 }
 
 export async function getEvidenceManifestByRunId(
@@ -298,6 +374,13 @@ export async function finalizeRunEvidenceManifest(
     await applyEvidenceEvent(pool, event as EvidenceEventV1);
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
+    const existingEvent = await findManifestCreatedEventByRunId(pool, {
+      workspace_id: input.workspace_id,
+      run_id: input.run_id,
+    });
+    if (existingEvent) {
+      await applyEvidenceEvent(pool, existingEvent);
+    }
   }
 
   const persisted = await getEvidenceManifestByRunId(pool, {

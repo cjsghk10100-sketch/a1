@@ -39,6 +39,24 @@ type ExistingIdempotentIncidentRow = {
   incident_id: string | null;
 };
 
+type ExistingIdempotentIncidentEventRow = {
+  event_id: string;
+  event_type: string;
+  event_version: number;
+  occurred_at: string;
+  workspace_id: string;
+  room_id: string | null;
+  thread_id: string | null;
+  run_id: string | null;
+  actor_type: ActorType;
+  actor_id: string;
+  stream_type: "room" | "workspace";
+  stream_id: string;
+  correlation_id: string;
+  causation_id: string | null;
+  data: Record<string, unknown> | null;
+};
+
 type PgErrorLike = {
   code?: string;
   constraint?: string;
@@ -165,6 +183,70 @@ async function findIncidentByIdempotency(
   );
   if (res.rowCount !== 1) return null;
   return res.rows[0].incident_id ?? null;
+}
+
+async function findIncidentEventByIdempotency(
+  pool: DbPool,
+  workspace_id: string,
+  stream_type: "room" | "workspace",
+  stream_id: string,
+  idempotency_key: string,
+): Promise<IncidentEventV1 | null> {
+  const res = await pool.query<ExistingIdempotentIncidentEventRow>(
+    `SELECT
+       event_id,
+       event_type,
+       event_version,
+       occurred_at::text AS occurred_at,
+       workspace_id,
+       room_id,
+       thread_id,
+       run_id,
+       actor_type,
+       actor_id,
+       stream_type,
+       stream_id,
+       correlation_id,
+       causation_id,
+       data
+     FROM evt_events
+     WHERE workspace_id = $1
+       AND stream_type = $2
+       AND stream_id = $3
+       AND idempotency_key = $4
+       AND event_type = 'incident.opened'
+     ORDER BY recorded_at DESC
+     LIMIT 1`,
+    [workspace_id, stream_type, stream_id, idempotency_key],
+  );
+  if (res.rowCount !== 1) return null;
+
+  const row = res.rows[0];
+  const data = row.data ?? {};
+  const incident_id =
+    typeof data.incident_id === "string" && data.incident_id.trim().length > 0
+      ? data.incident_id
+      : null;
+  if (!incident_id) return null;
+
+  return {
+    event_id: row.event_id,
+    event_type: "incident.opened",
+    event_version: row.event_version,
+    occurred_at: row.occurred_at,
+    workspace_id: row.workspace_id,
+    room_id: row.room_id ?? undefined,
+    thread_id: row.thread_id ?? undefined,
+    run_id: row.run_id ?? undefined,
+    actor: { actor_type: row.actor_type, actor_id: row.actor_id },
+    stream: { stream_type: row.stream_type, stream_id: row.stream_id },
+    correlation_id: row.correlation_id,
+    causation_id: row.causation_id ?? undefined,
+    data,
+    policy_context: {},
+    model_context: {},
+    display: {},
+  } as unknown as IncidentEventV1;
 }
 
 async function validateRoomWorkspace(
@@ -309,15 +391,25 @@ export async function registerIncidentRoutes(app: FastifyInstance, pool: DbPool)
       })) as IncidentEventV1;
     } catch (err) {
       if (idempotency_key && isIdempotencyUniqueViolation(err)) {
-        const existingIncidentId = await findIncidentByIdempotency(
+        const existingIncidentEvent = await findIncidentEventByIdempotency(
           pool,
           workspace_id,
           stream.stream_type,
           stream.stream_id,
           idempotency_key,
         );
-        if (existingIncidentId) {
-          return reply.code(200).send({ incident_id: existingIncidentId, deduped: true });
+        if (existingIncidentEvent) {
+          await applyIncidentEvent(pool, existingIncidentEvent);
+          const existingIncidentId = await findIncidentByIdempotency(
+            pool,
+            workspace_id,
+            stream.stream_type,
+            stream.stream_id,
+            idempotency_key,
+          );
+          if (existingIncidentId) {
+            return reply.code(200).send({ incident_id: existingIncidentId, deduped: true });
+          }
         }
         return reply.code(409).send({ error: "idempotency_conflict_unresolved" });
       }
