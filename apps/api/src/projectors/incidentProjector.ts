@@ -236,7 +236,11 @@ async function applyIncidentLearningLogged(tx: DbClient, event: IncidentLearning
      WHERE i.incident_id = s.incident_id
        AND i.incident_id = $1
        AND i.workspace_id = $4
-       AND (i.last_event_occurred_at IS NULL OR i.last_event_occurred_at < $2)`,
+       AND (
+         i.last_event_occurred_at IS NULL
+         OR i.last_event_occurred_at < $2
+         OR (i.last_event_occurred_at = $2 AND COALESCE(i.last_event_id, '') <> $3)
+       )`,
     [incident_id, event.occurred_at, event.event_id, workspace_id],
   );
 }

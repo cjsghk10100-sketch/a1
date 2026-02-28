@@ -37,6 +37,7 @@ export type IngestConfig = {
 };
 
 type IngestState = {
+  item_name?: string;
   attempt_count: number;
   resolvedCorrelationId?: string;
   deterministic_idempotency_key?: string;
@@ -277,13 +278,22 @@ async function safeMove(src: string, dst: string): Promise<void> {
 }
 
 function stateFilePath(dirs: DropDirs, itemName: string): string {
+  const digest = sha256Text(itemName).slice(0, 40);
+  return path.join(dirs.stateDir, `state-${digest}.state.json`);
+}
+
+function legacyStateFilePath(dirs: DropDirs, itemName: string): string {
   return path.join(dirs.stateDir, boundedFileName(itemName, ".state.json"));
 }
 
 async function writeStateAtomic(dirs: DropDirs, itemName: string, state: IngestState): Promise<void> {
   const target = stateFilePath(dirs, itemName);
   const tmp = `${target}.tmp-${randomUUID()}`;
-  const json = `${JSON.stringify(state, null, 2)}\n`;
+  const normalizedState: IngestState = {
+    ...state,
+    item_name: itemName,
+  };
+  const json = `${JSON.stringify(normalizedState, null, 2)}\n`;
   await fs.writeFile(tmp, json, "utf8");
   await fsyncPath(tmp);
   await fs.rename(tmp, target);
@@ -291,11 +301,18 @@ async function writeStateAtomic(dirs: DropDirs, itemName: string, state: IngestS
 
 async function readState(dirs: DropDirs, itemName: string): Promise<IngestState | null> {
   const target = stateFilePath(dirs, itemName);
-  if (!(await fileExists(target))) return null;
+  const legacyTarget = legacyStateFilePath(dirs, itemName);
+  const selected = (await fileExists(target))
+    ? target
+    : (await fileExists(legacyTarget))
+      ? legacyTarget
+      : null;
+  if (!selected) return null;
   try {
-    const raw = await fs.readFile(target, "utf8");
+    const raw = await fs.readFile(selected, "utf8");
     const parsed = JSON.parse(raw) as IngestState;
     return {
+      item_name: typeof parsed.item_name === "string" ? parsed.item_name : itemName,
       attempt_count: clampPositive(parsed.attempt_count, 0),
       resolvedCorrelationId: parsed.resolvedCorrelationId,
       deterministic_idempotency_key: parsed.deterministic_idempotency_key,
@@ -304,6 +321,7 @@ async function readState(dirs: DropDirs, itemName: string): Promise<IngestState 
     };
   } catch {
     return {
+      item_name: itemName,
       attempt_count: 0,
       artifacts: {},
     };
@@ -312,7 +330,26 @@ async function readState(dirs: DropDirs, itemName: string): Promise<IngestState 
 
 async function removeStateFile(dirs: DropDirs, itemName: string): Promise<void> {
   const target = stateFilePath(dirs, itemName);
+  const legacyTarget = legacyStateFilePath(dirs, itemName);
   await fs.rm(target, { force: true });
+  await fs.rm(legacyTarget, { force: true });
+}
+
+async function itemNameFromStateEntry(dirs: DropDirs, stateFileName: string): Promise<string | null> {
+  const statePath = path.join(dirs.stateDir, stateFileName);
+  try {
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as IngestState;
+    if (typeof parsed.item_name === "string" && parsed.item_name.trim().length > 0) {
+      return parsed.item_name.trim();
+    }
+  } catch {
+    // ignore and fall back to legacy filename inference
+  }
+  if (!stateFileName.endsWith(".state.json")) return null;
+  if (stateFileName.startsWith("state-")) return null;
+  const inferred = stateFileName.slice(0, -".state.json".length).trim();
+  return inferred.length > 0 ? inferred : null;
 }
 
 function parseScalar(raw: string): unknown {
@@ -979,7 +1016,8 @@ async function recoverStateFiles(cfg: IngestConfig, dirs: DropDirs): Promise<voi
 
   for (const entry of stateEntries) {
     if (!entry.isFile() || !entry.name.endsWith(".state.json")) continue;
-    const itemName = entry.name.slice(0, -".state.json".length);
+    const itemName = await itemNameFromStateEntry(dirs, entry.name);
+    if (!itemName) continue;
     if (processingSet.has(itemName)) continue;
     if (rollbackedToDrop.has(itemName)) continue;
     if (await fileExists(path.join(dirs.dropRoot, itemName))) continue;
