@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import re
 import shutil
+import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +24,56 @@ class Decision:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def post_policy_gate(
+    policy_gate_url: str,
+    timeout_sec: float,
+    workspace_id: str,
+    decision: Decision,
+) -> dict:
+    payload = {
+        "workspace_id": workspace_id,
+        "file": Path(decision.file).name,
+        "requested_action": decision.action,
+        "reasons": decision.reasons,
+        "warnings": decision.warnings,
+        "kpi": decision.kpi,
+        "age_hours": decision.age_hours,
+    }
+    req = urllib.request.Request(
+        policy_gate_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "x-workspace-id": workspace_id,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=max(0.1, float(timeout_sec))) as resp:
+            if resp.status < 200 or resp.status >= 300:
+                raise RuntimeError(f"policy_gate_http_{resp.status}")
+            raw = resp.read().decode("utf-8", errors="ignore")
+            parsed = json.loads(raw) if raw.strip() else {}
+            if not isinstance(parsed, dict):
+                raise RuntimeError("policy_gate_invalid_json")
+            return parsed
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"policy_gate_unreachable:{exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"policy_gate_invalid_json:{exc}") from exc
+
+
+def resolve_gate_action(local_action: str, gate_result: dict) -> str:
+    if gate_result.get("allow") is False:
+        return "demote"
+    gate_action = gate_result.get("action")
+    if isinstance(gate_action, str) and gate_action in {"promote", "demote"}:
+        return gate_action
+    if gate_result.get("allow") is True:
+        return local_action
+    raise RuntimeError("policy_gate_missing_allow_or_action")
 
 
 def parse_number(val: str, percent_or_ratio: bool = True):
@@ -104,6 +158,9 @@ def seed_samples(inbox: Path):
     samples = {
         'PRJ-PIPELINE-PASS_v1.md': """# PASS sample
 approval_id: APR-1001
+approved_by: owner_min
+approved_at: 2026-02-28T00:00:00Z
+approval_reason: approved_for_pipeline_pass_sample
 EVIDENCE: command logs attached
 EVAL: goal met
 LEARN: keep this format
@@ -157,6 +214,9 @@ def main():
     ap.add_argument('--default-revenue-usdc', type=float, default=0.0)
     ap.add_argument('--default-token-cost-usdc', type=float, default=0.0)
     ap.add_argument('--min-margin-rate', type=float, default=0.0, help='Advisory threshold only (warning), 0.0~1.0, e.g., 0.2 means 20%%')
+    ap.add_argument('--workspace-id', default=os.getenv('PIPELINE_WORKSPACE_ID', 'ws_dev'))
+    ap.add_argument('--policy-gate-url', default=os.getenv('PIPELINE_POLICY_GATE_URL', ''), help='Required for --real-run. App/API gate endpoint for promote/demote approval.')
+    ap.add_argument('--policy-gate-timeout-sec', type=float, default=5.0)
 
     args = ap.parse_args()
 
@@ -168,7 +228,14 @@ def main():
             'error': 'real_run_requires_confirm_flag',
             'hint': 'Use both --real-run and --confirm-real-run'
         }, ensure_ascii=False, indent=2))
-        return
+        sys.exit(2)
+
+    if not dry_run and not str(args.policy_gate_url).strip():
+        print(json.dumps({
+            'error': 'policy_gate_required_for_real_run',
+            'hint': 'Set --policy-gate-url (or PIPELINE_POLICY_GATE_URL) for real-run'
+        }, ensure_ascii=False, indent=2))
+        sys.exit(2)
 
     inbox = Path(args.inbox_dir)
     applied = Path(args.applied_dir)
@@ -239,14 +306,37 @@ def main():
         if reasons:
             action = 'demote'
 
-        d = Decision(file=str(path), action=action, reasons=reasons, warnings=warnings, kpi=kpi, age_hours=age_hours)
-        decisions.append(d)
+        decisions.append(
+            Decision(file=str(path), action=action, reasons=reasons, warnings=warnings, kpi=kpi, age_hours=age_hours)
+        )
 
-        target = applied / path.name if action == 'promote' else demoted / path.name
+    if not dry_run:
+        for d in decisions:
+            try:
+                gate_result = post_policy_gate(
+                    policy_gate_url=str(args.policy_gate_url).strip(),
+                    timeout_sec=args.policy_gate_timeout_sec,
+                    workspace_id=str(args.workspace_id).strip() or "ws_dev",
+                    decision=d,
+                )
+                gated_action = resolve_gate_action(d.action, gate_result)
+                if gated_action != d.action:
+                    d.warnings.append("policy_gate_action_override")
+                    d.action = gated_action
+            except Exception as exc:
+                print(json.dumps({
+                    "error": "policy_gate_blocked_transition",
+                    "file": Path(d.file).name,
+                    "requested_action": d.action,
+                    "reason": str(exc),
+                }, ensure_ascii=False, indent=2))
+                sys.exit(3)
+
+    for d in decisions:
+        target = applied / Path(d.file).name if d.action == 'promote' else demoted / Path(d.file).name
         if not dry_run:
-            shutil.move(str(path), str(target))
-
-        if reasons:
+            shutil.move(d.file, str(target))
+        if d.reasons:
             write_incident(incidents, d, dry_run)
 
     margins = [d.kpi.get('margin_rate') for d in decisions if d.kpi.get('margin_rate') is not None]
