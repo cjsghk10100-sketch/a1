@@ -2,7 +2,9 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import type { AppConfig } from "./config.js";
 import { startHeartCron } from "./cron/heartCron.js";
-import type { DbPool } from "./db/pool.js";
+import { setDbLogger, type DbPool } from "./db/pool.js";
+import { registerTraceHooks } from "./observability/registerTraceHooks.js";
+import { setTraceLogger } from "./observability/traceContext.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerV1Routes } from "./routes/v1/index.js";
 import { runQueuedRunsWorker } from "./runtime/runWorker.js";
@@ -15,8 +17,26 @@ export interface BuildContext {
   pool: DbPool;
 }
 
+let unhandledRejectionHookRegistered = false;
+
 export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, disableRequestLogging: true });
+  registerTraceHooks(app);
+  setTraceLogger(app.log);
+  setDbLogger(app.log);
+  if (!unhandledRejectionHookRegistered) {
+    process.on("unhandledRejection", (reason) => {
+      const err_name = reason instanceof Error ? reason.name : "Error";
+      const err_message = reason instanceof Error ? reason.message : String(reason);
+      app.log.error({
+        event: "process.unhandledRejection",
+        err_name,
+        err_message,
+      });
+    });
+    unhandledRejectionHookRegistered = true;
+  }
+
   let workerTimer: NodeJS.Timeout | undefined;
   let workerStopped = false;
   let workerInFlight = false;

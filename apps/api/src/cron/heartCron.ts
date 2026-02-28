@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 
 import type { DbPool } from "../db/pool.js";
+import { getTraceContext, getTraceLogger, runWithTraceContext } from "../observability/traceContext.js";
 import { loadHeartCronConfig, type HeartCronConfig } from "./config.js";
 import { readCronHealth, recordCronFailure, recordCronSuccess, shouldRunCron } from "./health.js";
 import { acquireLock, heartbeatLock, LockLostError, releaseLock } from "./lock.js";
 import {
   emitWatchdogIncident,
+  getWindowAnchor,
   listCandidateWorkspaces,
   runApprovalTimeoutSweep,
   runDemotedStaleSweep,
@@ -24,6 +26,7 @@ type LoggerLike = {
 type TickHeartCronOptions = {
   onLockAcquired?: (input: { lock_token: string; holder_id: string }) => Promise<void> | void;
   configOverride?: HeartCronConfig;
+  logger?: LoggerLike;
 };
 
 type SweepCounts = {
@@ -110,108 +113,178 @@ export async function tickHeartCron(
   const jitterMs = randomJitterMs(cfg.jitterMaxMs);
   await sleep(jitterMs);
 
-  const canRun = await shouldRunCron(pool, HEART_CRON_CHECK_NAME, cfg.watchdogHaltThreshold);
-  if (!canRun) return;
+  const window_anchor = await getWindowAnchor(pool, cfg.windowSec);
+  const logger = options.logger ?? getTraceLogger();
 
-  const holder_id = `cron:${process.pid}:${randomUUID()}`;
-  const acquired = await acquireLock(pool, HEART_CRON_LOCK_NAME, holder_id, cfg.lockLeaseMs);
-  if (!acquired) return;
+  await runWithTraceContext(
+    {
+      source: "cron",
+      request_id: `cron_${HEART_CRON_CHECK_NAME}_${randomUUID()}`,
+      correlation_id: `cron:${HEART_CRON_CHECK_NAME}:${window_anchor}`,
+    },
+    async () => {
+      const startNs = process.hrtime.bigint();
+      const ctx = getTraceContext();
+      const request_id = ctx?.request_id ?? "unknown";
+      const correlation_id = ctx?.correlation_id ?? "unknown";
 
-  let lockLost = false;
-  let lockLostError: unknown = null;
-  let currentWorkspace: string | null = null;
-  let workspaceCount = 0;
-  const perWorkspaceCounts: SweepCounts[] = [];
-  const lock_token = acquired.lock_token;
-
-  let heartbeatInFlight = false;
-  const heartbeatTimer = setInterval(() => {
-    if (heartbeatInFlight || lockLost) return;
-    heartbeatInFlight = true;
-    void heartbeatLock(pool, HEART_CRON_LOCK_NAME, lock_token, cfg.lockLeaseMs)
-      .catch((err) => {
-        lockLost = true;
-        lockLostError = err;
-      })
-      .finally(() => {
-        heartbeatInFlight = false;
+      logger?.info?.({
+        event: "cron.start",
+        request_id,
+        correlation_id,
+        cron_job: HEART_CRON_CHECK_NAME,
+        window_anchor,
       });
-  }, cfg.lockHeartbeatMs);
 
-  try {
-    await options.onLockAcquired?.({ lock_token, holder_id });
-    await heartbeatLock(pool, HEART_CRON_LOCK_NAME, lock_token, cfg.lockLeaseMs);
+      try {
+        const canRun = await shouldRunCron(pool, HEART_CRON_CHECK_NAME, cfg.watchdogHaltThreshold);
+        if (!canRun) {
+          const duration_ms = Number((process.hrtime.bigint() - startNs) / 1000000n);
+          logger?.info?.({
+            event: "cron.finish",
+            request_id,
+            correlation_id,
+            cron_job: HEART_CRON_CHECK_NAME,
+            window_anchor,
+            duration_ms,
+          });
+          return;
+        }
 
-    const workspaceIds = await listCandidateWorkspaces(pool, cfg);
-    workspaceCount = workspaceIds.length;
+        const holder_id = `cron:${process.pid}:${randomUUID()}`;
+        const acquired = await acquireLock(pool, HEART_CRON_LOCK_NAME, holder_id, cfg.lockLeaseMs);
+        if (!acquired) {
+          const duration_ms = Number((process.hrtime.bigint() - startNs) / 1000000n);
+          logger?.info?.({
+            event: "cron.finish",
+            request_id,
+            correlation_id,
+            cron_job: HEART_CRON_CHECK_NAME,
+            window_anchor,
+            duration_ms,
+          });
+          return;
+        }
 
-    await runWithConcurrency(
-      workspaceIds,
-      cfg.workspaceConcurrency,
-      async (workspaceId) => {
-        if (lockLost) throw lockLostError ?? new LockLostError();
-        currentWorkspace = workspaceId;
+        let lockLost = false;
+        let lockLostError: unknown = null;
+        let currentWorkspace: string | null = null;
+        let workspaceCount = 0;
+        const perWorkspaceCounts: SweepCounts[] = [];
+        const lock_token = acquired.lock_token;
 
-        const stopSignal = () => lockLost;
-        const approval = await runApprovalTimeoutSweep(pool, workspaceId, cfg, stopSignal);
-        if (lockLost) throw lockLostError ?? new LockLostError();
+        let heartbeatInFlight = false;
+        const heartbeatTimer = setInterval(() => {
+          if (heartbeatInFlight || lockLost) return;
+          heartbeatInFlight = true;
+          void heartbeatLock(pool, HEART_CRON_LOCK_NAME, lock_token, cfg.lockLeaseMs)
+            .catch((err) => {
+              lockLost = true;
+              lockLostError = err;
+            })
+            .finally(() => {
+              heartbeatInFlight = false;
+            });
+        }, cfg.lockHeartbeatMs);
 
-        const stuck = await runRunStuckSweep(pool, workspaceId, cfg, stopSignal);
-        if (lockLost) throw lockLostError ?? new LockLostError();
+        try {
+          await options.onLockAcquired?.({ lock_token, holder_id });
+          await heartbeatLock(pool, HEART_CRON_LOCK_NAME, lock_token, cfg.lockLeaseMs);
 
-        const demoted = await runDemotedStaleSweep(pool, workspaceId, cfg, stopSignal);
-        if (lockLost) throw lockLostError ?? new LockLostError();
+          const workspaceIds = await listCandidateWorkspaces(pool, cfg);
+          workspaceCount = workspaceIds.length;
 
-        perWorkspaceCounts.push({
-          approval_timeout: approval,
-          run_stuck: stuck,
-          demoted_stale: demoted,
+          await runWithConcurrency(
+            workspaceIds,
+            cfg.workspaceConcurrency,
+            async (workspaceId) => {
+              if (lockLost) throw lockLostError ?? new LockLostError();
+              currentWorkspace = workspaceId;
+
+              const stopSignal = () => lockLost;
+              const approval = await runApprovalTimeoutSweep(pool, workspaceId, cfg, stopSignal);
+              if (lockLost) throw lockLostError ?? new LockLostError();
+
+              const stuck = await runRunStuckSweep(pool, workspaceId, cfg, stopSignal);
+              if (lockLost) throw lockLostError ?? new LockLostError();
+
+              const demoted = await runDemotedStaleSweep(pool, workspaceId, cfg, stopSignal);
+              if (lockLost) throw lockLostError ?? new LockLostError();
+
+              perWorkspaceCounts.push({
+                approval_timeout: approval,
+                run_stuck: stuck,
+                demoted_stale: demoted,
+              });
+            },
+          );
+
+          const totals = sumCounts(perWorkspaceCounts);
+          const totalErrors =
+            totals.approval_timeout.errors + totals.run_stuck.errors + totals.demoted_stale.errors;
+          if (totalErrors > 0) {
+            throw new Error(`heart_cron_sweep_errors:${totalErrors}`);
+          }
+          await recordCronSuccess(pool, HEART_CRON_CHECK_NAME, {
+            source: "cron",
+            lock_name: HEART_CRON_LOCK_NAME,
+            holder_id,
+            workspace_count: workspaceCount,
+            jitter_ms: jitterMs,
+            counts: totals,
+          });
+        } catch (err) {
+          const failureCount = await recordCronFailure(pool, HEART_CRON_CHECK_NAME, toErrorMessage(err), {
+            source: "cron",
+            lock_name: HEART_CRON_LOCK_NAME,
+            holder_id,
+            workspace_count: workspaceCount,
+            current_workspace: currentWorkspace,
+          });
+
+          if (failureCount >= cfg.watchdogAlertThreshold) {
+            const watchdogWorkspace =
+              currentWorkspace ??
+              process.env.CRON_WATCHDOG_WORKSPACE_ID?.trim() ??
+              "ws_dev";
+
+            await emitWatchdogIncident(pool, {
+              workspaceId: watchdogWorkspace,
+              failureCount,
+              message: `heart_cron failures=${failureCount}: ${toErrorMessage(err)}`,
+              windowSec: cfg.windowSec,
+            }).catch(() => {});
+          }
+
+          throw err;
+        } finally {
+          clearInterval(heartbeatTimer);
+          await releaseLock(pool, HEART_CRON_LOCK_NAME, lock_token).catch(() => {});
+        }
+
+        const duration_ms = Number((process.hrtime.bigint() - startNs) / 1000000n);
+        logger?.info?.({
+          event: "cron.finish",
+          request_id,
+          correlation_id,
+          cron_job: HEART_CRON_CHECK_NAME,
+          window_anchor,
+          duration_ms,
         });
-      },
-    );
-
-    const totals = sumCounts(perWorkspaceCounts);
-    const totalErrors =
-      totals.approval_timeout.errors + totals.run_stuck.errors + totals.demoted_stale.errors;
-    if (totalErrors > 0) {
-      throw new Error(`heart_cron_sweep_errors:${totalErrors}`);
-    }
-    await recordCronSuccess(pool, HEART_CRON_CHECK_NAME, {
-      source: "cron",
-      lock_name: HEART_CRON_LOCK_NAME,
-      holder_id,
-      workspace_count: workspaceCount,
-      jitter_ms: jitterMs,
-      counts: totals,
-    });
-  } catch (err) {
-    const failureCount = await recordCronFailure(pool, HEART_CRON_CHECK_NAME, toErrorMessage(err), {
-      source: "cron",
-      lock_name: HEART_CRON_LOCK_NAME,
-      holder_id,
-      workspace_count: workspaceCount,
-      current_workspace: currentWorkspace,
-    });
-
-    if (failureCount >= cfg.watchdogAlertThreshold) {
-      const watchdogWorkspace =
-        currentWorkspace ??
-        process.env.CRON_WATCHDOG_WORKSPACE_ID?.trim() ??
-        "ws_dev";
-
-      await emitWatchdogIncident(pool, {
-        workspaceId: watchdogWorkspace,
-        failureCount,
-        message: `heart_cron failures=${failureCount}: ${toErrorMessage(err)}`,
-        windowSec: cfg.windowSec,
-      }).catch(() => {});
-    }
-
-    throw err;
-  } finally {
-    clearInterval(heartbeatTimer);
-    await releaseLock(pool, HEART_CRON_LOCK_NAME, lock_token).catch(() => {});
-  }
+      } catch (err) {
+        logger?.error?.({
+          event: "cron.error",
+          request_id,
+          correlation_id,
+          cron_job: HEART_CRON_CHECK_NAME,
+          window_anchor,
+          err_name: err instanceof Error ? err.name : "Error",
+          err_message: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    },
+  );
 }
 
 export function startHeartCron(pool: DbPool, logger?: LoggerLike): (() => void) | null {
@@ -224,9 +297,9 @@ export function startHeartCron(pool: DbPool, logger?: LoggerLike): (() => void) 
     if (stopped || running) return;
     running = true;
     try {
-      await tickHeartCron(pool, { configOverride: cfg });
-    } catch (err) {
-      logger?.error?.({ err }, "heart cron tick failed");
+      await tickHeartCron(pool, { configOverride: cfg, logger });
+    } catch {
+      // tickHeartCron already emits cron.error with trace context.
     } finally {
       running = false;
     }
@@ -236,19 +309,6 @@ export function startHeartCron(pool: DbPool, logger?: LoggerLike): (() => void) 
   const timer = setInterval(() => {
     void runTick();
   }, cfg.tickIntervalMs);
-
-  logger?.info?.(
-    {
-      source: "cron",
-      lock_name: HEART_CRON_LOCK_NAME,
-      tick_interval_ms: cfg.tickIntervalMs,
-      lock_lease_ms: cfg.lockLeaseMs,
-      heartbeat_ms: cfg.lockHeartbeatMs,
-      workspace_concurrency: cfg.workspaceConcurrency,
-      batch_limit: cfg.batchLimit,
-    },
-    "heart cron enabled",
-  );
 
   return () => {
     stopped = true;
