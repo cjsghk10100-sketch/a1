@@ -122,6 +122,12 @@ Current endpoints (selected):
   - `POST /v1/runs/:id/lease/heartbeat`, `POST /v1/runs/:id/lease/release`
   - `POST /v1/runs/:id/start`, `POST /v1/runs/:id/steps`, `GET /v1/runs/:id/steps`
   - `POST /v1/runs/:id/complete`, `POST /v1/runs/:id/fail`
+- Work-item lease (operational):
+  - `POST /v1/work-items/claim`, `POST /v1/work-items/heartbeat`, `POST /v1/work-items/release`
+  - `server_time` fields are emitted as ISO8601 UTC strings (`YYYY-MM-DDTHH:mm:ss.SSSZ`).
+  - `lease.preempted` is an operational audit hint (best-effort under races), not strict forensic truth.
+  - Release path is idempotent soft-warn: stale client expectations (e.g. old `lease_id` / locally tracked `expected_version`) return `200` with `replay=true` and `released=false` instead of hard failure.
+  - Error status is always derived from contract mapping (`REASON_CODE_TO_HTTP`), not per-route ad-hoc codes.
 - Incidents:
   - `POST /v1/incidents` (supports optional `idempotency_key` for dedupe-safe open)
   - `GET /v1/incidents`, `GET /v1/incidents/:id`

@@ -18,6 +18,7 @@ import { getRequestAuth } from "../../security/requestAuth.js";
 type WorkItemType = "experiment" | "approval" | "message" | "incident" | "artifact";
 
 const WORK_ITEM_TYPES: WorkItemType[] = ["experiment", "approval", "message", "incident", "artifact"];
+const SERVER_TIME_SQL = `to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
 
 type ClaimBody = {
   schema_version?: string;
@@ -291,6 +292,8 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
     try {
       await client.query("BEGIN");
 
+      // Non-locking hint only: this can race and is not forensic truth.
+      // It is used only to enrich preemption audit context when an expired lease is reclaimed.
       const oldLease = await client.query<OldLeaseHintRow>(
         `SELECT
            lease_id AS old_lease_id,
@@ -341,7 +344,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
            last_heartbeat_at::text,
            expires_at::text,
            version,
-           now()::text AS server_time`,
+           ${SERVER_TIME_SQL} AS server_time`,
         [
           validated.workspace_id,
           validated.work_item_type,
@@ -364,6 +367,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
           );
 
           if (preemptCheck.rows[0]?.is_expired === true) {
+            // lease.preempted is an operational audit signal, not an exact forensic event under races.
             await appendToStream(
               pool,
               leaseEventEnvelope({
@@ -458,7 +462,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
            version,
            last_heartbeat_at::text,
            expires_at::text,
-           now()::text AS server_time
+           ${SERVER_TIME_SQL} AS server_time
          FROM work_item_leases
          WHERE workspace_id = $1
            AND work_item_type = $2
@@ -554,7 +558,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
            last_heartbeat_at::text,
            expires_at::text,
            version,
-           now()::text AS server_time`,
+           ${SERVER_TIME_SQL} AS server_time`,
         [
           validated.workspace_id,
           validated.work_item_type,
@@ -595,7 +599,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
            version,
            last_heartbeat_at::text,
            expires_at::text,
-           now()::text AS server_time,
+           ${SERVER_TIME_SQL} AS server_time,
            ((now() - last_heartbeat_at) < make_interval(secs => $4)) AS heartbeat_rate_limited
          FROM work_item_leases
          WHERE workspace_id = $1
@@ -676,7 +680,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
            version,
            last_heartbeat_at::text,
            expires_at::text,
-           now()::text AS server_time
+           ${SERVER_TIME_SQL} AS server_time
          FROM work_item_leases
          WHERE workspace_id = $1
            AND work_item_type = $2
@@ -687,7 +691,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
 
       if (existing.rowCount !== 1) {
         const serverTime = await client.query<{ server_time: string }>(
-          "SELECT now()::text AS server_time",
+          `SELECT ${SERVER_TIME_SQL} AS server_time`,
         );
         await client.query("COMMIT");
         return reply.code(200).send({
@@ -725,7 +729,7 @@ export async function registerWorkItemsRoutes(app: FastifyInstance, pool: DbPool
            AND work_item_type = $2
            AND work_item_id = $3
            AND lease_id = $4
-         RETURNING now()::text AS server_time`,
+         RETURNING ${SERVER_TIME_SQL} AS server_time`,
         [validated.workspace_id, validated.work_item_type, validated.work_item_id, lease_id],
       );
 
