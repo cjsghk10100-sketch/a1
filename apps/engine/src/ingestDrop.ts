@@ -17,6 +17,11 @@ export type IngestConfig = {
   agentId: string;
   runId: string;
   bearerToken?: string;
+  refreshToken?: string;
+  getBearerToken?: () => string | undefined;
+  setBearerToken?: (token: string) => void;
+  getRefreshToken?: () => string | undefined;
+  setRefreshToken?: (token: string) => void;
   engineId?: string;
   engineToken?: string;
   ingestEnabled: boolean;
@@ -165,7 +170,8 @@ function buildApiHeaders(cfg: IngestConfig, includeJson: boolean): Record<string
     "x-workspace-id": cfg.workspaceId,
   };
   if (includeJson) headers["content-type"] = "application/json";
-  if (cfg.bearerToken) headers.authorization = `Bearer ${cfg.bearerToken}`;
+  const bearerToken = cfg.getBearerToken?.() ?? cfg.bearerToken;
+  if (bearerToken) headers.authorization = `Bearer ${bearerToken}`;
   if (cfg.engineId && cfg.engineToken) {
     headers["x-engine-id"] = cfg.engineId;
     headers["x-engine-token"] = cfg.engineToken;
@@ -515,6 +521,51 @@ function classifyHttpError(status: number, reasonCode: string | undefined): { tr
   return { transient: false, permanent: false };
 }
 
+function getRefreshToken(cfg: IngestConfig): string | undefined {
+  return cfg.getRefreshToken?.() ?? cfg.refreshToken;
+}
+
+function setAuthTokens(cfg: IngestConfig, accessToken: string, refreshToken: string): void {
+  cfg.bearerToken = accessToken;
+  cfg.refreshToken = refreshToken;
+  cfg.setBearerToken?.(accessToken);
+  cfg.setRefreshToken?.(refreshToken);
+}
+
+function parseSessionTokens(payload: unknown): { access_token: string; refresh_token: string } | null {
+  if (!isObject(payload)) return null;
+  const session = payload.session;
+  if (!isObject(session)) return null;
+  const access_token = typeof session.access_token === "string" ? session.access_token.trim() : "";
+  const refresh_token = typeof session.refresh_token === "string" ? session.refresh_token.trim() : "";
+  if (!access_token || !refresh_token) return null;
+  return { access_token, refresh_token };
+}
+
+async function refreshBearerToken(cfg: IngestConfig): Promise<boolean> {
+  const refreshToken = getRefreshToken(cfg);
+  if (!refreshToken) return false;
+  const response = await requestJson(
+    buildUrl(cfg.apiBaseUrl, "/v1/auth/refresh"),
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    },
+    cfg.httpTimeoutSec,
+  );
+
+  if (response.status < 200 || response.status >= 300) {
+    return false;
+  }
+  const tokens = parseSessionTokens(response.json);
+  if (!tokens) return false;
+  setAuthTokens(cfg, tokens.access_token, tokens.refresh_token);
+  return true;
+}
+
 function parseRetryAfterSec(payload: unknown): number | undefined {
   if (!isObject(payload)) return undefined;
   const details = payload.details;
@@ -584,8 +635,8 @@ function redactHttpBody(bodyText: string): string {
   return sanitizeErrorText(bodyText);
 }
 
-function ingestMessageLocalId(deterministicKey: string): string {
-  const digest = sha256Text(deterministicKey).slice(0, 24);
+function ingestMessageLocalId(deterministicKey: string, artifactDiscriminator: string): string {
+  const digest = sha256Text(`${deterministicKey}|${artifactDiscriminator}`).slice(0, 24);
   return `msg_ingest_${digest}`;
 }
 
@@ -593,23 +644,29 @@ async function postArtifactsPresign(
   cfg: IngestConfig,
   correlationId: string,
   deterministicKey: string,
+  artifactDiscriminator: string,
 ): Promise<{ artifact_id: string; object_key: string; upload_url: string }> {
-  const messageId = ingestMessageLocalId(deterministicKey);
+  const messageId = ingestMessageLocalId(deterministicKey, artifactDiscriminator);
   const payload = {
     schema_version: DEFAULT_SCHEMA_VERSION,
     correlation_id: correlationId,
     message_id: messageId,
     content_type: "application/json" as const,
   };
-  const response = await requestJson(
-    buildUrl(cfg.apiBaseUrl, "/v1/artifacts"),
-    {
-      method: "POST",
-      headers: buildApiHeaders(cfg, true),
-      body: JSON.stringify(payload),
-    },
-    cfg.httpTimeoutSec,
-  );
+  const send = async (): Promise<HttpJson> =>
+    requestJson(
+      buildUrl(cfg.apiBaseUrl, "/v1/artifacts"),
+      {
+        method: "POST",
+        headers: buildApiHeaders(cfg, true),
+        body: JSON.stringify(payload),
+      },
+      cfg.httpTimeoutSec,
+    );
+  let response = await send();
+  if (response.status === 401 && (await refreshBearerToken(cfg))) {
+    response = await send();
+  }
 
   if (response.status < 200 || response.status >= 300 || !isObject(response.json)) {
     const reasonCode = parseReasonCode(response.json);
@@ -749,15 +806,20 @@ async function postMessage(
   cfg: IngestConfig,
   body: Record<string, unknown>,
 ): Promise<{ duplicateReplay: boolean; serverTime?: string }> {
-  const response = await requestJson(
-    buildUrl(cfg.apiBaseUrl, "/v1/messages"),
-    {
-      method: "POST",
-      headers: buildApiHeaders(cfg, true),
-      body: JSON.stringify(body),
-    },
-    cfg.httpTimeoutSec,
-  );
+  const send = async (): Promise<HttpJson> =>
+    requestJson(
+      buildUrl(cfg.apiBaseUrl, "/v1/messages"),
+      {
+        method: "POST",
+        headers: buildApiHeaders(cfg, true),
+        body: JSON.stringify(body),
+      },
+      cfg.httpTimeoutSec,
+    );
+  let response = await send();
+  if (response.status === 401 && (await refreshBearerToken(cfg))) {
+    response = await send();
+  }
 
   const reasonCode = parseReasonCode(response.json);
   if (response.status >= 200 && response.status < 300) {
@@ -870,6 +932,26 @@ function isTransientError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   if ((err as { transient?: boolean }).transient === true) return true;
   if (err instanceof Error && err.name === "AbortError") return true;
+  if (!(err instanceof Error)) return false;
+  const anyErr = err as Error & { code?: string; cause?: { code?: string } };
+  const code = anyErr.code ?? anyErr.cause?.code;
+  if (typeof code === "string") {
+    if (
+      code === "ECONNRESET" ||
+      code === "ECONNREFUSED" ||
+      code === "EPIPE" ||
+      code === "ENOTFOUND" ||
+      code === "EAI_AGAIN" ||
+      code === "ETIMEDOUT" ||
+      code === "UND_ERR_CONNECT_TIMEOUT" ||
+      code === "UND_ERR_SOCKET"
+    ) {
+      return true;
+    }
+  }
+  if (anyErr.name === "TypeError" && /fetch failed|network|socket|connection/i.test(anyErr.message)) {
+    return true;
+  }
   return false;
 }
 
@@ -950,7 +1032,13 @@ async function processClaimedItem(
         const filename = artifact.filename?.trim() || path.basename(artifactPath);
         const contentType = artifact.content_type?.trim() || guessContentType(artifactPath);
 
-        const presign = await postArtifactsPresign(cfg, resolvedCorrelationId, deterministicKey);
+        const artifactDiscriminator = `${artifact.path}|${filename}`;
+        const presign = await postArtifactsPresign(
+          cfg,
+          resolvedCorrelationId,
+          deterministicKey,
+          artifactDiscriminator,
+        );
         await uploadToPresignedUrl(cfg, presign.upload_url, artifactPath, contentType);
 
         state.artifacts[artifact.path] = {

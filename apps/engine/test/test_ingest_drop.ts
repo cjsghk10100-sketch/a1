@@ -13,20 +13,81 @@ type MockState = {
   uploads: number;
   permanent400: boolean;
   seenIdempotency: Set<string>;
+  artifactObjectKeys: Set<string>;
+  transportMessageFailuresRemaining: number;
+  requireBearer: boolean;
+  acceptedAccessToken: string;
+  currentRefreshToken: string;
+  refreshCalls: number;
 };
+
+type AuthHandle = {
+  bearerToken: string;
+  refreshToken: string;
+};
+
+function readBearerToken(req: http.IncomingMessage): string {
+  const raw = req.headers.authorization;
+  if (!raw || !raw.startsWith("Bearer ")) return "";
+  return raw.slice("Bearer ".length).trim();
+}
+
+function sendUnauthorized(res: http.ServerResponse): void {
+  res.writeHead(401, { "content-type": "application/json" });
+  res.end(
+    JSON.stringify({
+      error: true,
+      reason_code: "internal_error",
+      reason: "invalid_session",
+      details: {},
+    }),
+  );
+}
+
+async function readBodyJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  let bodyRaw = "";
+  for await (const chunk of req) bodyRaw += String(chunk);
+  if (!bodyRaw) return {};
+  return JSON.parse(bodyRaw) as Record<string, unknown>;
+}
 
 async function startMockServer(state: MockState): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
+    if (req.method === "POST" && url.pathname === "/v1/auth/refresh") {
+      const body = await readBodyJson(req);
+      const refreshToken = typeof body.refresh_token === "string" ? body.refresh_token : "";
+      if (!refreshToken || refreshToken !== state.currentRefreshToken) {
+        sendUnauthorized(res);
+        return;
+      }
+      state.refreshCalls += 1;
+      state.acceptedAccessToken = `token_refreshed_${state.refreshCalls}`;
+      state.currentRefreshToken = `refresh_refreshed_${state.refreshCalls}`;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          session: {
+            access_token: state.acceptedAccessToken,
+            refresh_token: state.currentRefreshToken,
+          },
+        }),
+      );
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/v1/artifacts") {
+      if (state.requireBearer && readBearerToken(req) !== state.acceptedAccessToken) {
+        sendUnauthorized(res);
+        return;
+      }
       state.artifactCalls += 1;
-      let bodyRaw = "";
-      for await (const chunk of req) bodyRaw += String(chunk);
-      const body = bodyRaw ? (JSON.parse(bodyRaw) as Record<string, unknown>) : {};
+      const body = await readBodyJson(req);
       const correlationId = typeof body.correlation_id === "string" ? body.correlation_id : "corr";
       const messageId = typeof body.message_id === "string" ? body.message_id : "msg";
       const objectKey = `artifacts/ws_test/${encodeURIComponent(correlationId)}/${encodeURIComponent(messageId)}.json`;
+      state.artifactObjectKeys.add(objectKey);
       const origin = `http://${req.headers.host ?? "127.0.0.1"}`;
       res.writeHead(201, { "content-type": "application/json" });
       res.end(
@@ -51,10 +112,19 @@ async function startMockServer(state: MockState): Promise<{ baseUrl: string; clo
     }
 
     if (req.method === "POST" && url.pathname === "/v1/messages") {
+      if (state.requireBearer && readBearerToken(req) !== state.acceptedAccessToken) {
+        sendUnauthorized(res);
+        return;
+      }
+
+      if (state.transportMessageFailuresRemaining > 0) {
+        state.transportMessageFailuresRemaining -= 1;
+        req.socket.destroy();
+        return;
+      }
+
       state.messagesCalls += 1;
-      let bodyRaw = "";
-      for await (const chunk of req) bodyRaw += String(chunk);
-      const body = bodyRaw ? (JSON.parse(bodyRaw) as Record<string, unknown>) : {};
+      const body = await readBodyJson(req);
       const idempotencyKey = typeof body.idempotency_key === "string" ? body.idempotency_key : "";
 
       if (state.permanent400) {
@@ -126,9 +196,11 @@ async function makeTempDropRoot(): Promise<string> {
   return dropRoot;
 }
 
-async function writeValidItem(dropRoot: string, fileName: string): Promise<void> {
-  const artifactPath = path.join(dropRoot, "artifact.txt");
-  await writeFile(artifactPath, "hello-ingest", "utf8");
+async function writeValidItem(dropRoot: string, fileName: string, artifactNames: string[]): Promise<void> {
+  for (const artifactName of artifactNames) {
+    const artifactPath = path.join(dropRoot, artifactName);
+    await writeFile(artifactPath, `hello-${artifactName}`, "utf8");
+  }
 
   const itemPath = path.join(dropRoot, fileName);
   const wrapper = {
@@ -140,20 +212,18 @@ async function writeValidItem(dropRoot: string, fileName: string): Promise<void>
       intent: "message",
       payload: { text: "hello" },
     },
-    artifacts: [
-      {
-        path: "artifact.txt",
-        content_type: "text/plain",
-        filename: "artifact.txt",
-      },
-    ],
+    artifacts: artifactNames.map((name) => ({
+      path: name,
+      content_type: "text/plain",
+      filename: name,
+    })),
   };
 
   await writeFile(itemPath, `${JSON.stringify(wrapper, null, 2)}\n`, "utf8");
 }
 
-function buildConfig(baseUrl: string, dropRoot: string): IngestConfig {
-  return {
+function buildConfig(baseUrl: string, dropRoot: string, auth?: AuthHandle): IngestConfig {
+  const cfg: IngestConfig = {
     apiBaseUrl: baseUrl,
     workspaceId: "ws_test",
     agentId: "engine_agent",
@@ -168,6 +238,21 @@ function buildConfig(baseUrl: string, dropRoot: string): IngestConfig {
     stableCheckMs: 5,
     pollMs: 50,
   };
+
+  if (auth) {
+    cfg.bearerToken = auth.bearerToken;
+    cfg.refreshToken = auth.refreshToken;
+    cfg.getBearerToken = () => auth.bearerToken;
+    cfg.setBearerToken = (token: string) => {
+      auth.bearerToken = token;
+    };
+    cfg.getRefreshToken = () => auth.refreshToken;
+    cfg.setRefreshToken = (token: string) => {
+      auth.refreshToken = token;
+    };
+  }
+
+  return cfg;
 }
 
 async function existsAt(dir: string, fileName: string): Promise<boolean> {
@@ -187,20 +272,29 @@ async function main(): Promise<void> {
     uploads: 0,
     permanent400: false,
     seenIdempotency: new Set<string>(),
+    artifactObjectKeys: new Set<string>(),
+    transportMessageFailuresRemaining: 0,
+    requireBearer: false,
+    acceptedAccessToken: "token_fresh_0",
+    currentRefreshToken: "refresh_0",
+    refreshCalls: 0,
   };
+
   const mock = await startMockServer(state);
 
   try {
     const dropRoot = await makeTempDropRoot();
     const cfg = buildConfig(mock.baseUrl, dropRoot);
 
-    await writeValidItem(dropRoot, "item-a.ingest.json");
-
+    await writeValidItem(dropRoot, "item-a.ingest.json", ["artifact-a.txt", "artifact-b.txt"]);
     await runIngestOnce(cfg);
 
     assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-a.ingest.json"), true);
     assert.equal(await existsAt(path.join(dropRoot, "_quarantine"), "item-a.ingest.json"), false);
     assert.equal(state.messagesCalls, 1);
+    assert.equal(state.artifactCalls, 2);
+    assert.equal(state.uploads, 2);
+    assert.equal(state.artifactObjectKeys.size, 2);
 
     await rename(
       path.join(dropRoot, "_ingested", "item-a.ingest.json"),
@@ -211,9 +305,43 @@ async function main(): Promise<void> {
     assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-a.ingest.json"), true);
     assert.equal(state.messagesCalls, 2);
     assert.equal(state.duplicateCalls, 1);
+    assert.equal(state.artifactCalls, 4);
+    assert.equal(state.uploads, 4);
+    assert.equal(state.artifactObjectKeys.size, 2);
 
+    const prevArtifactCalls = state.artifactCalls;
+    state.transportMessageFailuresRemaining = 1;
+    await writeValidItem(dropRoot, "item-c.ingest.json", ["artifact-c.txt"]);
+
+    await runIngestOnce(cfg);
+
+    assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-c.ingest.json"), true);
+    assert.equal(await existsAt(path.join(dropRoot, "_quarantine"), "item-c.ingest.json"), false);
+    assert.equal(state.transportMessageFailuresRemaining, 0);
+    assert.ok(state.artifactCalls >= prevArtifactCalls + 2);
+
+    state.requireBearer = true;
+    state.acceptedAccessToken = "token_fresh_0";
+    state.currentRefreshToken = "refresh_0";
+    state.refreshCalls = 0;
+    const auth: AuthHandle = {
+      bearerToken: "token_stale_0",
+      refreshToken: "refresh_0",
+    };
+    const authCfg = buildConfig(mock.baseUrl, dropRoot, auth);
+
+    await writeValidItem(dropRoot, "item-d.ingest.json", ["artifact-d.txt"]);
+
+    await runIngestOnce(authCfg);
+
+    assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-d.ingest.json"), true);
+    assert.ok(state.refreshCalls >= 1);
+    assert.equal(auth.bearerToken, state.acceptedAccessToken);
+    assert.equal(auth.refreshToken, state.currentRefreshToken);
+
+    state.requireBearer = false;
     state.permanent400 = true;
-    await writeValidItem(dropRoot, "item-b.ingest.json");
+    await writeValidItem(dropRoot, "item-b.ingest.json", ["artifact-bad.txt"]);
 
     await runIngestOnce(cfg);
 
@@ -228,6 +356,8 @@ async function main(): Promise<void> {
 
     const ingestedFiles = await readdir(path.join(dropRoot, "_ingested"));
     assert.ok(ingestedFiles.includes("item-a.ingest.json"));
+    assert.ok(ingestedFiles.includes("item-c.ingest.json"));
+    assert.ok(ingestedFiles.includes("item-d.ingest.json"));
   } finally {
     await mock.close();
   }

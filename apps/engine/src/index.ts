@@ -460,6 +460,15 @@ function toIngestConfig(cfg: EngineConfig): IngestConfig {
     agentId: cfg.agentId,
     runId: randomUUID(),
     bearerToken: cfg.bearerToken,
+    refreshToken: cfg.refreshToken,
+    getBearerToken: () => cfg.bearerToken,
+    setBearerToken: (token: string) => {
+      cfg.bearerToken = token;
+    },
+    getRefreshToken: () => cfg.refreshToken,
+    setRefreshToken: (token: string) => {
+      cfg.refreshToken = token;
+    },
     engineId: cfg.engineId,
     engineToken: cfg.engineToken,
     ingestEnabled: cfg.ingestEnabled,
