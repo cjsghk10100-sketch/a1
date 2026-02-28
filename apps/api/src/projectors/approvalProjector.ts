@@ -143,7 +143,11 @@ async function applyApprovalDecided(tx: DbClient, event: ApprovalDecidedV1): Pro
       last_event_occurred_at = $10
     WHERE approval_id = $1
       AND workspace_id = $12
-      AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $10)`,
+      AND (
+        last_event_occurred_at IS NULL
+        OR last_event_occurred_at < $10
+        OR (last_event_occurred_at = $10 AND COALESCE(last_event_id, '') <> $11)
+      )`,
     [
       approval_id,
       status,

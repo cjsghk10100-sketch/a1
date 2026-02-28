@@ -16,7 +16,10 @@ import { RATE_LIMIT_SCOPE_MESSAGES } from "../../config.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
 import { recordMessageProcessingFailure } from "../../dlq/poisonMessageDlq.js";
 import { appendToStream } from "../../eventStore/index.js";
-import { enforceMessageRateLimit } from "../../ratelimit/enforceMessageRateLimit.js";
+import {
+  enforceMessageRateLimit,
+  refundMessageRateLimitCharges,
+} from "../../ratelimit/enforceMessageRateLimit.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
 type AgentRow = {
@@ -387,14 +390,20 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
     }
 
+    let chargedRateLimitBuckets: Array<{
+      bucket_key: string;
+      window_start: string;
+      window_sec: number;
+    }> = [];
     try {
-      await enforceMessageRateLimit(pool, {
+      const rateLimitResult = await enforceMessageRateLimit(pool, {
         workspace_id,
         agent_id: authenticatedAgentId,
         intent: normalizedIntent,
         experiment_id,
         correlation_id: body.correlation_id?.trim() || randomUUID(),
       });
+      chargedRateLimitBuckets = rateLimitResult.charged_buckets;
     } catch (err) {
       const payload = errorPayloadFromUnknown(err, "internal_error");
       if (payload.reason_code === "internal_error") {
@@ -515,6 +524,9 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
           await txClient.query("COMMIT");
           committed = true;
           shouldResetRateLimitStreak = true;
+          if (chargedRateLimitBuckets.length > 0) {
+            await refundMessageRateLimitCharges(pool, chargedRateLimitBuckets).catch(() => {});
+          }
 
           const reason_code = "duplicate_idempotent_replay";
           responseStatus = httpStatusForReasonCode(reason_code);

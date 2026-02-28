@@ -116,7 +116,11 @@ async function applyRunStarted(tx: DbClient, event: RunStartedV1): Promise<void>
       last_event_id = $3,
       last_event_occurred_at = $2
     WHERE run_id = $1
-      AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $2)`,
+      AND (
+        last_event_occurred_at IS NULL
+        OR last_event_occurred_at < $2
+        OR (last_event_occurred_at = $2 AND COALESCE(last_event_id, '') <> $3)
+      )`,
     [event.run_id, event.occurred_at, event.event_id],
   );
 
@@ -165,7 +169,11 @@ async function applyRunCompleted(tx: DbClient, event: RunCompletedV1): Promise<v
       last_event_id = $4,
       last_event_occurred_at = $3
     WHERE run_id = $1
-      AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $3)`,
+      AND (
+        last_event_occurred_at IS NULL
+        OR last_event_occurred_at < $3
+        OR (last_event_occurred_at = $3 AND COALESCE(last_event_id, '') <> $4)
+      )`,
     [event.run_id, toJsonb(event.data.output), event.occurred_at, event.event_id],
   );
 
@@ -218,7 +226,11 @@ async function applyRunFailed(tx: DbClient, event: RunFailedV1): Promise<void> {
       last_event_id = $4,
       last_event_occurred_at = $3
     WHERE run_id = $1
-      AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $3)`,
+      AND (
+        last_event_occurred_at IS NULL
+        OR last_event_occurred_at < $3
+        OR (last_event_occurred_at = $3 AND COALESCE(last_event_id, '') <> $4)
+      )`,
     [event.run_id, toJsonb(error), event.occurred_at, event.event_id],
   );
 
@@ -296,7 +308,11 @@ async function applyStepCreated(tx: DbClient, event: StepCreatedV1): Promise<voi
       last_event_id = $3,
       last_event_occurred_at = $2
     WHERE run_id = $1
-      AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $2)`,
+      AND (
+        last_event_occurred_at IS NULL
+        OR last_event_occurred_at < $2
+        OR (last_event_occurred_at = $2 AND COALESCE(last_event_id, '') <> $3)
+      )`,
     [event.run_id, event.occurred_at, event.event_id],
   );
 }

@@ -315,6 +315,54 @@ async function main(): Promise<void> {
       assertContractError(blocked.json, "rate_limited");
     }
 
+    // T1c Concurrent duplicate replay must not consume extra quota
+    {
+      await resetRateLimitState(db, WORKSPACE_BASE);
+      process.env.MESSAGES_RATE_LIMIT_AGENT_PER_MIN = "2";
+      process.env.MESSAGES_RATE_LIMIT_AGENT_PER_HOUR = "20";
+      process.env.MESSAGES_RATE_LIMIT_GLOBAL_PER_MIN = "20";
+
+      const workspace = `${WORKSPACE_BASE}_t1c`;
+      const headers = { "x-workspace-id": workspace };
+      const idempotency_key = `t1c:stable:${RUN_SUFFIX}`;
+
+      const [a, b] = await Promise.all([
+        postJson(
+          baseUrl,
+          "/v1/messages",
+          msgBody({
+            from_agent_id: agentId,
+            idempotency_key,
+          }),
+          headers,
+        ),
+        postJson(
+          baseUrl,
+          "/v1/messages",
+          msgBody({
+            from_agent_id: agentId,
+            idempotency_key,
+          }),
+          headers,
+        ),
+      ]);
+      assert.ok(
+        (a.status === 201 && b.status === 200) || (a.status === 200 && b.status === 201),
+        `${a.status}/${b.status} expected one 201 and one 200`,
+      );
+
+      const fresh = await postJson(
+        baseUrl,
+        "/v1/messages",
+        msgBody({
+          from_agent_id: agentId,
+          idempotency_key: `t1c:new:${RUN_SUFFIX}`,
+        }),
+        headers,
+      );
+      assert.equal(fresh.status, 201, fresh.text);
+    }
+
     // T2 Heartbeat rules
     {
       await resetRateLimitState(db, WORKSPACE_BASE);

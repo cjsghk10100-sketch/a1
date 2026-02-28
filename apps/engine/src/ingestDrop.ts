@@ -958,6 +958,7 @@ async function claimDropItem(
 async function recoverStateFiles(cfg: IngestConfig, dirs: DropDirs): Promise<void> {
   const processingItems = await listProcessingItems(dirs.processingDir);
   const processingSet = new Set(processingItems);
+  const rollbackedToDrop = new Set<string>();
 
   // Bootstrap rollback: move stale processing files back to drop for clean re-claim.
   for (const itemName of processingItems) {
@@ -968,6 +969,7 @@ async function recoverStateFiles(cfg: IngestConfig, dirs: DropDirs): Promise<voi
       await safeMove(from, to);
       logEvent(cfg, "recovery_processing_rollback", itemName, undefined);
       processingSet.delete(itemName);
+      rollbackedToDrop.add(itemName);
     } catch {
       // keep in processing for normal resume path when rollback move fails
     }
@@ -979,6 +981,8 @@ async function recoverStateFiles(cfg: IngestConfig, dirs: DropDirs): Promise<voi
     if (!entry.isFile() || !entry.name.endsWith(".state.json")) continue;
     const itemName = entry.name.slice(0, -".state.json".length);
     if (processingSet.has(itemName)) continue;
+    if (rollbackedToDrop.has(itemName)) continue;
+    if (await fileExists(path.join(dirs.dropRoot, itemName))) continue;
     logEvent(cfg, "recovery_orphan_state_removed", itemName, undefined);
     await fs.rm(path.join(dirs.stateDir, entry.name), { force: true });
   }

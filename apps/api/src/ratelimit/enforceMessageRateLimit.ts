@@ -37,6 +37,7 @@ type IncrementResult = {
   count: number;
   retry_after_sec: number;
   server_time: string;
+  window_start: string;
 };
 
 type StreakUpdateResult = {
@@ -67,6 +68,11 @@ type EnforceParams = {
 type EnforceOk = {
   allowed: true;
   server_time: string;
+  charged_buckets: Array<{
+    bucket_key: string;
+    window_start: string;
+    window_sec: number;
+  }>;
 };
 
 function parsePositiveIntEnv(name: string, fallback: number): number {
@@ -134,6 +140,7 @@ async function incrementBucketTx(
     count: string;
     retry_after_sec: string;
     server_time: string;
+    window_start: string;
   }>(
     `WITH t AS (
        SELECT
@@ -169,7 +176,8 @@ async function incrementBucketTx(
          EXTRACT(EPOCH FROM (window_start + (window_sec || ' seconds')::interval - (SELECT wall_clock FROM t)))::INT,
          0
        )::text AS retry_after_sec,
-       (SELECT wall_clock::text FROM t) AS server_time`,
+       (SELECT wall_clock::text FROM t) AS server_time,
+       window_start::text AS window_start`,
     [input.bucket_key, input.window_sec],
   );
 
@@ -177,6 +185,7 @@ async function incrementBucketTx(
     count: Number.parseInt(res.rows[0]?.count ?? "0", 10),
     retry_after_sec: Number.parseInt(res.rows[0]?.retry_after_sec ?? "0", 10),
     server_time: res.rows[0]?.server_time ?? "",
+    window_start: res.rows[0]?.window_start ?? "",
   };
 }
 
@@ -368,10 +377,16 @@ export async function enforceMessageRateLimitTx(
   const cfg = readRateLimitConfig();
   const rules = buildRules(cfg, params);
   let server_time = "";
+  const charged_buckets: EnforceOk["charged_buckets"] = [];
 
   for (const rule of rules) {
     const result = await incrementBucketTx(client, rule);
     server_time = result.server_time || server_time;
+    charged_buckets.push({
+      bucket_key: rule.bucket_key,
+      window_start: result.window_start,
+      window_sec: rule.window_sec,
+    });
     if (result.count <= rule.limit) continue;
 
     const streak = await bumpRateLimitStreakTx(client, {
@@ -411,6 +426,7 @@ export async function enforceMessageRateLimitTx(
   return {
     allowed: true,
     server_time,
+    charged_buckets,
   };
 }
 
@@ -438,6 +454,35 @@ export async function enforceMessageRateLimit(
       }
     }
     throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function refundMessageRateLimitCharges(
+  pool: DbPool,
+  charged_buckets: EnforceOk["charged_buckets"],
+): Promise<void> {
+  if (!charged_buckets.length) return;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const bucket of charged_buckets) {
+      if (!bucket.bucket_key || !bucket.window_start || bucket.window_sec <= 0) continue;
+      await client.query(
+        `UPDATE rate_limit_buckets
+         SET count = GREATEST(count - 1, 0),
+             updated_at = clock_timestamp()
+         WHERE bucket_key = $1
+           AND window_start = $2::timestamptz
+           AND window_sec = $3
+           AND count > 0`,
+        [bucket.bucket_key, bucket.window_start, bucket.window_sec],
+      );
+    }
+    await client.query("COMMIT");
+  } catch {
+    await client.query("ROLLBACK").catch(() => {});
   } finally {
     client.release();
   }

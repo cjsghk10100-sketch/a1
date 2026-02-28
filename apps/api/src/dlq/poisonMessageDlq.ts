@@ -5,6 +5,7 @@ import { newIncidentId, newMessageId } from "@agentapp/shared";
 import { SCHEMA_VERSION } from "../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../db/pool.js";
 import { appendToStream } from "../eventStore/index.js";
+import { redactSecrets } from "../security/dlp.js";
 
 const DLQ_THRESHOLD = 3;
 const WORKSPACE_FALLBACK = "SYS_GLOBAL";
@@ -67,6 +68,22 @@ function truncateUtf8Bytes(input: string, maxBytes: number): string {
     out = candidate;
   }
   return out;
+}
+
+function redactRawPayload(raw: string): string {
+  if (!raw) return raw;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const redacted = redactSecrets(parsed);
+    return JSON.stringify(redacted.redacted);
+  } catch {
+    return raw
+      .replace(/\bBearer\s+[A-Za-z0-9\-._~+/]+=*\b/gi, "Bearer [redacted]")
+      .replace(/\bsk-[A-Za-z0-9]{20,}\b/g, "[redacted]")
+      .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "[redacted]")
+      .replace(/\bAKIA[0-9A-Z]{16}\b/g, "[redacted]")
+      .replace(/"(api[_-]?key|token|secret|password)"\s*:\s*"[^"]*"/gi, "\"$1\":\"[redacted]\"");
+  }
 }
 
 async function hourBucketUtc(client: DbClient): Promise<string> {
@@ -155,7 +172,7 @@ export async function recordMessageProcessingFailureTx(
   const message_id = params.message_id.trim();
   const last_error = params.last_error;
   const raw_payload = params.raw_payload
-    ? truncateUtf8Bytes(params.raw_payload, DLQ_RAW_PAYLOAD_MAX_BYTES)
+    ? truncateUtf8Bytes(redactRawPayload(params.raw_payload), DLQ_RAW_PAYLOAD_MAX_BYTES)
     : undefined;
 
   const counter = await upsertFailureCounterTx(client, {
