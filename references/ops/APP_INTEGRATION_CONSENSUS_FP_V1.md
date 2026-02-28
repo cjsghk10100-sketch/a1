@@ -20,6 +20,9 @@ pipeline_manager ↔ app integration operating consensus (v1)
 3. 실패 시 즉시 demote/rollback + `incident_code` 기록. 내부 추론/중간 로그는 사용자 비노출.
 4. adapter는 projection/ingest만 수행하며 승인/승격/강등 판단을 수행하지 않는다.
 5. 상태 전이의 단일 경로는 앱 API 이벤트다(폴더 이동으로 상태 변경 금지).
+6. `--min-margin-rate`는 advisory 임계치다.
+   - `kpi_margin_rate_fail`는 warning-only로 기록하며 단독 demote/block 근거로 사용하지 않는다.
+   - hard gate(approval_integrity_fail, missing_evidence/missing_eval/missing_learn, safety violation)는 demote/block을 유지한다.
 
 ## 3) Immediate Actions
 1. CLI/API 규약 고정

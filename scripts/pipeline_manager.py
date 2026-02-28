@@ -13,6 +13,7 @@ class Decision:
     file: str
     action: str  # promote|demote|hold
     reasons: list
+    warnings: list
     kpi: dict
     age_hours: float
 
@@ -155,7 +156,7 @@ def main():
     ap.add_argument('--min-repro', type=float, default=0.90)
     ap.add_argument('--default-revenue-usdc', type=float, default=0.0)
     ap.add_argument('--default-token-cost-usdc', type=float, default=0.0)
-    ap.add_argument('--min-margin-rate', type=float, default=0.0, help='0.0~1.0, e.g., 0.2 means 20%%')
+    ap.add_argument('--min-margin-rate', type=float, default=0.0, help='Advisory threshold only (warning), 0.0~1.0, e.g., 0.2 means 20%%')
 
     args = ap.parse_args()
 
@@ -191,6 +192,7 @@ def main():
         age_hours = (datetime.now().timestamp() - st.st_mtime) / 3600.0
 
         reasons = []
+        warnings = []
         action = 'promote'
 
         if age_hours > args.sla_hours:
@@ -228,7 +230,7 @@ def main():
         else:
             margin_rate = (revenue - token_cost) / revenue
             if margin_rate < args.min_margin_rate:
-                reasons.append('kpi_margin_rate_fail')
+                warnings.append('kpi_margin_rate_fail')
 
         kpi['revenue_usdc'] = revenue
         kpi['token_cost_usdc'] = token_cost
@@ -237,7 +239,7 @@ def main():
         if reasons:
             action = 'demote'
 
-        d = Decision(file=str(path), action=action, reasons=reasons, kpi=kpi, age_hours=age_hours)
+        d = Decision(file=str(path), action=action, reasons=reasons, warnings=warnings, kpi=kpi, age_hours=age_hours)
         decisions.append(d)
 
         target = applied / path.name if action == 'promote' else demoted / path.name
@@ -259,13 +261,18 @@ def main():
             'total': len(decisions),
             'promote': sum(1 for d in decisions if d.action == 'promote'),
             'demote': sum(1 for d in decisions if d.action == 'demote'),
+            'warn': sum(1 for d in decisions if len(d.warnings) > 0),
         },
         'economics': {
             'total_revenue_usdc': total_revenue,
             'total_token_cost_usdc': total_token_cost,
             'total_net_margin_usdc': total_net_margin,
             'avg_margin_rate': (sum(margins) / len(margins)) if margins else None,
-            'min_margin_rate_required': args.min_margin_rate,
+            'min_margin_rate_advisory': args.min_margin_rate,
+        },
+        'margin_warnings': {
+            'count': sum(1 for d in decisions if 'kpi_margin_rate_fail' in d.warnings),
+            'files': [Path(d.file).name for d in decisions if 'kpi_margin_rate_fail' in d.warnings],
         },
         'decisions': [asdict(d) for d in decisions],
     }

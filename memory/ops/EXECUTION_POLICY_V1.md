@@ -28,6 +28,9 @@
 - adapter 책임: app→folder projection 렌더링, `_drop` 제한 인입, drift 감지/기록.
 - adapter 금지: 승인/승격/강등 판단, 폴더 이동 기반 상태 전이 결정.
 - 상태 전이 판단은 앱 API/정책 게이트에서만 수행한다.
+- 학습 초기 단계(learning-first)에서 `--min-margin-rate`는 advisory 경고 임계치로만 사용한다.
+  - `kpi_margin_rate_fail`는 경고로 기록되지만 단독으로 block/demote를 만들지 않는다.
+  - 하드 게이트(approval_integrity_fail, missing_evidence/missing_eval/missing_learn, safety violation)는 기존처럼 demote/block 유지.
 
 ### Phase 3: 증명 및 학습
 5) Evidence: `EVIDENCE_STANDARD` 충족 여부 기계 검증
