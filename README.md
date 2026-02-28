@@ -171,6 +171,16 @@ Optional engine env vars:
 - `ENGINE_POLL_MS` (default `1200`)
 - `ENGINE_MAX_CLAIMS_PER_CYCLE` (default `1`)
 - `ENGINE_RUN_ONCE` (default `false`)
+- `ENGINE_AGENT_ID` (default `ENGINE_ACTOR_ID`; used as default `from_agent_id` for drop ingest)
+- `ENGINE_INGEST_ENABLED` (default `false`; enables `_drop` ingest bridge)
+- `ENGINE_PIPELINE_ROOT` (optional base directory; default current working directory)
+- `ENGINE_DROP_ROOT` (optional direct drop root override; default `<pipeline_root>/_drop`)
+- `ENGINE_INGEST_MAX_ITEM_CONCURRENCY` (default `2`)
+- `ENGINE_INGEST_MAX_ATTEMPTS` (default `5`)
+- `ENGINE_INGEST_MAX_INGEST_FILE_BYTES` (default `1048576`)
+- `ENGINE_INGEST_MAX_ARTIFACT_BYTES` (default `20971520`)
+- `ENGINE_INGEST_HTTP_TIMEOUT_SEC` (default `15`)
+- `ENGINE_INGEST_STABLE_CHECK_MS` (default `250`)
 
 Auth bootstrap hardening (optional):
 
@@ -200,6 +210,51 @@ curl -sS -X POST http://localhost:3000/v1/runs/claim \
 ```
 
 Claimed runs can be executed by your external engine via existing run/step/tool/artifact endpoints.
+
+### Drop Ingest Bridge (v0.2)
+
+Enable local ingest bridge:
+
+```bash
+ENGINE_INGEST_ENABLED=1 pnpm -C apps/engine start
+```
+
+One-shot ingest run:
+
+```bash
+pnpm -C apps/engine run ingest:once
+```
+
+Drop item format (`.ingest.json` or `.ingest.yaml`) under `<drop_root>`:
+
+```json
+{
+  "schema_version": "2.1",
+  "from_agent_id": "external_engine",
+  "correlation_id": "optional",
+  "message": {
+    "schema_version": "2.1",
+    "from_agent_id": "external_engine",
+    "intent": "message",
+    "payload": { "text": "hello" }
+  },
+  "artifacts": [
+    { "path": "relative/file.bin", "content_type": "application/pdf", "filename": "file.bin" }
+  ]
+}
+```
+
+State machine directories under `<drop_root>`:
+
+- `_processing/` claimed items
+- `_ingested/` successful items
+- `_quarantine/` permanent failures (plus `<item>.error.json`)
+- `_state/` crash-recovery state snapshots
+
+Quarantine debugging:
+
+- inspect `<drop_root>/_quarantine/<item>.error.json` for `reason_code`, `http_status`, `attempt_count`
+- replay by moving the original item file back into `<drop_root>/` after fixing payload/auth/source files
 
 Optional tuning:
 
