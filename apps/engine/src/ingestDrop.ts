@@ -145,6 +145,34 @@ function sanitizeErrorText(input: string): string {
     .slice(0, 500);
 }
 
+function truncateUtf8WithHash(input: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(input, "utf8") <= maxBytes) return input;
+
+  const hashSuffix = `-${sha256Text(input).slice(0, 12)}`;
+  if (Buffer.byteLength(hashSuffix, "utf8") >= maxBytes) {
+    return hashSuffix.slice(0, Math.max(1, maxBytes));
+  }
+
+  let out = "";
+  for (const ch of input) {
+    const candidate = out + ch;
+    if (Buffer.byteLength(candidate + hashSuffix, "utf8") > maxBytes) break;
+    out = candidate;
+  }
+  return `${out || "item"}${hashSuffix}`;
+}
+
+function boundedFileName(name: string, suffix = "", maxBytes = 255): string {
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  if (suffixBytes >= maxBytes) {
+    return truncateUtf8WithHash(suffix, maxBytes);
+  }
+  const baseLimit = maxBytes - suffixBytes;
+  const base = truncateUtf8WithHash(name, baseLimit);
+  return `${base}${suffix}`;
+}
+
 function logEvent(
   cfg: IngestConfig,
   phase: string,
@@ -249,7 +277,7 @@ async function safeMove(src: string, dst: string): Promise<void> {
 }
 
 function stateFilePath(dirs: DropDirs, itemName: string): string {
-  return path.join(dirs.stateDir, `${itemName}.state.json`);
+  return path.join(dirs.stateDir, boundedFileName(itemName, ".state.json"));
 }
 
 async function writeStateAtomic(dirs: DropDirs, itemName: string, state: IngestState): Promise<void> {
@@ -472,6 +500,17 @@ function parseWrapper(raw: string, extension: string): IngestWrapper {
     message: parsed.message,
     artifacts,
   };
+}
+
+async function readUtf8Strict(filePath: string): Promise<string> {
+  const bytes = await fs.readFile(filePath);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    const err = new Error("invalid_utf8") as Error & { permanent: boolean };
+    err.permanent = true;
+    throw err;
+  }
 }
 
 async function sha256File(filePath: string): Promise<string> {
@@ -917,13 +956,29 @@ async function claimDropItem(
 }
 
 async function recoverStateFiles(cfg: IngestConfig, dirs: DropDirs): Promise<void> {
-  const processingItems = new Set(await listProcessingItems(dirs.processingDir));
+  const processingItems = await listProcessingItems(dirs.processingDir);
+  const processingSet = new Set(processingItems);
+
+  // Bootstrap rollback: move stale processing files back to drop for clean re-claim.
+  for (const itemName of processingItems) {
+    const from = path.join(dirs.processingDir, itemName);
+    const to = path.join(dirs.dropRoot, itemName);
+    if (await fileExists(to)) continue;
+    try {
+      await safeMove(from, to);
+      logEvent(cfg, "recovery_processing_rollback", itemName, undefined);
+      processingSet.delete(itemName);
+    } catch {
+      // keep in processing for normal resume path when rollback move fails
+    }
+  }
+
   const stateEntries = await fs.readdir(dirs.stateDir, { withFileTypes: true });
 
   for (const entry of stateEntries) {
     if (!entry.isFile() || !entry.name.endsWith(".state.json")) continue;
     const itemName = entry.name.slice(0, -".state.json".length);
-    if (processingItems.has(itemName)) continue;
+    if (processingSet.has(itemName)) continue;
     logEvent(cfg, "recovery_orphan_state_removed", itemName, undefined);
     await fs.rm(path.join(dirs.stateDir, entry.name), { force: true });
   }
@@ -940,7 +995,7 @@ async function writeErrorManifest(
     server_time?: string;
   },
 ): Promise<void> {
-  const target = path.join(dirs.quarantineDir, `${itemName}.error.json`);
+  const target = path.join(dirs.quarantineDir, boundedFileName(itemName, ".error.json"));
   const tmp = `${target}.tmp-${randomUUID()}`;
   await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   await fsyncPath(tmp);
@@ -1026,7 +1081,7 @@ async function processClaimedItem(
         throw err;
       }
 
-      const raw = await fs.readFile(claimedPath, "utf8");
+      const raw = await readUtf8Strict(claimedPath);
       const wrapper = parseWrapper(raw, extension);
 
       resolvedCorrelationId = wrapper.correlation_id?.trim()
@@ -1112,7 +1167,7 @@ async function processClaimedItem(
         duplicate_replay: posted.duplicateReplay,
       });
 
-      const ingestedPath = path.join(dirs.ingestedDir, itemName);
+      const ingestedPath = path.join(dirs.ingestedDir, boundedFileName(itemName));
       await safeMove(claimedPath, ingestedPath);
       await removeStateFile(dirs, itemName);
       logEvent(cfg, "item_ingested", itemName, resolvedCorrelationId);
@@ -1135,7 +1190,7 @@ async function processClaimedItem(
       await writeStateAtomic(dirs, itemName, state);
 
       if (permanent || state.attempt_count >= cfg.maxAttempts) {
-        const quarantinedPath = path.join(dirs.quarantineDir, itemName);
+        const quarantinedPath = path.join(dirs.quarantineDir, boundedFileName(itemName));
         await safeMove(claimedPath, quarantinedPath).catch(async () => {
           if (await fileExists(claimedPath)) {
             await safeMove(claimedPath, quarantinedPath);

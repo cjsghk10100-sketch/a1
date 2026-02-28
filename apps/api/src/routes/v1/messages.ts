@@ -16,7 +16,7 @@ import { RATE_LIMIT_SCOPE_MESSAGES } from "../../config.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
 import { recordMessageProcessingFailure } from "../../dlq/poisonMessageDlq.js";
 import { appendToStream } from "../../eventStore/index.js";
-import { enforceMessageRateLimitTx } from "../../ratelimit/enforceMessageRateLimit.js";
+import { enforceMessageRateLimit } from "../../ratelimit/enforceMessageRateLimit.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
 type AgentRow = {
@@ -187,20 +187,26 @@ function extractExperimentId(rawBody: Record<string, unknown>, workLinks?: WorkL
   return normalizeOptionalString((payload as Record<string, unknown>).experiment_id) ?? null;
 }
 
-async function resetRateLimitStreakTx(
-  client: DbClient,
+async function resetRateLimitStreakAfterSuccess(
+  pool: DbPool,
   workspace_id: string,
   agent_id: string,
 ): Promise<void> {
-  await client.query(
+  const client = await pool.connect();
+  try {
+    await client.query(
     `UPDATE rate_limit_streaks
      SET consecutive_429 = 0,
          updated_at = now()
      WHERE workspace_id = $1
        AND agent_id = $2
-       AND scope = $3`,
+       AND scope = $3
+       AND consecutive_429 > 0`,
     [workspace_id, agent_id, RATE_LIMIT_SCOPE],
   );
+  } finally {
+    client.release();
+  }
 }
 
 export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -299,6 +305,44 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       }
     }
 
+    const existingBeforeRateLimit = await findExistingMessageByIdempotency(pool, workspace_id, body.idempotency_key);
+    if (existingBeforeRateLimit) {
+      if (existingBeforeRateLimit.from_agent_id === authenticatedAgentId) {
+        await resetRateLimitStreakAfterSuccess(pool, workspace_id, authenticatedAgentId).catch(() => {});
+        const reason_code = "duplicate_idempotent_replay";
+        return reply.code(httpStatusForReasonCode(reason_code)).send({
+          message_id: existingBeforeRateLimit.message_id,
+          idempotent_replay: true,
+          reason_code,
+        });
+      }
+      const reason_code = "idempotency_conflict_unresolved";
+      return reply.code(httpStatusForReasonCode(reason_code)).send(buildContractError(reason_code));
+    }
+
+    try {
+      await enforceMessageRateLimit(pool, {
+        workspace_id,
+        agent_id: authenticatedAgentId,
+        intent: normalizedIntent,
+        experiment_id,
+        correlation_id: body.correlation_id?.trim() || randomUUID(),
+      });
+    } catch (err) {
+      const payload = errorPayloadFromUnknown(err, "internal_error");
+      if (payload.reason_code === "internal_error") {
+        await recordMessageProcessingFailure(pool, {
+          workspace_id,
+          message_id: body.idempotency_key?.trim() || "unknown_idempotency",
+          last_error: payload.reason,
+          source_intent: normalizedIntent,
+          source_kind: "messages_route",
+          raw_payload: JSON.stringify(req.body ?? null),
+        }).catch(() => {});
+      }
+      return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
+    }
+
     const message_id = newMessageId();
     const occurred_at = new Date().toISOString();
     const correlation_id = body.correlation_id?.trim() || randomUUID();
@@ -316,6 +360,7 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
     let committed = false;
     let missingLease = false;
     let replayHandled = false;
+    let shouldResetRateLimitStreak = false;
     let responseStatus = 201;
     let responseBody: unknown = {
       message_id,
@@ -357,15 +402,6 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         }
       }
 
-      await enforceMessageRateLimitTx(txClient, {
-        pool,
-        workspace_id,
-        agent_id: authenticatedAgentId,
-        intent: normalizedIntent,
-        experiment_id,
-        correlation_id,
-      });
-
       try {
         await appendToStream(
           pool,
@@ -400,9 +436,9 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
         await txClient.query("BEGIN");
         const existing = await findExistingMessageByIdempotency(txClient, workspace_id, body.idempotency_key);
         if (existing && existing.from_agent_id === authenticatedAgentId) {
-          await resetRateLimitStreakTx(txClient, workspace_id, authenticatedAgentId);
           await txClient.query("COMMIT");
           committed = true;
+          shouldResetRateLimitStreak = true;
 
           const reason_code = "duplicate_idempotent_replay";
           responseStatus = httpStatusForReasonCode(reason_code);
@@ -437,21 +473,14 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
           );
         }
 
-        await resetRateLimitStreakTx(txClient, workspace_id, authenticatedAgentId);
         await txClient.query("COMMIT");
         committed = true;
+        shouldResetRateLimitStreak = true;
       }
     } catch (err) {
       if (!committed && txClient) {
-        if (err instanceof ContractViolationError && err.reason_code === "rate_limited") {
-          await txClient.query("COMMIT").catch(async () => {
-            await txClient?.query("ROLLBACK").catch(() => {});
-          });
-          committed = true;
-        } else {
-          await txClient.query("ROLLBACK").catch(() => {});
-          committed = true;
-        }
+        await txClient.query("ROLLBACK").catch(() => {});
+        committed = true;
       }
 
       if (isNowaitLockUnavailable(err)) {
@@ -469,10 +498,11 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
       if (payload.reason_code === "internal_error") {
         await recordMessageProcessingFailure(pool, {
           workspace_id,
-          message_id,
+          message_id: body.idempotency_key?.trim() || message_id,
           last_error: payload.reason,
           source_intent: normalizedIntent,
           source_kind: "messages_route",
+          raw_payload: JSON.stringify(req.body ?? null),
         }).catch(() => {});
       }
       return reply.code(httpStatusForReasonCode(payload.reason_code)).send(payload);
@@ -482,6 +512,9 @@ export async function registerMessageRoutes(app: FastifyInstance, pool: DbPool):
 
     if (missingLease === true) {
       reply.header("X-Lease-Warning", "missing_lease");
+    }
+    if (shouldResetRateLimitStreak) {
+      await resetRateLimitStreakAfterSuccess(pool, workspace_id, authenticatedAgentId).catch(() => {});
     }
 
     return reply.code(responseStatus).send(responseBody);

@@ -135,9 +135,15 @@ async function incrementBucketTx(
     retry_after_sec: string;
     server_time: string;
   }>(
-    `WITH w AS (
+    `WITH t AS (
        SELECT
-         to_timestamp(floor(extract(epoch FROM now()) / $2) * $2) AS window_start
+         (now() AT TIME ZONE 'UTC') AS now_utc,
+         clock_timestamp() AS wall_clock
+     ),
+     w AS (
+       SELECT
+         to_timestamp(floor(extract(epoch FROM t.now_utc) / $2) * $2) AS window_start
+       FROM t
      )
      INSERT INTO rate_limit_buckets (
        bucket_key,
@@ -151,19 +157,19 @@ async function incrementBucketTx(
        w.window_start,
        $2,
        1,
-       now()
+       (SELECT wall_clock FROM t)
      FROM w
      ON CONFLICT (bucket_key, window_start, window_sec)
      DO UPDATE SET
        count = rate_limit_buckets.count + 1,
-       updated_at = now()
+       updated_at = (SELECT wall_clock FROM t)
      RETURNING
        count::text AS count,
        GREATEST(
-         EXTRACT(EPOCH FROM (window_start + (window_sec || ' seconds')::interval - now()))::INT,
+         EXTRACT(EPOCH FROM (window_start + (window_sec || ' seconds')::interval - (SELECT wall_clock FROM t)))::INT,
          0
        )::text AS retry_after_sec,
-       now()::text AS server_time`,
+       (SELECT wall_clock::text FROM t) AS server_time`,
     [input.bucket_key, input.window_sec],
   );
 
@@ -188,7 +194,12 @@ async function bumpRateLimitStreakTx(
     should_emit_incident: boolean;
     server_time: string;
   }>(
-    `INSERT INTO rate_limit_streaks (
+    `WITH t AS (
+       SELECT
+         ((now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS now_utc_tz,
+         clock_timestamp() AS wall_clock
+     )
+     INSERT INTO rate_limit_streaks (
        workspace_id,
        agent_id,
        scope,
@@ -196,25 +207,25 @@ async function bumpRateLimitStreakTx(
        last_429_at,
        updated_at
      ) VALUES (
-       $1, $2, $3, 1, now(), now()
+       $1, $2, $3, 1, (SELECT now_utc_tz FROM t), (SELECT wall_clock FROM t)
      )
      ON CONFLICT (workspace_id, agent_id, scope)
      DO UPDATE SET
        consecutive_429 = CASE
          WHEN rate_limit_streaks.last_429_at IS NULL
-           OR rate_limit_streaks.last_429_at < now() - interval '10 minutes'
+           OR rate_limit_streaks.last_429_at < (SELECT now_utc_tz FROM t) - interval '10 minutes'
          THEN 1
          ELSE rate_limit_streaks.consecutive_429 + 1
        END,
-       last_429_at = now(),
-       updated_at = now()
+       last_429_at = (SELECT now_utc_tz FROM t),
+       updated_at = (SELECT wall_clock FROM t)
      RETURNING
        consecutive_429::text AS consecutive_429,
        (
          last_incident_at IS NULL
-         OR last_incident_at < now() - make_interval(secs => $4)
+         OR last_incident_at < (SELECT now_utc_tz FROM t) - make_interval(secs => $4)
        ) AS should_emit_incident,
-       now()::text AS server_time`,
+       (SELECT wall_clock::text FROM t) AS server_time`,
     [input.workspace_id, input.agent_id, input.scope, input.incident_mute_sec],
   );
 
@@ -275,9 +286,14 @@ async function emitAgentFloodingIncidentIfNeededTx(
 
   await appendWithIdempotencyReplayTx(pool, client, event);
   await client.query(
-    `UPDATE rate_limit_streaks
-     SET last_incident_at = now(),
-         updated_at = now()
+    `WITH t AS (
+       SELECT
+         ((now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') AS now_utc_tz,
+         clock_timestamp() AS wall_clock
+     )
+     UPDATE rate_limit_streaks
+     SET last_incident_at = (SELECT now_utc_tz FROM t),
+         updated_at = (SELECT wall_clock FROM t)
      WHERE workspace_id = $1
        AND agent_id = $2
        AND scope = $3`,
@@ -292,7 +308,7 @@ async function cleanupBucketsBestEffortTx(client: DbClient): Promise<void> {
      WHERE ctid IN (
        SELECT ctid
        FROM rate_limit_buckets
-       WHERE updated_at < now() - interval '2 hours'
+       WHERE updated_at < ((now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '2 hours'
        LIMIT 200
      )`,
   ).catch(() => {});
@@ -342,7 +358,7 @@ function buildRules(cfg: RateLimitConfig, params: EnforceParams): RateLimitRule[
       window_sec: 3600,
     });
   }
-  return rules;
+  return rules.sort((a, b) => a.bucket_key.localeCompare(b.bucket_key));
 }
 
 export async function enforceMessageRateLimitTx(
@@ -396,4 +412,33 @@ export async function enforceMessageRateLimitTx(
     allowed: true,
     server_time,
   };
+}
+
+export async function enforceMessageRateLimit(
+  pool: DbPool,
+  params: EnforceParams,
+): Promise<EnforceOk> {
+  const client = await pool.connect();
+  let inTx = false;
+  try {
+    await client.query("BEGIN");
+    inTx = true;
+    const result = await enforceMessageRateLimitTx(client, { ...params, pool });
+    await client.query("COMMIT");
+    inTx = false;
+    return result;
+  } catch (err) {
+    if (inTx) {
+      if (err instanceof ContractViolationError && err.reason_code === "rate_limited") {
+        await client.query("COMMIT").catch(async () => {
+          await client.query("ROLLBACK").catch(() => {});
+        });
+      } else {
+        await client.query("ROLLBACK").catch(() => {});
+      }
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
 }

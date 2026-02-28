@@ -328,10 +328,7 @@ async function fetchSnapshots(
          SELECT incident_id, status, updated_at
          FROM proj_incidents
          WHERE workspace_id = e.workspace_id
-           AND (
-             run_id = lr.run_id
-             OR correlation_id = COALESCE(lr.correlation_id, e.correlation_id)
-           )
+           AND run_id = lr.run_id
          ORDER BY updated_at DESC, incident_id ASC
          LIMIT 1
        ) AS li ON TRUE
@@ -340,10 +337,7 @@ async function fetchSnapshots(
          FROM proj_approvals
          WHERE workspace_id = e.workspace_id
            AND status IN ('pending', 'held')
-           AND (
-             run_id = lr.run_id
-             OR correlation_id = COALESCE(lr.correlation_id, e.correlation_id)
-           )
+           AND run_id = lr.run_id
          ORDER BY updated_at DESC, approval_id ASC
          LIMIT 1
        ) AS la ON TRUE
@@ -414,10 +408,7 @@ async function fetchSnapshots(
          SELECT incident_id, status, updated_at
          FROM proj_incidents
          WHERE workspace_id = r.workspace_id
-           AND (
-             run_id = r.run_id
-             OR correlation_id = r.correlation_id
-           )
+           AND run_id = r.run_id
          ORDER BY updated_at DESC, incident_id ASC
          LIMIT 1
        ) AS li ON TRUE
@@ -426,10 +417,7 @@ async function fetchSnapshots(
          FROM proj_approvals
          WHERE workspace_id = r.workspace_id
            AND status IN ('pending', 'held')
-           AND (
-             run_id = r.run_id
-             OR correlation_id = r.correlation_id
-           )
+           AND run_id = r.run_id
          ORDER BY updated_at DESC, approval_id ASC
          LIMIT 1
        ) AS la ON TRUE
@@ -504,10 +492,7 @@ async function fetchSnapshots(
          SELECT incident_id, status, updated_at
          FROM proj_incidents
          WHERE workspace_id = a.workspace_id
-           AND (
-             run_id = r.run_id
-             OR correlation_id = COALESCE(r.correlation_id, a.correlation_id)
-           )
+           AND run_id = r.run_id
          ORDER BY updated_at DESC, incident_id ASC
          LIMIT 1
        ) AS li ON TRUE
@@ -561,10 +546,7 @@ async function fetchSnapshots(
          SELECT incident_id, status
          FROM proj_incidents
          WHERE workspace_id = s.workspace_id
-           AND (
-             run_id = s.run_id
-             OR correlation_id = s.correlation_id
-           )
+           AND run_id = s.run_id
          ORDER BY updated_at DESC, incident_id ASC
          LIMIT 1
        ) AS li ON TRUE

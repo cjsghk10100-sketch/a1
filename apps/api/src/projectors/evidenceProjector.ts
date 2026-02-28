@@ -45,11 +45,77 @@ async function applyEvidenceManifestCreated(tx: DbClient, event: EvidenceManifes
       finalized_at,
       created_at,
       updated_at,
-      last_event_id
+      last_event_id,
+      last_event_occurred_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,$18
+      $1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,$18,$17
     )
-    ON CONFLICT (run_id) DO NOTHING`,
+    ON CONFLICT (run_id) DO UPDATE SET
+      evidence_id = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.evidence_id
+        ELSE proj_evidence_manifests.evidence_id
+      END,
+      run_status = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.run_status
+        ELSE proj_evidence_manifests.run_status
+      END,
+      manifest = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.manifest
+        ELSE proj_evidence_manifests.manifest
+      END,
+      manifest_hash = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.manifest_hash
+        ELSE proj_evidence_manifests.manifest_hash
+      END,
+      event_hash_root = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.event_hash_root
+        ELSE proj_evidence_manifests.event_hash_root
+      END,
+      stream_type = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.stream_type
+        ELSE proj_evidence_manifests.stream_type
+      END,
+      stream_id = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.stream_id
+        ELSE proj_evidence_manifests.stream_id
+      END,
+      from_seq = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.from_seq
+        ELSE proj_evidence_manifests.from_seq
+      END,
+      to_seq = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.to_seq
+        ELSE proj_evidence_manifests.to_seq
+      END,
+      event_count = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.event_count
+        ELSE proj_evidence_manifests.event_count
+      END,
+      finalized_at = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.finalized_at
+        ELSE proj_evidence_manifests.finalized_at
+      END,
+      updated_at = GREATEST(proj_evidence_manifests.updated_at, EXCLUDED.updated_at),
+      last_event_id = CASE
+        WHEN proj_evidence_manifests.last_event_occurred_at IS NULL OR proj_evidence_manifests.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.last_event_id
+        ELSE proj_evidence_manifests.last_event_id
+      END,
+      last_event_occurred_at = GREATEST(
+        COALESCE(proj_evidence_manifests.last_event_occurred_at, '-infinity'::timestamptz),
+        EXCLUDED.last_event_occurred_at
+      )`,
     [
       event.data.evidence_id,
       event.workspace_id,

@@ -48,7 +48,8 @@ async function applyIncidentOpened(tx: DbClient, event: IncidentOpenedV1): Promi
       rca, rca_updated_at, learning_count, closed_reason,
       created_by_type, created_by_id,
       created_at, closed_at, updated_at,
-      correlation_id, last_event_id
+      correlation_id, last_event_id,
+      last_event_occurred_at
     ) VALUES (
       $1,
       $2, $3, $4, $5,
@@ -56,9 +57,35 @@ async function applyIncidentOpened(tx: DbClient, event: IncidentOpenedV1): Promi
       '{}'::jsonb, NULL, 0, NULL,
       $9, $10,
       $11, NULL, $12,
-      $13, $14
+      $13, $14,
+      $11
     )
-    ON CONFLICT (incident_id) DO NOTHING`,
+    ON CONFLICT (incident_id) DO UPDATE SET
+      status = CASE
+        WHEN proj_incidents.last_event_occurred_at IS NULL OR proj_incidents.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.status
+        ELSE proj_incidents.status
+      END,
+      title = CASE
+        WHEN proj_incidents.title = 'unknown' THEN EXCLUDED.title
+        ELSE proj_incidents.title
+      END,
+      summary = COALESCE(proj_incidents.summary, EXCLUDED.summary),
+      severity = COALESCE(proj_incidents.severity, EXCLUDED.severity),
+      updated_at = GREATEST(proj_incidents.updated_at, EXCLUDED.updated_at),
+      correlation_id = CASE
+        WHEN proj_incidents.correlation_id = 'unknown' THEN EXCLUDED.correlation_id
+        ELSE proj_incidents.correlation_id
+      END,
+      last_event_id = CASE
+        WHEN proj_incidents.last_event_occurred_at IS NULL OR proj_incidents.last_event_occurred_at <= EXCLUDED.last_event_occurred_at
+        THEN EXCLUDED.last_event_id
+        ELSE proj_incidents.last_event_id
+      END,
+      last_event_occurred_at = GREATEST(
+        COALESCE(proj_incidents.last_event_occurred_at, '-infinity'::timestamptz),
+        EXCLUDED.last_event_occurred_at
+      )`,
     [
       event.data.incident_id,
       event.workspace_id,
@@ -81,6 +108,7 @@ async function applyIncidentOpened(tx: DbClient, event: IncidentOpenedV1): Promi
 async function applyIncidentRcaUpdated(tx: DbClient, event: IncidentRcaUpdatedV1): Promise<void> {
   const incident_id = event.data.incident_id;
   if (!incident_id) throw new Error("incident.rca.updated requires incident_id");
+  const workspace_id = event.workspace_id || "unknown";
 
   const res = await tx.query(
     `UPDATE proj_incidents
@@ -88,13 +116,42 @@ async function applyIncidentRcaUpdated(tx: DbClient, event: IncidentRcaUpdatedV1
        rca = $2::jsonb,
        rca_updated_at = $3,
        updated_at = $3,
-       last_event_id = $4
-     WHERE incident_id = $1`,
-    [incident_id, toJsonb(event.data.rca), event.occurred_at, event.event_id],
+       last_event_id = $4,
+       last_event_occurred_at = $3
+     WHERE incident_id = $1
+       AND workspace_id = $5
+       AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $3)`,
+    [incident_id, toJsonb(event.data.rca), event.occurred_at, event.event_id, workspace_id],
   );
 
-  if (res.rowCount !== 1) {
-    throw new Error("incident.rca.updated target not found in proj_incidents");
+  if (res.rowCount === 0) {
+    await tx.query(
+      `INSERT INTO proj_incidents (
+        incident_id,
+        workspace_id, room_id, thread_id, run_id,
+        status, title, summary, severity,
+        rca, rca_updated_at, learning_count, closed_reason,
+        created_by_type, created_by_id,
+        created_at, closed_at, updated_at,
+        correlation_id, last_event_id, last_event_occurred_at
+      ) VALUES (
+        $1,$2,NULL,NULL,NULL,
+        'open','unknown',NULL,NULL,
+        $3::jsonb,$4,0,NULL,
+        'service','projector',
+        $4,NULL,$4,
+        $5,$6,$4
+      )
+      ON CONFLICT (incident_id) DO NOTHING`,
+      [
+        incident_id,
+        workspace_id,
+        toJsonb(event.data.rca),
+        event.occurred_at,
+        event.correlation_id || `unknown:${incident_id}`,
+        event.event_id,
+      ],
+    );
   }
 }
 
@@ -104,6 +161,34 @@ async function applyIncidentLearningLogged(tx: DbClient, event: IncidentLearning
   if (!incident_id) throw new Error("incident.learning.logged requires incident_id");
   if (!learning_id) throw new Error("incident.learning.logged requires learning_id");
   if (!event.data.note?.trim()) throw new Error("incident.learning.logged requires note");
+  const workspace_id = event.workspace_id || "unknown";
+
+  await tx.query(
+    `INSERT INTO proj_incidents (
+      incident_id,
+      workspace_id, room_id, thread_id, run_id,
+      status, title, summary, severity,
+      rca, rca_updated_at, learning_count, closed_reason,
+      created_by_type, created_by_id,
+      created_at, closed_at, updated_at,
+      correlation_id, last_event_id, last_event_occurred_at
+    ) VALUES (
+      $1,$2,NULL,NULL,NULL,
+      'open','unknown',NULL,NULL,
+      '{}'::jsonb,NULL,0,NULL,
+      'service','projector',
+      $3,NULL,$3,
+      $4,$5,$3
+    )
+    ON CONFLICT (incident_id) DO NOTHING`,
+    [
+      incident_id,
+      workspace_id,
+      event.occurred_at,
+      event.correlation_id || `unknown:${incident_id}`,
+      event.event_id,
+    ],
+  );
 
   await tx.query(
     `INSERT INTO proj_incident_learning (
@@ -123,7 +208,7 @@ async function applyIncidentLearningLogged(tx: DbClient, event: IncidentLearning
     [
       learning_id,
       incident_id,
-      event.workspace_id,
+      workspace_id,
       event.room_id ?? null,
       event.run_id ?? null,
       event.data.note,
@@ -135,12 +220,13 @@ async function applyIncidentLearningLogged(tx: DbClient, event: IncidentLearning
     ],
   );
 
-  const res = await tx.query(
+  await tx.query(
     `UPDATE proj_incidents AS i
      SET
        learning_count = s.learning_count,
        updated_at = $2,
-       last_event_id = $3
+       last_event_id = $3,
+       last_event_occurred_at = $2
      FROM (
        SELECT incident_id, COUNT(*)::int AS learning_count
        FROM proj_incident_learning
@@ -148,18 +234,17 @@ async function applyIncidentLearningLogged(tx: DbClient, event: IncidentLearning
        GROUP BY incident_id
      ) AS s
      WHERE i.incident_id = s.incident_id
-       AND i.incident_id = $1`,
-    [incident_id, event.occurred_at, event.event_id],
+       AND i.incident_id = $1
+       AND i.workspace_id = $4
+       AND (i.last_event_occurred_at IS NULL OR i.last_event_occurred_at < $2)`,
+    [incident_id, event.occurred_at, event.event_id, workspace_id],
   );
-
-  if (res.rowCount !== 1) {
-    throw new Error("incident.learning.logged target not found in proj_incidents");
-  }
 }
 
 async function applyIncidentClosed(tx: DbClient, event: IncidentClosedV1): Promise<void> {
   const incident_id = event.data.incident_id;
   if (!incident_id) throw new Error("incident.closed requires incident_id");
+  const workspace_id = event.workspace_id || "unknown";
 
   const res = await tx.query(
     `UPDATE proj_incidents
@@ -168,14 +253,43 @@ async function applyIncidentClosed(tx: DbClient, event: IncidentClosedV1): Promi
        closed_reason = COALESCE($2, closed_reason),
        closed_at = COALESCE(closed_at, $3),
        updated_at = $3,
-       last_event_id = $4
+       last_event_id = $4,
+       last_event_occurred_at = $3
      WHERE incident_id = $1
+       AND workspace_id = $5
+       AND (last_event_occurred_at IS NULL OR last_event_occurred_at < $3)
        AND status = 'open'`,
-    [incident_id, event.data.reason ?? null, event.occurred_at, event.event_id],
+    [incident_id, event.data.reason ?? null, event.occurred_at, event.event_id, workspace_id],
   );
 
-  if (res.rowCount !== 1) {
-    throw new Error("incident.closed target not open in proj_incidents");
+  if (res.rowCount === 0) {
+    await tx.query(
+      `INSERT INTO proj_incidents (
+        incident_id,
+        workspace_id, room_id, thread_id, run_id,
+        status, title, summary, severity,
+        rca, rca_updated_at, learning_count, closed_reason,
+        created_by_type, created_by_id,
+        created_at, closed_at, updated_at,
+        correlation_id, last_event_id, last_event_occurred_at
+      ) VALUES (
+        $1,$2,NULL,NULL,NULL,
+        'closed','unknown',NULL,NULL,
+        '{}'::jsonb,NULL,0,$3,
+        'service','projector',
+        $4,$4,$4,
+        $5,$6,$4
+      )
+      ON CONFLICT (incident_id) DO NOTHING`,
+      [
+        incident_id,
+        workspace_id,
+        event.data.reason ?? null,
+        event.occurred_at,
+        event.correlation_id || `unknown:${incident_id}`,
+        event.event_id,
+      ],
+    );
   }
 }
 

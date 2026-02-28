@@ -504,8 +504,8 @@ async function main(): Promise<void> {
         `SELECT COUNT(*)::text AS count
          FROM evt_events
          WHERE workspace_id = $1
-           AND idempotency_key = $2`,
-        [workspace, `incident:poison_message:${workspace}:${message_id}`],
+           AND idempotency_key LIKE $2`,
+        [workspace, `incident:poison_message:${workspace}:${message_id}:%`],
       );
       assert.equal(Number.parseInt(poisonIncidentAfter4th.rows[0]?.count ?? "0", 10), 1);
     }
