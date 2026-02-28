@@ -5,7 +5,6 @@ import { startHeartCron } from "./cron/heartCron.js";
 import { setDbLogger, type DbPool } from "./db/pool.js";
 import { registerTraceHooks } from "./observability/registerTraceHooks.js";
 import { setTraceLogger } from "./observability/traceContext.js";
-import { registerHealthRoutes } from "./routes/health.js";
 import { registerV1Routes } from "./routes/v1/index.js";
 import { runQueuedRunsWorker } from "./runtime/runWorker.js";
 import { findSessionByAccessToken, touchSessionLastSeen } from "./security/authSessions.js";
@@ -132,10 +131,9 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
     );
   }
 
-  await registerHealthRoutes(app, ctx.pool);
-
   app.addHook("preHandler", async (req, reply) => {
     if (req.url === "/health") return;
+    if (requestPath(req.url) === "/v1/system/health") return;
     if (!req.url.startsWith("/v1/")) return;
     if (req.url.startsWith("/v1/auth/")) return;
     if (
