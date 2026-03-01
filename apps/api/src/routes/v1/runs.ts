@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 
 import { newRunId, newStepId, type RunEventV1, type RunStatus } from "@agentapp/shared";
 
+import { applyAutomation } from "../../automation/promotionLoop.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
 import { finalizeRunEvidenceManifest } from "../../evidence/manifest.js";
 import { appendToStream } from "../../eventStore/index.js";
@@ -976,6 +977,30 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
       policy_context: {},
       model_context: {},
       display: {},
+    });
+
+    void applyAutomation(pool, {
+      workspace_id,
+      entity_type: "run",
+      entity_id: existing.rows[0].run_id,
+      run_id: existing.rows[0].run_id,
+      trigger: "run.failed",
+      event_data:
+        event.data && typeof event.data === "object" && !Array.isArray(event.data)
+          ? (event.data as Record<string, unknown>)
+          : undefined,
+      correlation_id: existing.rows[0].correlation_id,
+      actor: { actor_type: "service", actor_id: "api" },
+      log: req.log,
+    }).catch((err) => {
+      req.log.warn(
+        {
+          err,
+          workspace_id,
+          run_id: existing.rows[0].run_id,
+        },
+        "automation loop failed after run.failed persistence",
+      );
     });
 
     await applyRunEvent(pool, event as RunEventV1);
