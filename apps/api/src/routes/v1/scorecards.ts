@@ -7,15 +7,15 @@ import {
   newScorecardId,
   type ActorType,
   type LessonLoggedDataV1,
-  type ScorecardId,
   type ScoreDecision,
   type ScoreMetricV1,
   type ScorecardEventV1,
 } from "@agentapp/shared";
 
+import { applyAutomation } from "../../automation/promotionLoop.js";
 import type { DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
-import { evaluatePromotionLoopForScorecard, getPromotionLoopStatus } from "../../promotion/loop.js";
+import { getPromotionLoopStatus } from "../../promotion/loop.js";
 import { applyScorecardEvent } from "../../projectors/scorecardProjector.js";
 import { sha256Hex, stableStringify } from "../../security/hashChain.js";
 
@@ -27,12 +27,6 @@ function getHeaderString(value: string | string[] | undefined): string | undefin
 function workspaceIdFromReq(req: { headers: Record<string, unknown> }): string {
   const raw = getHeaderString(req.headers["x-workspace-id"] as string | string[] | undefined);
   return raw?.trim() || "ws_dev";
-}
-
-function principalIdFromReq(req: { headers: Record<string, unknown> }): string | undefined {
-  const raw = getHeaderString(req.headers["x-principal-id"] as string | string[] | undefined);
-  const value = raw?.trim();
-  return value?.length ? value : undefined;
 }
 
 function normalizeActorType(raw: unknown): ActorType {
@@ -256,23 +250,37 @@ export async function registerScorecardRoutes(app: FastifyInstance, pool: DbPool
       display: {},
     });
     await applyScorecardEvent(pool, event as ScorecardEventV1);
-    try {
-      await evaluatePromotionLoopForScorecard(pool, {
-        workspace_id,
-        scorecard_id: scorecard_id as ScorecardId,
-        actor: { actor_type, actor_id },
-        actor_principal_id: principalIdFromReq(req),
-      });
-    } catch (err) {
+    const eventData = event.data as Record<string, unknown>;
+    const automationMetadata =
+      eventData.metadata && typeof eventData.metadata === "object" && !Array.isArray(eventData.metadata)
+        ? (eventData.metadata as Record<string, unknown>)
+        : undefined;
+    const risk_tier =
+      typeof automationMetadata?.risk_tier === "string" && automationMetadata.risk_tier.trim().length > 0
+        ? automationMetadata.risk_tier.trim()
+        : undefined;
+    void applyAutomation(pool, {
+      workspace_id,
+      entity_type: "scorecard",
+      entity_id: scorecard_id,
+      scorecard_id,
+      run_id: run_id ?? undefined,
+      risk_tier,
+      trigger: "scorecard.recorded",
+      event_data: eventData,
+      correlation_id,
+      actor: { actor_type, actor_id },
+      log: req.log,
+    }).catch((err) => {
       req.log.warn(
         {
           err,
           workspace_id,
           scorecard_id,
         },
-        "promotion loop evaluation failed after scorecard persistence",
+        "automation loop failed after scorecard persistence",
       );
-    }
+    });
     return reply.code(201).send({ scorecard_id });
   });
 

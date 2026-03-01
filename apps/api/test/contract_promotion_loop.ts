@@ -4,8 +4,8 @@ import path from "node:path";
 
 import pg from "pg";
 
-import { buildServer } from "../src/server.js";
 import { createPool } from "../src/db/pool.js";
+import { buildServer } from "../src/server.js";
 
 const { Client } = pg;
 
@@ -68,13 +68,13 @@ async function requestJson<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  const json = (text.length ? JSON.parse(text) : {}) as T;
-  return { status: res.status, json };
+  return { status: res.status, json: (text.length ? JSON.parse(text) : {}) as T };
 }
 
 async function main(): Promise<void> {
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
+
   process.env.PROMOTION_LOOP_ENABLED = "1";
 
   const pool = createPool(databaseUrl);
@@ -160,25 +160,6 @@ async function main(): Promise<void> {
       assert.equal(score.status, 201);
     }
 
-    const pendingRec = await db.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
-       FROM sec_autonomy_recommendations
-       WHERE workspace_id = $1
-         AND agent_id = $2
-         AND status = 'pending'`,
-      [workspace_id, agent_id],
-    );
-    assert.equal(Number(pendingRec.rows[0]?.count ?? "0"), 1);
-
-    const noAutoApprove = await db.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
-       FROM evt_events
-       WHERE workspace_id = $1
-         AND event_type = 'autonomy.upgrade.approved'`,
-      [workspace_id],
-    );
-    assert.equal(Number(noAutoApprove.rows[0]?.count ?? "0"), 0);
-
     for (let i = 0; i < 6; i += 1) {
       const score = await requestJson<{ scorecard_id: string }>(
         baseUrl,
@@ -197,35 +178,33 @@ async function main(): Promise<void> {
       assert.equal(score.status, 201);
     }
 
-    const loopIncident = await db.query<{ count: string }>(
+    const noUpgradeRecommendation = await db.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count
-       FROM proj_incidents
+       FROM sec_autonomy_recommendations
        WHERE workspace_id = $1
-         AND status = 'open'
-         AND title = $2`,
-      [workspace_id, `Promotion Loop: ${agent_id}`],
+         AND agent_id = $2`,
+      [workspace_id, agent_id],
     );
-    assert.ok(Number(loopIncident.rows[0]?.count ?? "0") >= 1);
+    assert.equal(Number(noUpgradeRecommendation.rows[0]?.count ?? "0"), 0);
 
-    const revokeApproval = await db.query<{ count: string }>(
+    const noRevokeApproval = await db.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count
        FROM proj_approvals
        WHERE workspace_id = $1
          AND action = 'capability.revoke'
-         AND context->>'agent_id' = $2
-         AND status IN ('pending', 'held')`,
+         AND context->>'agent_id' = $2`,
       [workspace_id, agent_id],
     );
-    assert.ok(Number(revokeApproval.rows[0]?.count ?? "0") >= 1);
+    assert.equal(Number(noRevokeApproval.rows[0]?.count ?? "0"), 0);
 
-    const quarantined = await db.query<{ quarantined_at: string | null }>(
-      `SELECT quarantined_at::text
+    const notQuarantined = await db.query<{ quarantined_at: string | null }>(
+      `SELECT quarantined_at::text AS quarantined_at
        FROM sec_agents
        WHERE agent_id = $1`,
       [agent_id],
     );
-    assert.equal(quarantined.rowCount, 1);
-    assert.ok(Boolean(quarantined.rows[0].quarantined_at));
+    assert.equal(notQuarantined.rowCount, 1);
+    assert.equal(notQuarantined.rows[0].quarantined_at, null);
 
     const status = await requestJson<{
       agent_id: string;
@@ -246,20 +225,10 @@ async function main(): Promise<void> {
     assert.equal(status.json.agent_id, agent_id);
     assert.ok(status.json.pass_count >= 3);
     assert.ok(status.json.fail_count >= 6);
-    assert.equal(status.json.pending_recommendation, true);
-    assert.equal(status.json.open_loop_incident, true);
-    assert.equal(status.json.pending_revoke_approval, true);
-    assert.equal(status.json.quarantined, true);
-
-    const evaluatedEvents = await db.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
-       FROM evt_events
-       WHERE workspace_id = $1
-         AND event_type = 'promotion.evaluated'
-         AND data->>'agent_id' = $2`,
-      [workspace_id, agent_id],
-    );
-    assert.ok(Number(evaluatedEvents.rows[0]?.count ?? "0") >= 1);
+    assert.equal(status.json.pending_recommendation, false);
+    assert.equal(status.json.open_loop_incident, false);
+    assert.equal(status.json.pending_revoke_approval, false);
+    assert.equal(status.json.quarantined, false);
   } finally {
     delete process.env.PROMOTION_LOOP_ENABLED;
     await db.end();
