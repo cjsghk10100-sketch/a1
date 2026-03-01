@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { newStepId, newToolCallId, type RunEventV1, type ToolEventV1, type Zone } from "@agentapp/shared";
 
+import { applyAutomation } from "../automation/promotionLoop.js";
 import type { DbClient, DbPool } from "../db/pool.js";
 import { requestEgress } from "../egress/requestEgress.js";
 import { appendToStream } from "../eventStore/index.js";
@@ -683,7 +684,12 @@ async function appendRunCompleted(
 async function appendRunFailed(
   pool: DbPool,
   run: QueuedRunRow,
-  input: { causation_id?: string; message: string; error?: Record<string, unknown> },
+  input: {
+    causation_id?: string;
+    message: string;
+    error?: Record<string, unknown>;
+    logger?: WorkerLogger;
+  },
 ): Promise<void> {
   const latest = await loadRun(pool, run.run_id);
   if (!latest) return;
@@ -716,6 +722,25 @@ async function appendRunFailed(
     display: {},
   });
   await applyRunEvent(pool, event as RunEventV1);
+  void applyAutomation(pool, {
+    workspace_id: latest.workspace_id,
+    entity_type: "run",
+    entity_id: latest.run_id,
+    run_id: latest.run_id,
+    trigger: "run.failed",
+    event_data:
+      event.data && typeof event.data === "object" && !Array.isArray(event.data)
+        ? (event.data as Record<string, unknown>)
+        : undefined,
+    correlation_id: latest.correlation_id,
+    actor: runActor(),
+  }).catch((err) => {
+    input.logger?.warn(
+      `[run_worker] automation loop failed after run.failed persistence for ${latest.run_id}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  });
 }
 
 async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger): Promise<ProcessRunResult> {
@@ -744,6 +769,7 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
         causation_id: lastEventId,
         message: tool.message ?? "run_worker_egress_blocked",
         error: tool.error,
+        logger,
       });
       return "failed";
     }
@@ -767,6 +793,7 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
         await appendRunFailed(pool, run, {
           causation_id: lastEventId,
           message,
+          logger,
         });
       } catch (failErr) {
         logger.error(

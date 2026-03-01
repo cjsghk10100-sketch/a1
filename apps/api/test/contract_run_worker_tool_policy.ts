@@ -206,6 +206,16 @@ async function main(): Promise<void> {
     );
     assert.equal(deniedEvent.rowCount, 1);
     assert.equal(deniedEvent.rows[0].reason_code, "capability_scope_tool_not_allowed");
+
+    const automationIncident = await db.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+       FROM evt_events
+       WHERE workspace_id = $1
+         AND event_type = 'incident.opened'
+         AND idempotency_key = $2`,
+      [workspaceHeader["x-workspace-id"], `incident:run_failed:${workspaceHeader["x-workspace-id"]}:${run_id}`],
+    );
+    assert.equal(Number.parseInt(automationIncident.rows[0].count, 10), 1);
   } finally {
     await db.end();
     await app.close();
