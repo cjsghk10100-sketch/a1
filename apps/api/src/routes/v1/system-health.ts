@@ -9,6 +9,7 @@ import {
   assertSupportedSchemaVersion,
 } from "../../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
+import { getRequestAuth } from "../../security/requestAuth.js";
 
 type CronWatchdogSupport =
   | { supported: false }
@@ -462,6 +463,16 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
       "evt_events",
       "cron_health",
       "projector_watermarks",
+      "proj_runs",
+      "proj_approvals",
+      "proj_experiments",
+      "proj_scorecards",
+      "proj_evidence_manifests",
+      "proj_messages",
+      "proj_threads",
+      "proj_rooms",
+      "proj_artifacts",
+      "proj_lessons",
       "dead_letter_messages",
       "dlq_messages",
       "rate_limit_streaks",
@@ -1033,6 +1044,19 @@ export async function registerSystemHealthRoutes(
           buildContractError(reason_code, {
             header_workspace_id: workspace_id,
             body_workspace_id: bodyWorkspace,
+          }),
+        );
+    }
+
+    const auth = getRequestAuth(req);
+    if (auth.workspace_id !== workspace_id) {
+      const reason_code = "unauthorized_workspace" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(
+          buildContractError(reason_code, {
+            header_workspace_id: workspace_id,
+            auth_workspace_id: auth.workspace_id,
           }),
         );
     }

@@ -132,8 +132,8 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
   }
 
   app.addHook("preHandler", async (req, reply) => {
+    const path = requestPath(req.url);
     if (req.url === "/health") return;
-    if (requestPath(req.url) === "/v1/system/health") return;
     if (!req.url.startsWith("/v1/")) return;
     if (req.url.startsWith("/v1/auth/")) return;
     if (
@@ -170,7 +170,9 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
         owner_id: session.owner_id,
         session_id: session.session_id,
       });
-      (req.headers as Record<string, unknown>)["x-workspace-id"] = session.workspace_id;
+      if (path !== "/v1/system/health") {
+        (req.headers as Record<string, unknown>)["x-workspace-id"] = session.workspace_id;
+      }
       (req.headers as Record<string, unknown>)["x-principal-id"] = session.principal_id;
       void touchSessionLastSeen(ctx.pool, session.session_id).catch(() => {});
       return;

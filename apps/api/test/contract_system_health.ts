@@ -144,13 +144,32 @@ type ErrorPayload = {
   details: Record<string, unknown>;
 };
 
+function readAccessToken(payload: unknown): string {
+  if (!payload || typeof payload !== "object") throw new Error("invalid_bootstrap_payload");
+  const session = (payload as { session?: unknown }).session;
+  if (!session || typeof session !== "object") throw new Error("invalid_session_payload");
+  const accessToken = (session as { access_token?: unknown }).access_token;
+  if (typeof accessToken !== "string" || accessToken.trim().length === 0) {
+    throw new Error("missing_access_token");
+  }
+  return accessToken;
+}
+
 async function main(): Promise<void> {
   const databaseUrl = requireEnv("DATABASE_URL");
   await applyMigrations(databaseUrl);
 
   const pool = createPool(databaseUrl);
+  const bootstrapToken = `bootstrap_${Date.now().toString(36)}`;
+  const workspaceId = "ws_system_health_contract";
   const app = await buildServer({
-    config: { port: 0, databaseUrl },
+    config: {
+      port: 0,
+      databaseUrl,
+      authRequireSession: true,
+      authAllowLegacyWorkspaceHeader: false,
+      authBootstrapToken: bootstrapToken,
+    },
     pool,
   });
 
@@ -162,6 +181,19 @@ async function main(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
   try {
+    const bootstrapped = await postJson<{ session: { access_token: string } }>(
+      baseUrl,
+      "/v1/auth/bootstrap-owner",
+      {
+        workspace_id: workspaceId,
+        display_name: "System Health Contract Owner",
+        passphrase: `pass_${workspaceId}`,
+      },
+      { "x-bootstrap-token": bootstrapToken },
+    );
+    assert.equal(bootstrapped.status, 201, JSON.stringify(bootstrapped.json));
+    const accessToken = readAccessToken(bootstrapped.json);
+
     // T1
     const infra = await getJson<HealthInfraResponse>(baseUrl, "/health");
     assert.equal(infra.status, HTTP_OK, infra.text);
@@ -174,6 +206,7 @@ async function main(): Promise<void> {
       baseUrl,
       "/v1/system/health",
       { schema_version: SCHEMA_VERSION },
+      { authorization: `Bearer ${accessToken}` },
     );
     assert.equal(missingWorkspace.status, HTTP_MISSING_WORKSPACE, missingWorkspace.text);
     assert.equal(missingWorkspace.json.reason_code, "missing_workspace_header");
@@ -183,7 +216,10 @@ async function main(): Promise<void> {
       baseUrl,
       "/v1/system/health",
       { schema_version: "9.9" },
-      { "x-workspace-id": "ws_system_health_contract" },
+      {
+        authorization: `Bearer ${accessToken}`,
+        "x-workspace-id": workspaceId,
+      },
     );
     assert.equal(unsupported.status, HTTP_UNSUPPORTED_VERSION, unsupported.text);
     assert.equal(unsupported.json.reason_code, "unsupported_version");
@@ -193,12 +229,15 @@ async function main(): Promise<void> {
       baseUrl,
       "/v1/system/health",
       { schema_version: SCHEMA_VERSION },
-      { "x-workspace-id": "ws_system_health_contract" },
+      {
+        authorization: `Bearer ${accessToken}`,
+        "x-workspace-id": workspaceId,
+      },
     );
     assert.equal(happy.status, HTTP_OK, happy.text);
     assert.equal(happy.json.schema_version, SCHEMA_VERSION);
     assert.equal(happy.json.ok, true);
-    assert.equal(happy.json.workspace_id, "ws_system_health_contract");
+    assert.equal(happy.json.workspace_id, workspaceId);
     assert.equal(typeof happy.json.server_time, "string");
 
     assert.equal(happy.json.checks.db.ok, true);

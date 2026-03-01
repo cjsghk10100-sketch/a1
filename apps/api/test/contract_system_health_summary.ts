@@ -140,6 +140,7 @@ async function requestJson<T>(
 async function postSystemHealth(
   baseUrl: string,
   workspace_id: string,
+  authToken: string,
   bodyWorkspaceId?: string,
 ): Promise<{ status: number; json: SystemHealthSummaryResponse; text: string }> {
   return await requestJson<SystemHealthSummaryResponse>(
@@ -151,9 +152,21 @@ async function postSystemHealth(
       ...(bodyWorkspaceId ? { workspace_id: bodyWorkspaceId } : {}),
     },
     {
+      authorization: `Bearer ${authToken}`,
       "x-workspace-id": workspace_id,
     },
   );
+}
+
+function readAccessToken(payload: unknown): string {
+  if (!payload || typeof payload !== "object") throw new Error("invalid_bootstrap_payload");
+  const session = (payload as { session?: unknown }).session;
+  if (!session || typeof session !== "object") throw new Error("invalid_session_payload");
+  const accessToken = (session as { access_token?: unknown }).access_token;
+  if (typeof accessToken !== "string" || accessToken.trim().length === 0) {
+    throw new Error("missing_access_token");
+  }
+  return accessToken;
 }
 
 async function insertWorkspaceEvent(db: pg.Client, workspaceId: string): Promise<void> {
@@ -237,8 +250,15 @@ async function main(): Promise<void> {
   process.env.HEALTH_CRON_CRITICAL_CHECKS = "heart_cron,heart_cron_aux";
 
   const pool = createPool(databaseUrl);
+  const bootstrapToken = `bootstrap_${randomUUID().slice(0, 12)}`;
   const app = await buildServer({
-    config: { port: 0, databaseUrl },
+    config: {
+      port: 0,
+      databaseUrl,
+      authRequireSession: true,
+      authAllowLegacyWorkspaceHeader: false,
+      authBootstrapToken: bootstrapToken,
+    },
     pool,
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
@@ -252,9 +272,30 @@ async function main(): Promise<void> {
   await db.connect();
 
   try {
+    const accessTokenByWorkspace = new Map<string, string>();
+    const ensureAccessToken = async (workspaceId: string): Promise<string> => {
+      const existing = accessTokenByWorkspace.get(workspaceId);
+      if (existing) return existing;
+      const bootstrapped = await requestJson<{ session: { access_token: string } }>(
+        baseUrl,
+        "POST",
+        "/v1/auth/bootstrap-owner",
+        {
+          workspace_id: workspaceId,
+          display_name: `Owner ${workspaceId}`,
+          passphrase: `pass_${workspaceId}`,
+        },
+        { "x-bootstrap-token": bootstrapToken },
+      );
+      assert.equal(bootstrapped.status, 201, bootstrapped.text);
+      const token = readAccessToken(bootstrapped.json);
+      accessTokenByWorkspace.set(workspaceId, token);
+      return token;
+    };
+
     // T1 route exists and is executable
     const wsT1 = `ws_health_t1_${randomUUID().slice(0, 6)}`;
-    const t1 = await postSystemHealth(baseUrl, wsT1);
+    const t1 = await postSystemHealth(baseUrl, wsT1, await ensureAccessToken(wsT1));
     assert.notEqual(t1.status, 404, t1.text);
     assert.notEqual(t1.status, 500, t1.text);
     assert.equal(t1.status, HTTP_OK, t1.text);
@@ -326,7 +367,7 @@ async function main(): Promise<void> {
        WHERE workspace_id = $1`,
       [wsT3],
     );
-    const t3 = await postSystemHealth(baseUrl, wsT3);
+    const t3 = await postSystemHealth(baseUrl, wsT3, await ensureAccessToken(wsT3));
     assert.equal(t3.status, HTTP_OK, t3.text);
     assert.equal(t3.json.summary.health_summary, "DOWN");
     assert.ok((t3.json.summary.cron_freshness_sec ?? 0) > 900);
@@ -351,8 +392,8 @@ async function main(): Promise<void> {
        ON CONFLICT (workspace_id, message_id) DO NOTHING`,
       [wsA, `msg_${randomUUID().slice(0, 8)}`, `msg_${randomUUID().slice(0, 8)}`],
     );
-    const wsAResp = await postSystemHealth(baseUrl, wsA);
-    const wsBResp = await postSystemHealth(baseUrl, wsB);
+    const wsAResp = await postSystemHealth(baseUrl, wsA, await ensureAccessToken(wsA));
+    const wsBResp = await postSystemHealth(baseUrl, wsB, await ensureAccessToken(wsB));
     assert.equal(wsAResp.status, HTTP_OK, wsAResp.text);
     assert.equal(wsBResp.status, HTTP_OK, wsBResp.text);
     assert.ok(wsAResp.json.summary.dlq_backlog_count >= 2);
@@ -419,7 +460,7 @@ async function main(): Promise<void> {
       [`inc_${randomUUID().slice(0, 12)}`, wsT5, `corr_${randomUUID().slice(0, 8)}`],
     );
 
-    const t5 = await postSystemHealth(baseUrl, wsT5);
+    const t5 = await postSystemHealth(baseUrl, wsT5, await ensureAccessToken(wsT5));
     assert.equal(t5.status, HTTP_OK, t5.text);
     assert.ok(t5.json.summary.top_issues.length >= 2);
     const sortedTopIssues = [...t5.json.summary.top_issues].sort(compareTopIssues);
@@ -427,11 +468,11 @@ async function main(): Promise<void> {
 
     // T6 cache sanity: second call cached=true, server_time remains live.
     const wsT6 = `ws_health_t6_${randomUUID().slice(0, 6)}`;
-    const t6a = await postSystemHealth(baseUrl, wsT6);
+    const t6a = await postSystemHealth(baseUrl, wsT6, await ensureAccessToken(wsT6));
     assert.equal(t6a.status, HTTP_OK, t6a.text);
     assert.equal(t6a.json.meta.cached, false);
     await delay(20);
-    const t6b = await postSystemHealth(baseUrl, wsT6);
+    const t6b = await postSystemHealth(baseUrl, wsT6, await ensureAccessToken(wsT6));
     assert.equal(t6b.status, HTTP_OK, t6b.text);
     assert.equal(t6b.json.meta.cached, true);
     assert.notEqual(t6a.json.server_time, t6b.json.server_time);
