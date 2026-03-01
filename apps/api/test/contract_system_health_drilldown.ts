@@ -217,6 +217,23 @@ async function insertProjectionFallbackRow(
   );
 }
 
+async function insertRateLimitBucket(
+  db: pg.Client,
+  bucketKey: string,
+  windowStart: string,
+  windowSec = 60,
+  count = 7,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO rate_limit_buckets (bucket_key, window_start, window_sec, count, updated_at)
+     VALUES ($1, $2::timestamptz, $3, $4, $2::timestamptz)
+     ON CONFLICT (bucket_key, window_start, window_sec) DO UPDATE
+     SET count = EXCLUDED.count,
+         updated_at = EXCLUDED.updated_at`,
+    [bucketKey, windowStart, windowSec, count],
+  );
+}
+
 async function getIssues(
   baseUrl: string,
   workspaceId: string,
@@ -240,6 +257,26 @@ async function main(): Promise<void> {
   const databaseUrl = requireEnv("DATABASE_URL");
   assertContractDbUrl(databaseUrl);
   await applyMigrations(databaseUrl);
+
+  let streaksRenamedForBucketMode = false;
+  {
+    const setupClient = new Client({ connectionString: databaseUrl });
+    await setupClient.connect();
+    try {
+      const exists = await setupClient.query<{ exists: boolean }>(
+        `SELECT to_regclass('public.rate_limit_streaks') IS NOT NULL AS exists`,
+      );
+      if (exists.rows[0]?.exists) {
+        await setupClient.query(
+          `ALTER TABLE rate_limit_streaks
+           RENAME TO rate_limit_streaks_drilldown_hidden`,
+        );
+        streaksRenamedForBucketMode = true;
+      }
+    } finally {
+      await setupClient.end();
+    }
+  }
 
   process.env.HEALTH_CRON_CRITICAL_CHECKS = "heart_cron";
 
@@ -312,6 +349,26 @@ async function main(): Promise<void> {
     const wsAView = await getIssues(baseUrl, wsA, tokenA, { kind: "dlq_backlog", limit: "10" });
     assert.equal(wsAView.status, HTTP_OK, wsAView.text);
     assert.equal((wsAView.json as DrilldownResponse).items.length, 3);
+
+    // T5b workspace wildcard chars do not leak other workspaces in bucket mode
+    const wsLike = `ws_like_%_${randomUUID().slice(0, 6)}`;
+    const wsPlain = `ws_like_plain_${randomUUID().slice(0, 6)}`;
+    const tokenLike = await bootstrapAccessToken(baseUrl, bootstrapTokenHeader, wsLike);
+    await bootstrapAccessToken(baseUrl, bootstrapTokenHeader, wsPlain);
+    const bucketTs = "2026-01-04T00:00:00Z";
+    await insertRateLimitBucket(db, `agent_min:${wsLike}:agent_a`, bucketTs, 60, 9);
+    await insertRateLimitBucket(db, `agent_min:${wsPlain}:agent_b`, bucketTs, 60, 5);
+    const likeScoped = await getIssues(baseUrl, wsLike, tokenLike, {
+      kind: "rate_limit_flood",
+      limit: "50",
+    });
+    assert.equal(likeScoped.status, HTTP_OK, likeScoped.text);
+    const likeItems = (likeScoped.json as DrilldownResponse).items;
+    assert.ok(likeItems.length >= 1, likeScoped.text);
+    assert.ok(
+      likeItems.every((item) => item.entity_id.startsWith(`agent_min:${wsLike}:`)),
+      JSON.stringify(likeItems),
+    );
 
     // T6 pagination tie-breaker
     const wsPag = `ws_pag_${randomUUID().slice(0, 6)}`;
@@ -399,7 +456,7 @@ async function main(): Promise<void> {
     assert.ok((cronWithCursor.json as DrilldownResponse).server_time.endsWith("Z"), cronWithCursor.text);
 
     // T11 missing optional table graceful degrade (42P01)
-    await db.query("ALTER TABLE rate_limit_streaks RENAME TO rate_limit_streaks_tmp");
+    await db.query("ALTER TABLE rate_limit_buckets RENAME TO rate_limit_buckets_tmp");
     try {
       const degraded = await getIssues(baseUrl, wsMain, tokenMain, {
         kind: "rate_limit_flood",
@@ -408,7 +465,7 @@ async function main(): Promise<void> {
       assert.equal(degraded.status, HTTP_OK, degraded.text);
       assert.equal((degraded.json as DrilldownResponse).items.length, 0);
     } finally {
-      await db.query("ALTER TABLE rate_limit_streaks_tmp RENAME TO rate_limit_streaks");
+      await db.query("ALTER TABLE rate_limit_buckets_tmp RENAME TO rate_limit_buckets");
     }
 
     // T12 limit clamp and invalid limits
@@ -438,6 +495,12 @@ async function main(): Promise<void> {
     assert.equal(HTTP_UNSUPPORTED, httpStatusForReasonCode("unsupported_version"));
     assert.equal(HTTP_MISSING_WORKSPACE, httpStatusForReasonCode("missing_workspace_header"));
   } finally {
+    if (streaksRenamedForBucketMode) {
+      await db.query(
+        `ALTER TABLE IF EXISTS rate_limit_streaks_drilldown_hidden
+         RENAME TO rate_limit_streaks`,
+      );
+    }
     await db.end();
     await app.close();
   }

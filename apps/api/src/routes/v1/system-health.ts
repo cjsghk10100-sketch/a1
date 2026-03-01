@@ -435,6 +435,10 @@ function consumeOpsIssuesRateLimit(workspaceId: string): boolean {
   return true;
 }
 
+function escapeLikeToken(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label}_timeout`)), timeoutMs);
@@ -882,6 +886,7 @@ async function computeHealthComputation(
   workspace_id: string,
   cache: SchemaCheckCache,
 ): Promise<HealthComputation> {
+  const workspaceLikeToken = escapeLikeToken(workspace_id);
   const serverTimeRes = await client.query<{ server_time: string }>(
     `SELECT now()::text AS server_time`,
   );
@@ -997,12 +1002,12 @@ async function computeHealthComputation(
          FROM ${cache.support.rateLimitFlood.tableName}
          WHERE ${cache.support.rateLimitFlood.windowStartColumn} > now() - interval '5 minutes'
            AND (
-             ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('agent_min:' || $1 || ':%')
-             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('agent_hour:' || $1 || ':%')
-             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('exp_hour:' || $1 || ':%')
-             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('hb_min:' || $1 || ':%')
+             ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('agent_min:' || $1 || ':%') ESCAPE '\\'
+             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('agent_hour:' || $1 || ':%') ESCAPE '\\'
+             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('exp_hour:' || $1 || ':%') ESCAPE '\\'
+             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('hb_min:' || $1 || ':%') ESCAPE '\\'
            )`,
-        [workspace_id],
+        [workspaceLikeToken],
       );
       rate_limit_offenders = Number(bucketsRes.rows[0]?.max_in_window ?? 0);
       rate_limit_flood_detected = rate_limit_offenders >= rateLimitFloodOffendersWarn();
@@ -1480,7 +1485,8 @@ async function queryDrilldownRateLimitFlood(
     return queryDrilldownRateLimitFloodStreaks(client, support, workspace_id, applied_limit, cursor);
   }
 
-  const params: Array<string | number> = [workspace_id];
+  const workspaceLikeToken = escapeLikeToken(workspace_id);
+  const params: Array<string | number> = [workspaceLikeToken];
   let cursorClause = "";
   if (cursor) {
     params.push(cursor.updated_at, cursor.entity_id);
@@ -1515,10 +1521,10 @@ async function queryDrilldownRateLimitFlood(
          ${support.countColumn}::int AS bucket_count
        FROM ${support.tableName}
        WHERE (
-         ${support.bucketKeyColumn} LIKE ('agent_min:' || $1 || ':%')
-         OR ${support.bucketKeyColumn} LIKE ('agent_hour:' || $1 || ':%')
-         OR ${support.bucketKeyColumn} LIKE ('exp_hour:' || $1 || ':%')
-         OR ${support.bucketKeyColumn} LIKE ('hb_min:' || $1 || ':%')
+         ${support.bucketKeyColumn} LIKE ('agent_min:' || $1 || ':%') ESCAPE '\\'
+         OR ${support.bucketKeyColumn} LIKE ('agent_hour:' || $1 || ':%') ESCAPE '\\'
+         OR ${support.bucketKeyColumn} LIKE ('exp_hour:' || $1 || ':%') ESCAPE '\\'
+         OR ${support.bucketKeyColumn} LIKE ('hb_min:' || $1 || ':%') ESCAPE '\\'
        )
          ${cursorClause}
        ORDER BY COALESCE(${support.windowStartColumn}, '1970-01-01T00:00:00Z'::timestamptz) DESC, ${support.bucketKeyColumn}::text DESC
@@ -1906,9 +1912,10 @@ export async function registerSystemHealthRoutes(
         .send(buildContractError(reason_code, { failed_checks: ["schema_cache"] }));
     }
 
-    const client = await pool.connect();
+    let client: DbClient | undefined;
     let responsePayload: DrilldownResponse;
     try {
+      client = await pool.connect();
       await beginTimedReadTx(client, dbStatementTimeoutMs(), true);
       const serverTimeRes = await client.query<{ server_time: string }>(
         `SELECT (now() AT TIME ZONE 'UTC')::text || 'Z' AS server_time`,
@@ -1972,7 +1979,7 @@ export async function registerSystemHealthRoutes(
       await client.query("COMMIT");
     } catch (err) {
       try {
-        await client.query("ROLLBACK");
+        await client?.query("ROLLBACK");
       } catch {
         // Ignore rollback failures on broken connections.
       }
@@ -1981,7 +1988,7 @@ export async function registerSystemHealthRoutes(
         .code(httpStatusForReasonCode(reason_code))
         .send(buildContractError(reason_code, { failed_checks: ["issues_drilldown"] }));
     } finally {
-      client.release();
+      client?.release();
     }
 
     return reply.code(SUCCESS_HTTP_STATUS).send(responsePayload);
