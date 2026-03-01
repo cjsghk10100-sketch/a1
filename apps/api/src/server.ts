@@ -170,7 +170,7 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
         owner_id: session.owner_id,
         session_id: session.session_id,
       });
-      if (path !== "/v1/system/health") {
+      if (!path.startsWith("/v1/system/health")) {
         (req.headers as Record<string, unknown>)["x-workspace-id"] = session.workspace_id;
       }
       (req.headers as Record<string, unknown>)["x-principal-id"] = session.principal_id;

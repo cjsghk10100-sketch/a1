@@ -89,18 +89,30 @@ type SchemaCheckCache = {
   };
 };
 
-type TopIssueKind =
-  | "cron_stale"
-  | "projection_lagging"
-  | "projection_watermark_missing"
-  | "dlq_backlog"
-  | "rate_limit_flood"
-  | "active_incidents";
+export const HEALTH_ISSUE_KINDS = [
+  "cron_stale",
+  "projection_lagging",
+  "projection_watermark_missing",
+  "dlq_backlog",
+  "rate_limit_flood",
+  "active_incidents",
+] as const;
+
+export type HealthIssueKind = (typeof HEALTH_ISSUE_KINDS)[number];
+
+export const EXPECTED_PROJECTORS = [
+  "proj_approvals",
+  "proj_runs",
+  "proj_incidents",
+  "proj_experiments",
+  "proj_scorecards",
+  "proj_evidence_manifests",
+] as const;
 
 type TopIssueSeverity = "DOWN" | "DEGRADED";
 
 type TopIssue = {
-  kind: TopIssueKind;
+  kind: HealthIssueKind;
   severity: TopIssueSeverity;
   age_sec: number | null;
   details?: Record<string, number | boolean>;
@@ -171,10 +183,42 @@ type HealthComputation = {
   optional: SystemHealthPayload["checks"]["optional"];
 };
 
+type DrilldownCursor = {
+  updated_at: string;
+  entity_id: string;
+};
+
+type DrilldownItem = {
+  entity_id: string;
+  updated_at: string;
+  age_sec: number | null;
+  details: Record<string, number | boolean>;
+  _updated_at_raw: string;
+};
+
+type DrilldownResponse = {
+  schema_version: typeof SCHEMA_VERSION;
+  server_time: string;
+  kind: HealthIssueKind;
+  applied_limit: number;
+  truncated: boolean;
+  next_cursor?: string;
+  items: Array<{
+    entity_id: string;
+    updated_at: string;
+    age_sec: number | null;
+    details: Record<string, number | boolean>;
+  }>;
+};
+
 const SUCCESS_HTTP_STATUS = httpStatusForReasonCode("duplicate_idempotent_replay");
 const HEALTH_QUERY_TIMEOUT_MS = 50;
 const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_HEALTH_CACHE_MAX_ENTRIES = 512;
+const DEFAULT_ISSUES_LIMIT = 50;
+const MAX_ISSUES_LIMIT = 100;
+const ISSUES_CURSOR_MAX_CHARS = 1024;
+const OPS_ISSUES_RATE_LIMIT_PER_MIN = 300;
 
 const REQUIRED_EVT_EVENTS_COLUMNS = [
   "idempotency_key",
@@ -183,13 +227,16 @@ const REQUIRED_EVT_EVENTS_COLUMNS = [
   "actor",
 ] as const;
 
-const DEFAULT_CRITICAL_CHECK_NAMES = ["heart_cron"] as const;
+export const DEFAULT_CRITICAL_CHECK_NAMES = ["heart_cron"] as const;
 
 let schemaCache: SchemaCheckCache | null = null;
 let schemaCachePromise: Promise<SchemaCheckCache> | null = null;
+let hasRateLimitLastIncidentAt: boolean | null = null;
 
 const summaryCacheByWorkspace = new Map<string, SummaryCacheEntry>();
 const summaryInFlightByWorkspace = new Map<string, Promise<SummaryComputeResult>>();
+// TODO(PR-11): move drilldown rate limit to dedicated DB-backed ops bucket if needed.
+const issuesRateLimitWindows = new Map<string, { windowStartSec: number; count: number }>();
 
 function parseNonNegativeIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -283,6 +330,100 @@ function asIsoFromDbNowText(raw: unknown): string | null {
   const firstSpace = trimmed.indexOf(" ");
   if (firstSpace < 0) return trimmed;
   return `${trimmed.slice(0, firstSpace)}T${trimmed.slice(firstSpace + 1)}`;
+}
+
+function asIsoUtcFromDbText(raw: unknown): string {
+  if (typeof raw !== "string") return "1970-01-01T00:00:00Z";
+  const trimmed = raw.trim();
+  if (!trimmed) return "1970-01-01T00:00:00Z";
+  const normalized = trimmed.replace(" ", "T");
+  if (normalized.endsWith("Z")) return normalized;
+  if (/[+-]\d{2}(:?\d{2})?$/.test(normalized)) return normalized;
+  return `${normalized}Z`;
+}
+
+function epochIsoUtc(): string {
+  return "1970-01-01T00:00:00Z";
+}
+
+function isKnownIssueKind(input: string): input is HealthIssueKind {
+  return (HEALTH_ISSUE_KINDS as readonly string[]).includes(input);
+}
+
+function parseIssueLimit(raw: unknown): { applied_limit: number; invalid: boolean } {
+  if (raw === undefined) return { applied_limit: DEFAULT_ISSUES_LIMIT, invalid: false };
+  if (typeof raw !== "string") return { applied_limit: DEFAULT_ISSUES_LIMIT, invalid: true };
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed <= 0) {
+    return { applied_limit: DEFAULT_ISSUES_LIMIT, invalid: true };
+  }
+  return { applied_limit: Math.min(Math.floor(parsed), MAX_ISSUES_LIMIT), invalid: false };
+}
+
+function encodeDrilldownCursor(cursor: DrilldownCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function parseDrilldownCursor(raw: unknown): DrilldownCursor | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > ISSUES_CURSOR_MAX_CHARS) {
+    throw new Error("invalid_cursor");
+  }
+  let decoded = "";
+  try {
+    decoded = Buffer.from(raw, "base64url").toString("utf8");
+  } catch {
+    throw new Error("invalid_cursor");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded);
+  } catch {
+    throw new Error("invalid_cursor");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("invalid_cursor");
+  }
+  const record = parsed as Record<string, unknown>;
+  const updated_at = record.updated_at;
+  const entity_id = record.entity_id;
+  if (
+    typeof updated_at !== "string" ||
+    updated_at.trim().length === 0 ||
+    typeof entity_id !== "string" ||
+    entity_id.trim().length === 0
+  ) {
+    throw new Error("invalid_cursor");
+  }
+  return {
+    updated_at: updated_at.trim(),
+    entity_id: entity_id.trim(),
+  };
+}
+
+function pruneIssuesRateLimitWindows(nowSec: number): void {
+  for (const [key, value] of issuesRateLimitWindows.entries()) {
+    if (nowSec - value.windowStartSec >= 120) {
+      issuesRateLimitWindows.delete(key);
+    }
+  }
+}
+
+function consumeOpsIssuesRateLimit(workspaceId: string): boolean {
+  const nowSec = Math.floor(Date.now() / 1000);
+  pruneIssuesRateLimitWindows(nowSec);
+  const windowStartSec = Math.floor(nowSec / 60) * 60;
+  const existing = issuesRateLimitWindows.get(workspaceId);
+  if (!existing || existing.windowStartSec !== windowStartSec) {
+    issuesRateLimitWindows.set(workspaceId, { windowStartSec, count: 1 });
+    return true;
+  }
+  if (existing.count >= OPS_ISSUES_RATE_LIMIT_PER_MIN) {
+    return false;
+  }
+  existing.count += 1;
+  issuesRateLimitWindows.set(workspaceId, existing);
+  return true;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -581,8 +722,8 @@ function isCacheEntryFresh(entry: SummaryCacheEntry | undefined): boolean {
   return Date.now() - entry.stored_at_ms < entry.ttl_ms;
 }
 
-async function beginTimedReadTx(client: DbClient, timeoutMs: number): Promise<void> {
-  await client.query("BEGIN");
+async function beginTimedReadTx(client: DbClient, timeoutMs: number, readOnly = false): Promise<void> {
+  await client.query(readOnly ? "BEGIN READ ONLY" : "BEGIN");
   await client.query(`SELECT set_config('statement_timeout', $1, true)`, [`${timeoutMs}ms`]);
 }
 
@@ -1013,6 +1154,596 @@ function bodyWorkspaceId(bodyRecord: Record<string, unknown>): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function queryWorkspaceIdFromQuery(queryRecord: Record<string, unknown>): string | null {
+  const raw = queryRecord.workspace_id;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function pgErrorCode(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function isMissingTableError(err: unknown): boolean {
+  return pgErrorCode(err) === "42P01";
+}
+
+type DrilldownPage = {
+  items: Array<{
+    entity_id: string;
+    updated_at: string;
+    age_sec: number | null;
+    details: Record<string, number | boolean>;
+  }>;
+  truncated: boolean;
+  next_cursor?: string;
+  applied_limit: number;
+};
+
+function finalizePaginatedItems(
+  rows: DrilldownItem[],
+  applied_limit: number,
+): DrilldownPage {
+  const returned = rows.slice(0, applied_limit);
+  const truncated = rows.length > applied_limit;
+  const items = returned.map((row) => ({
+    entity_id: row.entity_id,
+    updated_at: row.updated_at,
+    age_sec: row.age_sec,
+    details: row.details,
+  }));
+  if (!truncated || returned.length === 0) {
+    return { items, truncated: false, applied_limit };
+  }
+  const last = returned[returned.length - 1];
+  return {
+    items,
+    truncated: true,
+    next_cursor: encodeDrilldownCursor({
+      updated_at: last._updated_at_raw,
+      entity_id: last.entity_id,
+    }),
+    applied_limit,
+  };
+}
+
+function normalizeIssueDetails(details: Record<string, unknown>): Record<string, number | boolean> {
+  const normalized: Record<string, number | boolean> = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (typeof value === "boolean") {
+      normalized[key] = value;
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      normalized[key] = value;
+    }
+  }
+  return normalized;
+}
+
+async function queryDrilldownDlqBacklog(
+  client: DbClient,
+  support: DlqBacklogSupport,
+  workspace_id: string,
+  applied_limit: number,
+  cursor: DrilldownCursor | null,
+): Promise<DrilldownPage> {
+  if (!support.supported) return { items: [], truncated: false, applied_limit };
+  const params: Array<string | number> = [workspace_id];
+  let cursorClause = "";
+  if (cursor) {
+    params.push(cursor.updated_at, cursor.entity_id);
+    const cursorUpdatedParam = `$${params.length - 1}`;
+    const cursorEntityParam = `$${params.length}`;
+    cursorClause = `
+       AND (
+         COALESCE(last_failed_at, '1970-01-01T00:00:00Z'::timestamptz),
+         message_id::text
+       ) < (
+         COALESCE(${cursorUpdatedParam}::timestamptz, '1970-01-01T00:00:00Z'::timestamptz),
+         ${cursorEntityParam}::text
+       )`;
+  }
+  const pendingFilter = support.pendingColumns.map((column) => `${column} IS NULL`).join(" OR ");
+  params.push(applied_limit + 1);
+  try {
+    const res = await client.query<{
+      entity_id: string;
+      updated_at_raw: string;
+      updated_at_iso: string;
+      age_sec: number | null;
+      failure_count: number;
+    }>(
+      `SELECT
+         message_id::text AS entity_id,
+         COALESCE(last_failed_at, '1970-01-01T00:00:00Z'::timestamptz)::text AS updated_at_raw,
+         ((COALESCE(last_failed_at, '1970-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC')::text || 'Z') AS updated_at_iso,
+         CASE
+           WHEN last_failed_at IS NULL THEN NULL
+           ELSE EXTRACT(EPOCH FROM (now() - last_failed_at))::int
+         END AS age_sec,
+         failure_count::int AS failure_count
+       FROM ${support.tableName}
+       WHERE ${support.workspaceColumn} = $1
+         AND (${pendingFilter})
+         ${cursorClause}
+       ORDER BY COALESCE(last_failed_at, '1970-01-01T00:00:00Z'::timestamptz) DESC, message_id::text DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    const items: DrilldownItem[] = res.rows.map((row) => ({
+      entity_id: row.entity_id,
+      updated_at: asIsoUtcFromDbText(row.updated_at_iso),
+      age_sec: row.age_sec == null ? null : Number(row.age_sec),
+      details: normalizeIssueDetails({ failure_count: Number(row.failure_count) }),
+      _updated_at_raw: row.updated_at_raw,
+    }));
+    return finalizePaginatedItems(items, applied_limit);
+  } catch (err) {
+    if (isMissingTableError(err)) return { items: [], truncated: false, applied_limit };
+    throw err;
+  }
+}
+
+async function queryDrilldownActiveIncidents(
+  client: DbClient,
+  support: ActiveIncidentsSupport,
+  workspace_id: string,
+  applied_limit: number,
+  cursor: DrilldownCursor | null,
+): Promise<DrilldownPage> {
+  if (!support.supported) return { items: [], truncated: false, applied_limit };
+  const params: Array<string | number> = [workspace_id];
+  let cursorClause = "";
+  if (cursor) {
+    params.push(cursor.updated_at, cursor.entity_id);
+    const cursorUpdatedParam = `$${params.length - 1}`;
+    const cursorEntityParam = `$${params.length}`;
+    cursorClause = `
+       AND (
+         COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz),
+         incident_id::text
+       ) < (
+         COALESCE(${cursorUpdatedParam}::timestamptz, '1970-01-01T00:00:00Z'::timestamptz),
+         ${cursorEntityParam}::text
+       )`;
+  }
+  params.push(applied_limit + 1);
+  try {
+    const res = await client.query<{
+      entity_id: string;
+      updated_at_raw: string;
+      updated_at_iso: string;
+      age_sec: number | null;
+    }>(
+      `SELECT
+         incident_id::text AS entity_id,
+         COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz)::text AS updated_at_raw,
+         ((COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC')::text || 'Z') AS updated_at_iso,
+         CASE
+           WHEN updated_at IS NULL THEN NULL
+           ELSE EXTRACT(EPOCH FROM (now() - updated_at))::int
+         END AS age_sec
+       FROM ${support.tableName}
+       WHERE ${support.workspaceColumn} = $1
+         AND ${support.statusColumn} = 'open'
+         ${cursorClause}
+       ORDER BY COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz) DESC, incident_id::text DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    const items: DrilldownItem[] = res.rows.map((row) => ({
+      entity_id: row.entity_id,
+      updated_at: asIsoUtcFromDbText(row.updated_at_iso),
+      age_sec: row.age_sec == null ? null : Number(row.age_sec),
+      details: {},
+      _updated_at_raw: row.updated_at_raw,
+    }));
+    return finalizePaginatedItems(items, applied_limit);
+  } catch (err) {
+    if (isMissingTableError(err)) return { items: [], truncated: false, applied_limit };
+    throw err;
+  }
+}
+
+async function queryDrilldownRateLimitFloodStreaks(
+  client: DbClient,
+  support: Extract<RateLimitFloodSupport, { supported: true; mode: "streaks" }>,
+  workspace_id: string,
+  applied_limit: number,
+  cursor: DrilldownCursor | null,
+): Promise<DrilldownPage> {
+  const params: Array<string | number> = [workspace_id];
+  let cursorClause = "";
+  if (cursor) {
+    params.push(cursor.updated_at, cursor.entity_id);
+    const cursorUpdatedParam = `$${params.length - 1}`;
+    const cursorEntityParam = `$${params.length}`;
+    cursorClause = `
+       AND (
+         COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz),
+         agent_id::text
+       ) < (
+         COALESCE(${cursorUpdatedParam}::timestamptz, '1970-01-01T00:00:00Z'::timestamptz),
+         ${cursorEntityParam}::text
+       )`;
+  }
+  params.push(applied_limit + 1);
+
+  const sqlWithMuted = `
+    SELECT
+      agent_id::text AS entity_id,
+      COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz)::text AS updated_at_raw,
+      ((COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC')::text || 'Z') AS updated_at_iso,
+      CASE
+        WHEN ${support.last429Column} IS NULL THEN NULL
+        ELSE EXTRACT(EPOCH FROM (now() - ${support.last429Column}))::int
+      END AS age_sec,
+      ${support.consecutiveColumn}::int AS consecutive_429,
+      (
+        last_incident_at IS NOT NULL
+        AND last_incident_at > now() - interval '1 hour'
+      ) AS muted
+    FROM ${support.tableName}
+    WHERE ${support.workspaceColumn} = $1
+      AND ${support.consecutiveColumn} >= 3
+      ${cursorClause}
+    ORDER BY COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz) DESC, agent_id::text DESC
+    LIMIT $${params.length}
+  `;
+
+  const sqlWithoutMuted = `
+    SELECT
+      agent_id::text AS entity_id,
+      COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz)::text AS updated_at_raw,
+      ((COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC')::text || 'Z') AS updated_at_iso,
+      CASE
+        WHEN ${support.last429Column} IS NULL THEN NULL
+        ELSE EXTRACT(EPOCH FROM (now() - ${support.last429Column}))::int
+      END AS age_sec,
+      ${support.consecutiveColumn}::int AS consecutive_429
+    FROM ${support.tableName}
+    WHERE ${support.workspaceColumn} = $1
+      AND ${support.consecutiveColumn} >= 3
+      ${cursorClause}
+    ORDER BY COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz) DESC, agent_id::text DESC
+    LIMIT $${params.length}
+  `;
+
+  try {
+    const tryWithMuted = hasRateLimitLastIncidentAt !== false;
+    const res = tryWithMuted
+      ? await client.query<{
+          entity_id: string;
+          updated_at_raw: string;
+          updated_at_iso: string;
+          age_sec: number | null;
+          consecutive_429: number;
+          muted?: boolean;
+        }>(sqlWithMuted, params)
+      : await client.query<{
+          entity_id: string;
+          updated_at_raw: string;
+          updated_at_iso: string;
+          age_sec: number | null;
+          consecutive_429: number;
+        }>(sqlWithoutMuted, params);
+    if (tryWithMuted) hasRateLimitLastIncidentAt = true;
+    const items: DrilldownItem[] = res.rows.map((row) => {
+      const details: Record<string, number | boolean> = {
+        consecutive_429: Number(row.consecutive_429),
+      };
+      const muted = (row as { muted?: boolean }).muted;
+      if (typeof muted === "boolean") {
+        details.muted = muted;
+      }
+      return {
+        entity_id: row.entity_id,
+        updated_at: asIsoUtcFromDbText(row.updated_at_iso),
+        age_sec: row.age_sec == null ? null : Number(row.age_sec),
+        details,
+        _updated_at_raw: row.updated_at_raw,
+      };
+    });
+    return finalizePaginatedItems(items, applied_limit);
+  } catch (err) {
+    if (isMissingTableError(err)) return { items: [], truncated: false, applied_limit };
+    if (pgErrorCode(err) === "42703" && hasRateLimitLastIncidentAt !== false) {
+      hasRateLimitLastIncidentAt = false;
+      return queryDrilldownRateLimitFloodStreaks(client, support, workspace_id, applied_limit, cursor);
+    }
+    throw err;
+  }
+}
+
+async function queryDrilldownRateLimitFlood(
+  client: DbClient,
+  support: RateLimitFloodSupport,
+  workspace_id: string,
+  applied_limit: number,
+  cursor: DrilldownCursor | null,
+): Promise<DrilldownPage> {
+  if (!support.supported) return { items: [], truncated: false, applied_limit };
+  if (support.mode === "streaks") {
+    return queryDrilldownRateLimitFloodStreaks(client, support, workspace_id, applied_limit, cursor);
+  }
+
+  const params: Array<string | number> = [workspace_id];
+  let cursorClause = "";
+  if (cursor) {
+    params.push(cursor.updated_at, cursor.entity_id);
+    const cursorUpdatedParam = `$${params.length - 1}`;
+    const cursorEntityParam = `$${params.length}`;
+    cursorClause = `
+       AND (
+         COALESCE(${support.windowStartColumn}, '1970-01-01T00:00:00Z'::timestamptz),
+         ${support.bucketKeyColumn}::text
+       ) < (
+         COALESCE(${cursorUpdatedParam}::timestamptz, '1970-01-01T00:00:00Z'::timestamptz),
+         ${cursorEntityParam}::text
+       )`;
+  }
+  params.push(applied_limit + 1);
+  try {
+    const res = await client.query<{
+      entity_id: string;
+      updated_at_raw: string;
+      updated_at_iso: string;
+      age_sec: number | null;
+      bucket_count: number;
+    }>(
+      `SELECT
+         ${support.bucketKeyColumn}::text AS entity_id,
+         COALESCE(${support.windowStartColumn}, '1970-01-01T00:00:00Z'::timestamptz)::text AS updated_at_raw,
+         ((COALESCE(${support.windowStartColumn}, '1970-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC')::text || 'Z') AS updated_at_iso,
+         CASE
+           WHEN ${support.windowStartColumn} IS NULL THEN NULL
+           ELSE EXTRACT(EPOCH FROM (now() - ${support.windowStartColumn}))::int
+         END AS age_sec,
+         ${support.countColumn}::int AS bucket_count
+       FROM ${support.tableName}
+       WHERE (
+         ${support.bucketKeyColumn} LIKE ('agent_min:' || $1 || ':%')
+         OR ${support.bucketKeyColumn} LIKE ('agent_hour:' || $1 || ':%')
+         OR ${support.bucketKeyColumn} LIKE ('exp_hour:' || $1 || ':%')
+         OR ${support.bucketKeyColumn} LIKE ('hb_min:' || $1 || ':%')
+       )
+         ${cursorClause}
+       ORDER BY COALESCE(${support.windowStartColumn}, '1970-01-01T00:00:00Z'::timestamptz) DESC, ${support.bucketKeyColumn}::text DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    const items: DrilldownItem[] = res.rows.map((row) => ({
+      entity_id: row.entity_id,
+      updated_at: asIsoUtcFromDbText(row.updated_at_iso),
+      age_sec: row.age_sec == null ? null : Number(row.age_sec),
+      details: normalizeIssueDetails({
+        bucket_count: Number(row.bucket_count),
+      }),
+      _updated_at_raw: row.updated_at_raw,
+    }));
+    return finalizePaginatedItems(items, applied_limit);
+  } catch (err) {
+    if (isMissingTableError(err)) return { items: [], truncated: false, applied_limit };
+    throw err;
+  }
+}
+
+async function queryLatestWorkspaceEventAt(client: DbClient, workspace_id: string): Promise<string | null> {
+  const res = await client.query<{ latest_event_at: string | null }>(
+    `SELECT occurred_at::text AS latest_event_at
+     FROM evt_events
+     WHERE workspace_id = $1
+     ORDER BY occurred_at DESC
+     LIMIT 1`,
+    [workspace_id],
+  );
+  return res.rows[0]?.latest_event_at ?? null;
+}
+
+async function queryDrilldownProjectionLagging(
+  client: DbClient,
+  cache: SchemaCheckCache,
+  workspace_id: string,
+  applied_limit: number,
+  cursor: DrilldownCursor | null,
+): Promise<DrilldownPage> {
+  if (cache.support.projectionLagFallbackTables.length === 0) {
+    return { items: [], truncated: false, applied_limit };
+  }
+  const latest_event_at = await queryLatestWorkspaceEventAt(client, workspace_id);
+  const params: Array<string | number | null> = [workspace_id];
+  let cursorClause = "";
+  if (cursor) {
+    params.push(cursor.updated_at, cursor.entity_id);
+    const cursorUpdatedParam = `$${params.length - 1}`;
+    const cursorEntityParam = `$${params.length}`;
+    cursorClause = `
+       WHERE (
+         COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz),
+         entity_id::text
+       ) < (
+         COALESCE(${cursorUpdatedParam}::timestamptz, '1970-01-01T00:00:00Z'::timestamptz),
+         ${cursorEntityParam}::text
+       )`;
+  }
+  params.push(latest_event_at, applied_limit + 1);
+
+  const unions = cache.support.projectionLagFallbackTables
+    .map((tableName) => {
+      const entityId = tableName.replace(/^public\./, "");
+      return `SELECT '${entityId}'::text AS entity_id, MAX(updated_at) AS updated_at
+              FROM ${tableName}
+              WHERE workspace_id = $1`;
+    })
+    .join(" UNION ALL ");
+
+  try {
+    const res = await client.query<{
+      entity_id: string;
+      updated_at_raw: string;
+      updated_at_iso: string;
+      lag_sec: number | null;
+    }>(
+      `WITH source_rows AS (${unions}),
+       filtered AS (
+         SELECT entity_id, updated_at
+         FROM source_rows
+         ${cursorClause}
+       )
+       SELECT
+         entity_id,
+         COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz)::text AS updated_at_raw,
+         ((COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC')::text || 'Z') AS updated_at_iso,
+         CASE
+           WHEN $${params.length - 1}::timestamptz IS NULL THEN 0
+           WHEN updated_at IS NULL THEN NULL
+           ELSE GREATEST(0, EXTRACT(EPOCH FROM ($${params.length - 1}::timestamptz - updated_at))::int)
+         END AS lag_sec
+       FROM filtered
+       ORDER BY COALESCE(updated_at, '1970-01-01T00:00:00Z'::timestamptz) DESC, entity_id::text DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    const items: DrilldownItem[] = res.rows.map((row) => ({
+      entity_id: row.entity_id,
+      updated_at: asIsoUtcFromDbText(row.updated_at_iso),
+      age_sec: row.lag_sec == null ? null : Number(row.lag_sec),
+      details: normalizeIssueDetails({
+        lag_sec: row.lag_sec == null ? 0 : Number(row.lag_sec),
+        lag_missing: row.lag_sec == null,
+      }),
+      _updated_at_raw: row.updated_at_raw,
+    }));
+    return finalizePaginatedItems(items, applied_limit);
+  } catch (err) {
+    if (isMissingTableError(err)) return { items: [], truncated: false, applied_limit };
+    throw err;
+  }
+}
+
+async function queryDrilldownProjectionWatermarkMissing(
+  client: DbClient,
+  support: ProjectionLagSupport,
+  workspace_id: string,
+  server_time: string,
+): Promise<DrilldownPage> {
+  let watermarkMissing = true;
+  if (support.supported) {
+    try {
+      const row = await client.query<{ watermark_at: string | null }>(
+        `SELECT ${support.watermarkColumn}::text AS watermark_at
+         FROM ${support.tableName}
+         WHERE ${support.workspaceColumn} = $1
+         LIMIT 1`,
+        [workspace_id],
+      );
+      const watermark_at = row.rows[0]?.watermark_at ?? null;
+      watermarkMissing = !watermark_at;
+    } catch (err) {
+      if (!isMissingTableError(err)) throw err;
+    }
+  }
+
+  if (!watermarkMissing) {
+    return { items: [], truncated: false, applied_limit: 0 };
+  }
+
+  const items: DrilldownItem[] = EXPECTED_PROJECTORS.map((projectorName) => ({
+    entity_id: projectorName,
+    updated_at: server_time,
+    age_sec: null,
+    details: {
+      watermark_missing: true,
+    },
+    _updated_at_raw: server_time,
+  }));
+  return {
+    items: items.map(({ _updated_at_raw: _ignore, ...rest }) => rest),
+    truncated: false,
+    applied_limit: items.length,
+  };
+}
+
+async function queryDrilldownCronStale(
+  client: DbClient,
+  server_time: string,
+): Promise<DrilldownPage> {
+  const criticalCheckNames = parseCriticalCronCheckNames();
+  try {
+    const res = await client.query<{
+      entity_id: string;
+      updated_at_raw: string;
+      updated_at_iso: string;
+      age_sec: number | null;
+      stale: boolean;
+      freshness_sec: number | null;
+    }>(
+      `WITH expected AS (
+         SELECT unnest($1::text[]) AS check_name
+       ),
+       joined AS (
+         SELECT
+           e.check_name,
+           c.last_success_at
+         FROM expected e
+         LEFT JOIN public.cron_health c
+           ON c.check_name = e.check_name
+       )
+       SELECT
+         check_name AS entity_id,
+         COALESCE(last_success_at, '1970-01-01T00:00:00Z'::timestamptz)::text AS updated_at_raw,
+         ((COALESCE(last_success_at, '1970-01-01T00:00:00Z'::timestamptz) AT TIME ZONE 'UTC')::text || 'Z') AS updated_at_iso,
+         CASE
+           WHEN last_success_at IS NULL THEN NULL
+           ELSE EXTRACT(EPOCH FROM (now() - last_success_at))::int
+         END AS age_sec,
+         (
+           last_success_at IS NULL
+           OR EXTRACT(EPOCH FROM (now() - last_success_at))::int > $2
+         ) AS stale,
+         CASE
+           WHEN last_success_at IS NULL THEN NULL
+           ELSE EXTRACT(EPOCH FROM (now() - last_success_at))::int
+         END AS freshness_sec
+       FROM joined
+       ORDER BY freshness_sec DESC NULLS LAST, check_name ASC`,
+      [criticalCheckNames, downCronFreshnessSec()],
+    );
+
+    const items: Array<{
+      entity_id: string;
+      updated_at: string;
+      age_sec: number | null;
+      details: Record<string, number | boolean>;
+    }> = res.rows
+      .filter((row) => row.stale)
+      .map((row) => ({
+        entity_id: row.entity_id,
+        updated_at: asIsoUtcFromDbText(row.updated_at_iso || server_time),
+        age_sec: row.age_sec == null ? null : Number(row.age_sec),
+        details: normalizeIssueDetails({
+          freshness_sec: row.freshness_sec == null ? 0 : Number(row.freshness_sec),
+          freshness_missing: row.freshness_sec == null,
+        }),
+      }));
+
+    return {
+      items,
+      truncated: false,
+      applied_limit: items.length,
+    };
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      return { items: [], truncated: false, applied_limit: 0 };
+    }
+    throw err;
+  }
+}
+
 export async function registerSystemHealthRoutes(
   app: FastifyInstance,
   pool: DbPool,
@@ -1025,6 +1756,201 @@ export async function registerSystemHealthRoutes(
     } catch {
       return reply.code(SUCCESS_HTTP_STATUS).send({ ok: false, ts: null });
     }
+  });
+
+  app.get<{ Querystring: unknown }>("/v1/system/health/issues", async (req, reply) => {
+    const queryRecord =
+      req.query && typeof req.query === "object" && !Array.isArray(req.query)
+        ? (req.query as Record<string, unknown>)
+        : {};
+
+    const schemaVersionRaw = queryRecord.schema_version;
+    if (schemaVersionRaw !== undefined) {
+      try {
+        assertSupportedSchemaVersion(schemaVersionRaw);
+      } catch {
+        const reason_code = "unsupported_version" as const;
+        return reply
+          .code(httpStatusForReasonCode(reason_code))
+          .send(
+            buildContractError(reason_code, {
+              schema_version: schemaVersionRaw ?? null,
+            }),
+          );
+      }
+    }
+
+    const workspace_id = workspaceIdFromReq(req);
+    if (!workspace_id) {
+      const reason_code = "missing_workspace_header" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { header: "x-workspace-id" }));
+    }
+
+    const queryWorkspace = queryWorkspaceIdFromQuery(queryRecord);
+    if (queryWorkspace && queryWorkspace !== workspace_id) {
+      const reason_code = "unauthorized_workspace" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(
+          buildContractError(reason_code, {
+            header_workspace_id: workspace_id,
+            query_workspace_id: queryWorkspace,
+          }),
+        );
+    }
+
+    const auth = getRequestAuth(req);
+    if (auth.workspace_id !== workspace_id) {
+      const reason_code = "unauthorized_workspace" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(
+          buildContractError(reason_code, {
+            header_workspace_id: workspace_id,
+            auth_workspace_id: auth.workspace_id,
+          }),
+        );
+    }
+
+    const kindRaw = queryRecord.kind;
+    const kind = typeof kindRaw === "string" ? kindRaw.trim() : "";
+    if (!isKnownIssueKind(kind)) {
+      const reason_code = "invalid_payload_combination" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(
+          buildContractError(reason_code, {
+            field: "kind",
+            allowed: HEALTH_ISSUE_KINDS,
+          }),
+        );
+    }
+
+    const nonPaginatedKind = kind === "projection_watermark_missing" || kind === "cron_stale";
+    const parsedLimit = parseIssueLimit(queryRecord.limit);
+    if (!nonPaginatedKind && parsedLimit.invalid) {
+      const reason_code = "invalid_payload_combination" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { field: "limit" }));
+    }
+
+    let cursor: DrilldownCursor | null = null;
+    if (!nonPaginatedKind) {
+      try {
+        cursor = parseDrilldownCursor(queryRecord.cursor);
+      } catch {
+        const reason_code = "invalid_payload_combination" as const;
+        return reply
+          .code(httpStatusForReasonCode(reason_code))
+          .send(buildContractError(reason_code, { field: "cursor" }));
+      }
+    }
+
+    if (!consumeOpsIssuesRateLimit(workspace_id)) {
+      const reason_code = "rate_limited" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(
+          buildContractError(reason_code, {
+            scope: "ops_system_health_issues_per_workspace_per_min",
+            limit: OPS_ISSUES_RATE_LIMIT_PER_MIN,
+            window_sec: 60,
+          }),
+        );
+    }
+
+    let schema: SchemaCheckCache;
+    try {
+      schema = await getSchemaChecks(pool);
+    } catch {
+      const reason_code = "internal_error" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { failed_checks: ["schema_cache"] }));
+    }
+
+    const client = await pool.connect();
+    let responsePayload: DrilldownResponse;
+    try {
+      await beginTimedReadTx(client, dbStatementTimeoutMs(), true);
+      const serverTimeRes = await client.query<{ server_time: string }>(
+        `SELECT (now() AT TIME ZONE 'UTC')::text || 'Z' AS server_time`,
+      );
+      const server_time = asIsoUtcFromDbText(serverTimeRes.rows[0]?.server_time);
+
+      let page: DrilldownPage;
+      if (kind === "dlq_backlog") {
+        page = await queryDrilldownDlqBacklog(
+          client,
+          schema.support.dlqBacklog,
+          workspace_id,
+          parsedLimit.applied_limit,
+          cursor,
+        );
+      } else if (kind === "active_incidents") {
+        page = await queryDrilldownActiveIncidents(
+          client,
+          schema.support.activeIncidents,
+          workspace_id,
+          parsedLimit.applied_limit,
+          cursor,
+        );
+      } else if (kind === "rate_limit_flood") {
+        page = await queryDrilldownRateLimitFlood(
+          client,
+          schema.support.rateLimitFlood,
+          workspace_id,
+          parsedLimit.applied_limit,
+          cursor,
+        );
+      } else if (kind === "projection_lagging") {
+        page = await queryDrilldownProjectionLagging(
+          client,
+          schema,
+          workspace_id,
+          parsedLimit.applied_limit,
+          cursor,
+        );
+      } else if (kind === "projection_watermark_missing") {
+        page = await queryDrilldownProjectionWatermarkMissing(
+          client,
+          schema.support.projectionLag,
+          workspace_id,
+          server_time,
+        );
+      } else {
+        page = await queryDrilldownCronStale(client, server_time);
+      }
+
+      responsePayload = {
+        schema_version: SCHEMA_VERSION,
+        server_time,
+        kind,
+        applied_limit: page.applied_limit,
+        truncated: page.truncated,
+        items: page.items,
+        ...(page.truncated && page.next_cursor ? { next_cursor: page.next_cursor } : {}),
+      };
+
+      await client.query("COMMIT");
+    } catch (err) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Ignore rollback failures on broken connections.
+      }
+      const reason_code = "internal_error" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { failed_checks: ["issues_drilldown"] }));
+    } finally {
+      client.release();
+    }
+
+    return reply.code(SUCCESS_HTTP_STATUS).send(responsePayload);
   });
 
   app.post<{ Body: unknown }>("/v1/system/health", async (req, reply) => {

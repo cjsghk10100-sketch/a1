@@ -61,4 +61,5 @@ git revert <merge_commit_sha>
 | 2026-02-28 | MINOR | evidence gate v0.1 projection resolver + composite cursor + envelope metadata | 2.1 | #TBD |
 | 2026-02-28 | MINOR | runtime hardening: projector occurred_at guards, rate-limit SRE tuning, ingest safety | 2.1 | #TBD |
 | 2026-03-02 | MINOR | system health summary v0.2, workspace-scoped ops metrics cache, projector watermark table | 2.1 | #TBD |
+| 2026-03-02 | MINOR | system health drilldown v0.1 endpoint + ops drilldown pagination indexes | 2.1 | #TBD |
 ---
