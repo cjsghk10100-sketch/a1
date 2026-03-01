@@ -99,7 +99,10 @@ export function setDbLogger(logger: { info: Function; warn: Function; error: Fun
 }
 
 export function createPool(databaseUrl: string): DbPool {
-  const pool = new Pool({ connectionString: databaseUrl });
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 2000,
+  });
 
   const originalPoolQuery = pool.query.bind(pool) as (...args: unknown[]) => unknown;
   const originalPoolConnect = pool.connect.bind(pool) as (...args: unknown[]) => unknown;
