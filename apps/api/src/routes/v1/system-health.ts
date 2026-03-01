@@ -9,6 +9,7 @@ import {
   assertSupportedSchemaVersion,
 } from "../../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
+import { getRequestAuth } from "../../security/requestAuth.js";
 
 type CronWatchdogSupport =
   | { supported: false }
@@ -334,7 +335,10 @@ function detectProjectionSupport(tableColumns: Map<string, Set<string>>): Projec
   };
 }
 
-function detectProjectionLagFallbackTables(tableColumns: Map<string, Set<string>>): string[] {
+function detectProjectionLagFallbackTables(
+  tableColumns: Map<string, Set<string>>,
+  tableIndexDefs: Map<string, string[]>,
+): string[] {
   const candidates = [
     "proj_runs",
     "proj_approvals",
@@ -354,6 +358,12 @@ function detectProjectionLagFallbackTables(tableColumns: Map<string, Set<string>
     const cols = tableColumns.get(table);
     if (!cols) continue;
     if (!cols.has("workspace_id") || !cols.has("updated_at")) continue;
+    const indexDefs = tableIndexDefs.get(table) ?? [];
+    const hasWorkspaceUpdatedIndex = indexDefs.some((indexDef) => {
+      const normalized = indexDef.toLowerCase();
+      return normalized.includes("workspace_id") && normalized.includes("updated_at");
+    });
+    if (!hasWorkspaceUpdatedIndex) continue;
     supported.push(`public.${table}`);
   }
   return supported;
@@ -462,6 +472,16 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
       "evt_events",
       "cron_health",
       "projector_watermarks",
+      "proj_runs",
+      "proj_approvals",
+      "proj_experiments",
+      "proj_scorecards",
+      "proj_evidence_manifests",
+      "proj_messages",
+      "proj_threads",
+      "proj_rooms",
+      "proj_artifacts",
+      "proj_lessons",
       "dead_letter_messages",
       "dlq_messages",
       "rate_limit_streaks",
@@ -497,6 +517,20 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
       (row) => row.indexname === "uidx_evt_events_idempotency_key",
     );
 
+    const projectionIdxRows = await client.query<{ tablename: string; indexdef: string }>(
+      `SELECT tablename, indexdef
+       FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND tablename = ANY($1::text[])`,
+      [tableNames],
+    );
+    const tableIndexDefs = new Map<string, string[]>();
+    for (const row of projectionIdxRows.rows) {
+      const existing = tableIndexDefs.get(row.tablename) ?? [];
+      existing.push(row.indexdef);
+      tableIndexDefs.set(row.tablename, existing);
+    }
+
     return {
       refreshedAtMs: Date.now(),
       kernelSchemaVersions: {
@@ -513,7 +547,7 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
       support: {
         cronWatchdog: detectCronSupport(tableColumns),
         projectionLag: detectProjectionSupport(tableColumns),
-        projectionLagFallbackTables: detectProjectionLagFallbackTables(tableColumns),
+        projectionLagFallbackTables: detectProjectionLagFallbackTables(tableColumns, tableIndexDefs),
         dlqBacklog: detectDlqSupport(tableColumns),
         rateLimitFlood: detectRateLimitSupport(tableColumns),
         activeIncidents: detectActiveIncidentsSupport(tableColumns),
@@ -1033,6 +1067,19 @@ export async function registerSystemHealthRoutes(
           buildContractError(reason_code, {
             header_workspace_id: workspace_id,
             body_workspace_id: bodyWorkspace,
+          }),
+        );
+    }
+
+    const auth = getRequestAuth(req);
+    if (auth.workspace_id !== workspace_id) {
+      const reason_code = "unauthorized_workspace" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(
+          buildContractError(reason_code, {
+            header_workspace_id: workspace_id,
+            auth_workspace_id: auth.workspace_id,
           }),
         );
     }
