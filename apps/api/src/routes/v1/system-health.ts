@@ -335,7 +335,10 @@ function detectProjectionSupport(tableColumns: Map<string, Set<string>>): Projec
   };
 }
 
-function detectProjectionLagFallbackTables(tableColumns: Map<string, Set<string>>): string[] {
+function detectProjectionLagFallbackTables(
+  tableColumns: Map<string, Set<string>>,
+  tableIndexDefs: Map<string, string[]>,
+): string[] {
   const candidates = [
     "proj_runs",
     "proj_approvals",
@@ -355,6 +358,12 @@ function detectProjectionLagFallbackTables(tableColumns: Map<string, Set<string>
     const cols = tableColumns.get(table);
     if (!cols) continue;
     if (!cols.has("workspace_id") || !cols.has("updated_at")) continue;
+    const indexDefs = tableIndexDefs.get(table) ?? [];
+    const hasWorkspaceUpdatedIndex = indexDefs.some((indexDef) => {
+      const normalized = indexDef.toLowerCase();
+      return normalized.includes("workspace_id") && normalized.includes("updated_at");
+    });
+    if (!hasWorkspaceUpdatedIndex) continue;
     supported.push(`public.${table}`);
   }
   return supported;
@@ -508,6 +517,20 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
       (row) => row.indexname === "uidx_evt_events_idempotency_key",
     );
 
+    const projectionIdxRows = await client.query<{ tablename: string; indexdef: string }>(
+      `SELECT tablename, indexdef
+       FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND tablename = ANY($1::text[])`,
+      [tableNames],
+    );
+    const tableIndexDefs = new Map<string, string[]>();
+    for (const row of projectionIdxRows.rows) {
+      const existing = tableIndexDefs.get(row.tablename) ?? [];
+      existing.push(row.indexdef);
+      tableIndexDefs.set(row.tablename, existing);
+    }
+
     return {
       refreshedAtMs: Date.now(),
       kernelSchemaVersions: {
@@ -524,7 +547,7 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
       support: {
         cronWatchdog: detectCronSupport(tableColumns),
         projectionLag: detectProjectionSupport(tableColumns),
-        projectionLagFallbackTables: detectProjectionLagFallbackTables(tableColumns),
+        projectionLagFallbackTables: detectProjectionLagFallbackTables(tableColumns, tableIndexDefs),
         dlqBacklog: detectDlqSupport(tableColumns),
         rateLimitFlood: detectRateLimitSupport(tableColumns),
         activeIncidents: detectActiveIncidentsSupport(tableColumns),
