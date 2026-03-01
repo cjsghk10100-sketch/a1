@@ -141,12 +141,31 @@ async function main(): Promise<void> {
     assert.equal(tokenRes.status, 201);
     const capability_token_id = (tokenRes.json as { token_id: string }).token_id;
 
+    const experimentRes = await requestJson(
+      baseUrl,
+      "POST",
+      "/v1/experiments",
+      {
+        room_id,
+        title: "Worker Tool Policy Experiment",
+        hypothesis: "policy guard",
+        success_criteria: { ok: true },
+        stop_conditions: { stop: false },
+        budget_cap_units: 1,
+        risk_tier: "high",
+      },
+      workspaceHeader,
+    );
+    assert.equal(experimentRes.status, 201);
+    const experiment_id = (experimentRes.json as { experiment_id: string }).experiment_id;
+
     const runRes = await requestJson(
       baseUrl,
       "POST",
       "/v1/runs",
       {
         room_id,
+        experiment_id,
         title: "Policy blocked worker run",
         input: {
           runtime: {
@@ -216,6 +235,19 @@ async function main(): Promise<void> {
       [workspaceHeader["x-workspace-id"], `incident:run_failed:${workspaceHeader["x-workspace-id"]}:${run_id}`],
     );
     assert.equal(Number.parseInt(automationIncident.rows[0].count, 10), 1);
+
+    const automationEscalation = await db.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+       FROM evt_events
+       WHERE workspace_id = $1
+         AND event_type = 'message.created'
+         AND idempotency_key = $2`,
+      [
+        workspaceHeader["x-workspace-id"],
+        `message:request_human_decision:run_failed:${workspaceHeader["x-workspace-id"]}:${run_id}`,
+      ],
+    );
+    assert.equal(Number.parseInt(automationEscalation.rows[0].count, 10), 1);
   } finally {
     await db.end();
     await app.close();

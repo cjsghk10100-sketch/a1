@@ -331,9 +331,27 @@ async function main(): Promise<void> {
       assert.equal(count, 1);
     }
 
-    // T4 debounce: active incident exists -> no escalation message for run_failed.
+    // T4 high-risk run_failed with no pre-existing incident still escalates once.
     {
       const workspace_id = `ws_pr9_t4_${randomUUID().slice(0, 8)}`;
+      const room_id = await createRoom(baseUrl, workspace_id);
+      const experiment_id = await createExperiment(baseUrl, workspace_id, room_id, "high");
+      const run_id = await createRun(baseUrl, workspace_id, room_id, experiment_id);
+      await startRun(baseUrl, workspace_id, run_id);
+
+      const failStatus = await failRun(baseUrl, workspace_id, run_id);
+      assert.equal(failStatus, 200);
+
+      const msgKey = `message:request_human_decision:run_failed:${workspace_id}:${run_id}`;
+      const msgFound = await waitForEventByIdempotency(db, workspace_id, "message.created", msgKey);
+      assert.equal(msgFound, true);
+      const msgCount = await countEventsByIdempotency(db, workspace_id, "message.created", msgKey);
+      assert.equal(msgCount, 1);
+    }
+
+    // T5 debounce: active incident exists -> no escalation message for run_failed.
+    {
+      const workspace_id = `ws_pr9_t5_${randomUUID().slice(0, 8)}`;
       const room_id = await createRoom(baseUrl, workspace_id);
       const experiment_id = await createExperiment(baseUrl, workspace_id, room_id, "high");
       const run_id = await createRun(baseUrl, workspace_id, room_id, experiment_id);
@@ -364,9 +382,9 @@ async function main(): Promise<void> {
       assert.equal(msgCount, 0);
     }
 
-    // T5 determinism: latest event ordering uses occurred_at + stream_seq.
+    // T6 determinism: latest event ordering uses occurred_at + stream_seq.
     {
-      const workspace_id = `ws_pr9_t5_${randomUUID().slice(0, 8)}`;
+      const workspace_id = `ws_pr9_t6_${randomUUID().slice(0, 8)}`;
       const occurred_at = "2026-03-01T00:00:00.000Z";
       const entity_type = "scorecard";
       const entity_id = `sc_t5_${randomUUID().slice(0, 6)}`;
@@ -415,9 +433,9 @@ async function main(): Promise<void> {
       assert.equal(latest?.event_id, eventB);
     }
 
-    // T6 kill switch: no extra events.
+    // T7 kill switch: no extra events.
     {
-      const workspace_id = `ws_pr9_t6_${randomUUID().slice(0, 8)}`;
+      const workspace_id = `ws_pr9_t7_${randomUUID().slice(0, 8)}`;
       process.env.PROMOTION_LOOP_ENABLED = "0";
       const room_id = await createRoom(baseUrl, workspace_id);
       const run_id = await createRun(baseUrl, workspace_id, room_id);
@@ -430,9 +448,9 @@ async function main(): Promise<void> {
       process.env.PROMOTION_LOOP_ENABLED = "1";
     }
 
-    // T7 orphan guard: PASS scorecard without run does not emit request_approval.
+    // T8 orphan guard: PASS scorecard without run does not emit request_approval.
     {
-      const workspace_id = `ws_pr9_t7_${randomUUID().slice(0, 8)}`;
+      const workspace_id = `ws_pr9_t8_${randomUUID().slice(0, 8)}`;
       const score = await postScorecard(baseUrl, workspace_id, {
         template_key: "t7",
         template_version: "1.0.0",
@@ -445,9 +463,9 @@ async function main(): Promise<void> {
       assert.equal(count, 0);
     }
 
-    // T8 blast radius: forced automation error does not rollback core write.
+    // T9 blast radius: forced automation error does not rollback core write.
     {
-      const workspace_id = `ws_pr9_t8_${randomUUID().slice(0, 8)}`;
+      const workspace_id = `ws_pr9_t9_${randomUUID().slice(0, 8)}`;
       process.env.AUTOMATION_FAIL_TEST = "1";
       const room_id = await createRoom(baseUrl, workspace_id);
       const run_id = await createRun(baseUrl, workspace_id, room_id);
@@ -471,9 +489,9 @@ async function main(): Promise<void> {
       delete process.env.AUTOMATION_FAIL_TEST;
     }
 
-    // T9 E2E: scorecard PASS emits request_approval event.
+    // T10 E2E: scorecard PASS emits request_approval event.
     {
-      const workspace_id = `ws_pr9_t9_${randomUUID().slice(0, 8)}`;
+      const workspace_id = `ws_pr9_t10_${randomUUID().slice(0, 8)}`;
       const room_id = await createRoom(baseUrl, workspace_id);
       const run_id = await createRun(baseUrl, workspace_id, room_id);
       const score = await postScorecard(baseUrl, workspace_id, {

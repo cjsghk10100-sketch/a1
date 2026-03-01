@@ -722,25 +722,27 @@ async function appendRunFailed(
     display: {},
   });
   await applyRunEvent(pool, event as RunEventV1);
-  void applyAutomation(pool, {
-    workspace_id: latest.workspace_id,
-    entity_type: "run",
-    entity_id: latest.run_id,
-    run_id: latest.run_id,
-    trigger: "run.failed",
-    event_data:
-      event.data && typeof event.data === "object" && !Array.isArray(event.data)
-        ? (event.data as Record<string, unknown>)
-        : undefined,
-    correlation_id: latest.correlation_id,
-    actor: runActor(),
-  }).catch((err) => {
+  try {
+    await applyAutomation(pool, {
+      workspace_id: latest.workspace_id,
+      entity_type: "run",
+      entity_id: latest.run_id,
+      run_id: latest.run_id,
+      trigger: "run.failed",
+      event_data:
+        event.data && typeof event.data === "object" && !Array.isArray(event.data)
+          ? (event.data as Record<string, unknown>)
+          : undefined,
+      correlation_id: latest.correlation_id,
+      actor: runActor(),
+    });
+  } catch (err) {
     input.logger?.warn(
       `[run_worker] automation loop failed after run.failed persistence for ${latest.run_id}: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
-  });
+  }
 }
 
 async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger): Promise<ProcessRunResult> {

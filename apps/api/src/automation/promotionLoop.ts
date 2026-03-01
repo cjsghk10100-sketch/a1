@@ -657,6 +657,7 @@ async function handleRunFailed(pool: DbPool, ctx: AutomationContext): Promise<vo
 
   const correlation_id = domainCorrelationId(ctx, run_id);
   const actor = resolveActor(ctx);
+  const activeIncidentBefore = await hasActiveIncident(pool, ctx.workspace_id, run_id);
   await emitRunFailedIncident(pool, {
     workspace_id: ctx.workspace_id,
     run_id,
@@ -664,9 +665,6 @@ async function handleRunFailed(pool: DbPool, ctx: AutomationContext): Promise<vo
     actor,
     log: ctx.log,
   });
-
-  const activeIncident = await hasActiveIncident(pool, ctx.workspace_id, run_id);
-  if (activeIncident) return;
 
   const risk_tier = await resolveRiskTier(
     pool,
@@ -677,6 +675,7 @@ async function handleRunFailed(pool: DbPool, ctx: AutomationContext): Promise<vo
     ctx.event_data,
   );
   if (risk_tier !== "high") return;
+  if (activeIncidentBefore) return;
 
   const idempotency_key = `message:request_human_decision:run_failed:${ctx.workspace_id}:${run_id}`;
   const from_agent_id = (await getStableActiveAgentId(pool)) ?? "system";
