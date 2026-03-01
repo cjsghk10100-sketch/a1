@@ -12,6 +12,7 @@
 - `projection_lag_sec`:
   - `latest_event_at = MAX(evt_events.occurred_at)` per workspace.
   - `watermark_at = projector_watermarks.last_applied_event_occurred_at` per workspace.
+  - If watermark is missing, the route uses a projection `updated_at` fallback (workspace-scoped) to avoid permanent false DOWN while watermark writers are not fully rolled out.
   - Formula:
     - no events: `0`
     - events + missing watermark: `NULL`
@@ -42,6 +43,7 @@ Env overrides:
 - TTL defaults:
   - `OK`/`DEGRADED`: `15s` (`HEALTH_CACHE_TTL_SEC`)
   - `DOWN`: `5s` (`HEALTH_ERROR_CACHE_TTL_SEC`)
+- Cache growth is bounded with max entries (`HEALTH_CACHE_MAX_ENTRIES`, default `512`) and stale-entry pruning.
 - `server_time` is always live from DB `now()` and is never served from cache.
 - Singleflight is used per workspace to avoid stampede.
 

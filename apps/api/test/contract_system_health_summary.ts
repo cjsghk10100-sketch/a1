@@ -234,6 +234,7 @@ async function main(): Promise<void> {
   process.env.HEALTH_CACHE_TTL_SEC = "15";
   process.env.HEALTH_ERROR_CACHE_TTL_SEC = "5";
   process.env.HEALTH_DB_STATEMENT_TIMEOUT_MS = "2000";
+  process.env.HEALTH_CRON_CRITICAL_CHECKS = "heart_cron,heart_cron_aux";
 
   const pool = createPool(databaseUrl);
   const app = await buildServer({
@@ -294,6 +295,28 @@ async function main(): Promise<void> {
          last_error = NULL,
          metadata = '{}'::jsonb`,
     );
+    await db.query(
+      `INSERT INTO cron_health (
+         check_name,
+         last_success_at,
+         last_failure_at,
+         consecutive_failures,
+         last_error,
+         metadata
+       ) VALUES (
+         'heart_cron_aux',
+         now() - interval '10 seconds',
+         NULL,
+         0,
+         NULL,
+         '{}'::jsonb
+       )
+       ON CONFLICT (check_name) DO UPDATE SET
+         last_success_at = EXCLUDED.last_success_at,
+         consecutive_failures = 0,
+         last_error = NULL,
+         metadata = '{}'::jsonb`,
+    );
 
     // T3 DOWN when watermark missing while events exist.
     const wsT3 = `ws_health_t3_${randomUUID().slice(0, 6)}`;
@@ -306,6 +329,7 @@ async function main(): Promise<void> {
     const t3 = await postSystemHealth(baseUrl, wsT3);
     assert.equal(t3.status, HTTP_OK, t3.text);
     assert.equal(t3.json.summary.health_summary, "DOWN");
+    assert.ok((t3.json.summary.cron_freshness_sec ?? 0) > 900);
     const t3IssueKinds = new Set(t3.json.summary.top_issues.map((issue) => issue.kind));
     assert.equal(t3IssueKinds.has("projection_watermark_missing"), true);
 

@@ -81,6 +81,7 @@ type SchemaCheckCache = {
   support: {
     cronWatchdog: CronWatchdogSupport;
     projectionLag: ProjectionLagSupport;
+    projectionLagFallbackTables: string[];
     dlqBacklog: DlqBacklogSupport;
     rateLimitFlood: RateLimitFloodSupport;
     activeIncidents: ActiveIncidentsSupport;
@@ -172,6 +173,7 @@ type HealthComputation = {
 const SUCCESS_HTTP_STATUS = httpStatusForReasonCode("duplicate_idempotent_replay");
 const HEALTH_QUERY_TIMEOUT_MS = 50;
 const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_HEALTH_CACHE_MAX_ENTRIES = 512;
 
 const REQUIRED_EVT_EVENTS_COLUMNS = [
   "idempotency_key",
@@ -208,6 +210,11 @@ function cacheTtlErrorMs(): number {
   return parseNonNegativeIntEnv("HEALTH_ERROR_CACHE_TTL_SEC", 5) * 1000;
 }
 
+function cacheMaxEntries(): number {
+  const parsed = parseNonNegativeIntEnv("HEALTH_CACHE_MAX_ENTRIES", DEFAULT_HEALTH_CACHE_MAX_ENTRIES);
+  return Math.max(parsed, 1);
+}
+
 function downCronFreshnessSec(): number {
   return parseNonNegativeIntEnv("HEALTH_DOWN_CRON_FRESHNESS_SEC", 600);
 }
@@ -233,6 +240,27 @@ function parseCriticalCronCheckNames(): string[] {
     .filter((item) => item.length > 0);
   if (parsed.length === 0) return [...DEFAULT_CRITICAL_CHECK_NAMES];
   return Array.from(new Set(parsed));
+}
+
+function pruneSummaryCache(): void {
+  const now = Date.now();
+  for (const [workspaceId, entry] of summaryCacheByWorkspace.entries()) {
+    if (now - entry.stored_at_ms >= entry.ttl_ms) {
+      summaryCacheByWorkspace.delete(workspaceId);
+    }
+  }
+
+  const maxEntries = cacheMaxEntries();
+  const overBy = summaryCacheByWorkspace.size - maxEntries;
+  if (overBy <= 0) return;
+
+  const oldestFirst = Array.from(summaryCacheByWorkspace.entries()).sort(
+    (a, b) => a[1].stored_at_ms - b[1].stored_at_ms,
+  );
+  for (let idx = 0; idx < overBy; idx += 1) {
+    const key = oldestFirst[idx]?.[0];
+    if (key) summaryCacheByWorkspace.delete(key);
+  }
 }
 
 function getHeaderString(value: unknown): string | undefined {
@@ -304,6 +332,31 @@ function detectProjectionSupport(tableColumns: Map<string, Set<string>>): Projec
     workspaceColumn: "workspace_id",
     watermarkColumn: "last_applied_event_occurred_at",
   };
+}
+
+function detectProjectionLagFallbackTables(tableColumns: Map<string, Set<string>>): string[] {
+  const candidates = [
+    "proj_runs",
+    "proj_approvals",
+    "proj_experiments",
+    "proj_scorecards",
+    "proj_evidence_manifests",
+    "proj_incidents",
+    "proj_messages",
+    "proj_threads",
+    "proj_rooms",
+    "proj_artifacts",
+    "proj_lessons",
+  ] as const;
+
+  const supported: string[] = [];
+  for (const table of candidates) {
+    const cols = tableColumns.get(table);
+    if (!cols) continue;
+    if (!cols.has("workspace_id") || !cols.has("updated_at")) continue;
+    supported.push(`public.${table}`);
+  }
+  return supported;
 }
 
 function detectDlqSupport(tableColumns: Map<string, Set<string>>): DlqBacklogSupport {
@@ -460,6 +513,7 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
       support: {
         cronWatchdog: detectCronSupport(tableColumns),
         projectionLag: detectProjectionSupport(tableColumns),
+        projectionLagFallbackTables: detectProjectionLagFallbackTables(tableColumns),
         dlqBacklog: detectDlqSupport(tableColumns),
         rateLimitFlood: detectRateLimitSupport(tableColumns),
         activeIncidents: detectActiveIncidentsSupport(tableColumns),
@@ -665,7 +719,7 @@ async function computeHealthComputation(
        SELECT
          CASE
            WHEN COUNT(*) FILTER (WHERE last_success_at IS NULL) > 0 THEN NULL
-           ELSE MIN(EXTRACT(EPOCH FROM (now() - last_success_at))::int)
+           ELSE MAX(EXTRACT(EPOCH FROM (now() - last_success_at))::int)
          END AS cron_freshness_sec
        FROM joined`,
       [criticalCheckNames],
@@ -673,41 +727,56 @@ async function computeHealthComputation(
     cron_freshness_sec = cronRes.rows[0]?.cron_freshness_sec ?? null;
   }
 
-  const projectionRes = await client.query<{
-    latest_event_at: string | null;
-    watermark_at: string | null;
-    projection_lag_sec: number | null;
-  }>(
-    `WITH latest AS (
-       SELECT MAX(occurred_at) AS latest_event_at
-       FROM evt_events
-       WHERE workspace_id = $1
-     ),
-     wm AS (
-       SELECT
-         ${
-           cache.support.projectionLag.supported
-             ? `MAX(${cache.support.projectionLag.watermarkColumn})`
-             : "NULL::timestamptz"
-         } AS watermark_at
-       FROM ${cache.support.projectionLag.supported ? cache.support.projectionLag.tableName : "(SELECT 1) t"}
-       ${cache.support.projectionLag.supported ? `WHERE ${cache.support.projectionLag.workspaceColumn} = $1` : ""}
-     )
-     SELECT
-       latest.latest_event_at::text AS latest_event_at,
-       wm.watermark_at::text AS watermark_at,
-       CASE
-         WHEN latest.latest_event_at IS NULL THEN 0
-         WHEN wm.watermark_at IS NULL THEN NULL
-         ELSE GREATEST(0, EXTRACT(EPOCH FROM (latest.latest_event_at - wm.watermark_at))::int)
-       END AS projection_lag_sec
-     FROM latest
-     CROSS JOIN wm`,
+  const latestEventRes = await client.query<{ latest_event_at: string | null }>(
+    `SELECT MAX(occurred_at)::text AS latest_event_at
+     FROM evt_events
+     WHERE workspace_id = $1`,
     [workspace_id],
   );
+  const latest_event_at = latestEventRes.rows[0]?.latest_event_at ?? null;
+  const latest_event_exists = latest_event_at != null;
 
-  const latest_event_exists = projectionRes.rows[0]?.latest_event_at != null;
-  const projection_lag_sec = projectionRes.rows[0]?.projection_lag_sec ?? null;
+  let watermark_at: string | null = null;
+  if (cache.support.projectionLag.supported) {
+    const watermarkRes = await client.query<{ watermark_at: string | null }>(
+      `SELECT ${cache.support.projectionLag.watermarkColumn}::text AS watermark_at
+       FROM ${cache.support.projectionLag.tableName}
+       WHERE ${cache.support.projectionLag.workspaceColumn} = $1
+       LIMIT 1`,
+      [workspace_id],
+    );
+    watermark_at = watermarkRes.rows[0]?.watermark_at ?? null;
+  }
+
+  let fallback_watermark_at: string | null = null;
+  if (!watermark_at && cache.support.projectionLagFallbackTables.length > 0) {
+    const unions = cache.support.projectionLagFallbackTables
+      .map(
+        (tableName) =>
+          `SELECT MAX(updated_at) AS updated_at
+           FROM ${tableName}
+           WHERE workspace_id = $1`,
+      )
+      .join(" UNION ALL ");
+    const fallbackRes = await client.query<{ fallback_watermark_at: string | null }>(
+      `SELECT MAX(updated_at)::text AS fallback_watermark_at
+       FROM (${unions}) AS projection_maxes`,
+      [workspace_id],
+    );
+    fallback_watermark_at = fallbackRes.rows[0]?.fallback_watermark_at ?? null;
+  }
+
+  const effective_watermark_at = watermark_at ?? fallback_watermark_at;
+  const lagRes = await client.query<{ projection_lag_sec: number | null }>(
+    `SELECT
+       CASE
+         WHEN $1::timestamptz IS NULL THEN 0
+         WHEN $2::timestamptz IS NULL THEN NULL
+         ELSE GREATEST(0, EXTRACT(EPOCH FROM ($1::timestamptz - $2::timestamptz))::int)
+       END AS projection_lag_sec`,
+    [latest_event_at, effective_watermark_at],
+  );
+  const projection_lag_sec = lagRes.rows[0]?.projection_lag_sec ?? null;
 
   let dlq_backlog_count = 0;
   if (cache.support.dlqBacklog.supported) {
@@ -798,7 +867,12 @@ async function computeHealthComputation(
       details: {
         projection_lag_sec: projection_lag_sec ?? 0,
         down_threshold_sec: downProjectionLagSec(),
-        watermark_missing_while_events_exist: latest_event_exists && projection_lag_sec == null,
+        watermark_missing_while_events_exist:
+          latest_event_exists && effective_watermark_at == null,
+        canonical_watermark_missing:
+          latest_event_exists && watermark_at == null,
+        fallback_watermark_used:
+          latest_event_exists && watermark_at == null && fallback_watermark_at != null,
       },
     },
     dlq_backlog: {
@@ -877,6 +951,7 @@ async function computeAndCacheSummary(
       ttl_ms: responseTtlMs(computed.summary.health_summary),
     };
     summaryCacheByWorkspace.set(workspace_id, entry);
+    pruneSummaryCache();
 
     return {
       entry,
@@ -1001,6 +1076,8 @@ export async function registerSystemHealthRoutes(
         .code(httpStatusForReasonCode(reason_code))
         .send(buildContractError(reason_code, { failed_checks: failedChecks }));
     }
+
+    pruneSummaryCache();
 
     let usedCache = false;
     let computeResult: SummaryComputeResult;
