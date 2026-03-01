@@ -294,6 +294,21 @@ async function main(): Promise<void> {
       assert.equal(found, true);
       const count = await countEventsByIdempotency(db, workspace_id, "incident.opened", key);
       assert.equal(count, 1);
+
+      // Event-only incident should still block follow-up approval request
+      // even when proj_incidents has no row yet.
+      const passScore = await postScorecard(baseUrl, workspace_id, {
+        run_id,
+        template_key: "t2-pass",
+        template_version: "1.0.0",
+        metrics: [{ key: "quality", value: 0.95 }],
+        metadata: { iteration_count: 1, max_iterations: 3, risk_tier: "low" },
+      });
+      assert.equal(passScore.status, 201);
+      await delay(120);
+      const approvalKey = `message:request_approval:${workspace_id}:${passScore.scorecard_id}`;
+      const approvalCount = await countEventsByIdempotency(db, workspace_id, "message.created", approvalKey);
+      assert.equal(approvalCount, 0);
     }
 
     // T3 risk_tier high escalation emits request_human_decision once.

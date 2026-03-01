@@ -216,11 +216,14 @@ async function hasActiveIncident(
   workspace_id: string,
   run_id: string,
 ): Promise<boolean> {
+  let projectionOpen = false;
   try {
-    return await projectionHasActiveIncident(queryable, workspace_id, run_id);
+    projectionOpen = await projectionHasActiveIncident(queryable, workspace_id, run_id);
   } catch {
     return await eventsHasActiveIncident(queryable, workspace_id, run_id);
   }
+  if (projectionOpen) return true;
+  return await eventsHasActiveIncident(queryable, workspace_id, run_id);
 }
 
 async function projectionRunTerminal(
