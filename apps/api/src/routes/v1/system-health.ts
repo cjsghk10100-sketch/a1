@@ -10,6 +10,61 @@ import {
 } from "../../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
 
+type CronWatchdogSupport =
+  | { supported: false }
+  | {
+      supported: true;
+      tableName: "public.cron_health";
+      checkNameColumn: "check_name";
+      lastSuccessColumn: "last_success_at";
+    };
+
+type ProjectionLagSupport =
+  | { supported: false }
+  | {
+      supported: true;
+      tableName: "public.projector_watermarks";
+      workspaceColumn: "workspace_id";
+      watermarkColumn: "last_applied_event_occurred_at";
+    };
+
+type DlqBacklogSupport =
+  | { supported: false }
+  | {
+      supported: true;
+      tableName: "public.dead_letter_messages" | "public.dlq_messages";
+      workspaceColumn: "workspace_id";
+      pendingColumns: Array<"reviewed_at" | "handled_at" | "resolved_at">;
+    };
+
+type RateLimitFloodSupport =
+  | { supported: false }
+  | {
+      supported: true;
+      mode: "streaks";
+      tableName: "public.rate_limit_streaks";
+      workspaceColumn: "workspace_id";
+      consecutiveColumn: "consecutive_429";
+      last429Column: "last_429_at";
+    }
+  | {
+      supported: true;
+      mode: "buckets";
+      tableName: "public.rate_limit_buckets";
+      bucketKeyColumn: "bucket_key";
+      windowStartColumn: "window_start";
+      countColumn: "count";
+    };
+
+type ActiveIncidentsSupport =
+  | { supported: false }
+  | {
+      supported: true;
+      tableName: "public.proj_incidents";
+      workspaceColumn: "workspace_id";
+      statusColumn: "status";
+    };
+
 type SchemaCheckCache = {
   refreshedAtMs: number;
   kernelSchemaVersions: {
@@ -23,68 +78,99 @@ type SchemaCheckCache = {
     requiredColumnsPresent: boolean;
     idempotencyIndexExists: boolean;
   };
-  optionalSupport: {
+  support: {
     cronWatchdog: CronWatchdogSupport;
     projectionLag: ProjectionLagSupport;
     dlqBacklog: DlqBacklogSupport;
     rateLimitFlood: RateLimitFloodSupport;
+    activeIncidents: ActiveIncidentsSupport;
   };
 };
 
-type CronWatchdogSupport =
-  | { supported: false }
-  | {
-      supported: true;
-      tableName: "public.cron_health" | "public.cron_job_health";
-      jobColumn: "job_name" | "cron_job";
-      lastSuccessColumn: "last_success_at";
-    };
+type TopIssueKind =
+  | "cron_stale"
+  | "projection_lagging"
+  | "projection_watermark_missing"
+  | "dlq_backlog"
+  | "rate_limit_flood"
+  | "active_incidents";
 
-type ProjectionLagSupport =
-  | { supported: false }
-  | {
-      supported: true;
-      tableName: "public.projector_cursors" | "public.projection_cursors" | "public.projector_offsets";
-      updatedAtColumn: "updated_at" | "last_applied_at";
-    };
+type TopIssueSeverity = "DOWN" | "DEGRADED";
 
-type DlqBacklogSupport =
-  | { supported: false }
-  | {
-      supported: true;
-      tableName: "public.dead_letter_messages" | "public.dlq_messages";
-      createdAtColumn: "created_at";
-      pendingColumns: Array<"handled_at" | "resolved_at" | "reviewed_at">;
-    };
+type TopIssue = {
+  kind: TopIssueKind;
+  severity: TopIssueSeverity;
+  age_sec: number | null;
+  details?: Record<string, number | boolean>;
+};
 
-type RateLimitFloodSupport =
-  | { supported: false }
-  | {
-      supported: true;
-      mode: "streaks";
-      tableName: "public.rate_limit_streaks";
-      consecutiveColumn: "consecutive_429";
-      last429Column: "last_429_at";
-    }
-  | {
-      supported: true;
-      mode: "buckets";
-      tableName: "public.rate_limit_buckets";
-      windowStartColumn: "window_start";
-      windowSecColumn: "window_sec";
-      countColumn: "count";
-    };
+type HealthSummaryStatus = "OK" | "DEGRADED" | "DOWN";
 
 type OptionalCheckPayload = {
   supported: boolean;
   ok: boolean;
-  details: Record<string, unknown>;
+  details: Record<string, number | boolean>;
+};
+
+type SystemHealthSummary = {
+  health_summary: HealthSummaryStatus;
+  cron_freshness_sec: number | null;
+  projection_lag_sec: number | null;
+  dlq_backlog_count: number;
+  rate_limit_flood_detected: boolean;
+  active_incidents_count: number;
+  top_issues: TopIssue[];
+};
+
+type SystemHealthPayload = {
+  schema_version: typeof SCHEMA_VERSION;
+  ok: true;
+  workspace_id: string;
+  checks: {
+    db: { ok: true };
+    kernel_schema_versions: {
+      ok: true;
+      has_rows: boolean;
+      current_version: string | null;
+    };
+    evt_events: {
+      ok: true;
+      required_columns_present: boolean;
+      missing_columns: string[];
+    };
+    evt_events_idempotency: {
+      ok: true;
+      index_name: "uidx_evt_events_idempotency_key";
+    };
+    optional: {
+      cron_watchdog: OptionalCheckPayload;
+      projection_lag: OptionalCheckPayload;
+      dlq_backlog: OptionalCheckPayload;
+      rate_limit_flood: OptionalCheckPayload;
+    };
+  };
+  summary: SystemHealthSummary;
+};
+
+type SummaryCacheEntry = {
+  payload: SystemHealthPayload;
+  stored_at_ms: number;
+  ttl_ms: number;
+};
+
+type SummaryComputeResult = {
+  entry: SummaryCacheEntry;
+  server_time: string | null;
+};
+
+type HealthComputation = {
+  server_time: string | null;
+  summary: SystemHealthSummary;
+  optional: SystemHealthPayload["checks"]["optional"];
 };
 
 const SUCCESS_HTTP_STATUS = httpStatusForReasonCode("duplicate_idempotent_replay");
-const OPTIONAL_QUERY_TIMEOUT_MS = 200;
 const HEALTH_QUERY_TIMEOUT_MS = 50;
-const SYSTEM_NOW_TIMEOUT_MS = 2000;
 const SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const REQUIRED_EVT_EVENTS_COLUMNS = [
@@ -94,39 +180,13 @@ const REQUIRED_EVT_EVENTS_COLUMNS = [
   "actor",
 ] as const;
 
+const DEFAULT_CRITICAL_CHECK_NAMES = ["heart_cron"] as const;
+
 let schemaCache: SchemaCheckCache | null = null;
 let schemaCachePromise: Promise<SchemaCheckCache> | null = null;
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label}_timeout`));
-    }, timeoutMs);
-
-    promise
-      .then((value) => {
-        clearTimeout(timer);
-        resolve(value);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-  });
-}
-
-async function queryNowText(
-  queryable: Pick<DbPool, "query"> | Pick<DbClient, "query">,
-  timeoutMs: number,
-  label: string,
-): Promise<string> {
-  const result = await withTimeout(
-    queryable.query<{ ts: string }>(`SELECT now()::text AS ts`),
-    timeoutMs,
-    label,
-  );
-  return result.rows[0]?.ts ?? "";
-}
+const summaryCacheByWorkspace = new Map<string, SummaryCacheEntry>();
+const summaryInFlightByWorkspace = new Map<string, Promise<SummaryComputeResult>>();
 
 function parseNonNegativeIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -136,20 +196,43 @@ function parseNonNegativeIntEnv(name: string, fallback: number): number {
   return Math.floor(parsed);
 }
 
-function cronFreshnessMaxSec(): number {
-  return parseNonNegativeIntEnv("CRON_FRESHNESS_MAX_SEC", 900);
+function dbStatementTimeoutMs(): number {
+  return parseNonNegativeIntEnv("HEALTH_DB_STATEMENT_TIMEOUT_MS", 2000);
 }
 
-function projectionCursorMaxAgeSec(): number {
-  return parseNonNegativeIntEnv("PROJECTION_CURSOR_MAX_AGE_SEC", 60);
+function cacheTtlOkMs(): number {
+  return parseNonNegativeIntEnv("HEALTH_CACHE_TTL_SEC", 15) * 1000;
 }
 
-function dlqPendingWarnCount(): number {
-  return parseNonNegativeIntEnv("DLQ_PENDING_WARN_COUNT", 100);
+function cacheTtlErrorMs(): number {
+  return parseNonNegativeIntEnv("HEALTH_ERROR_CACHE_TTL_SEC", 5) * 1000;
+}
+
+function downCronFreshnessSec(): number {
+  return parseNonNegativeIntEnv("HEALTH_DOWN_CRON_FRESHNESS_SEC", 600);
+}
+
+function downProjectionLagSec(): number {
+  return parseNonNegativeIntEnv("HEALTH_DOWN_PROJECTION_LAG_SEC", 300);
+}
+
+function degradedDlqBacklogThreshold(): number {
+  return parseNonNegativeIntEnv("HEALTH_DEGRADED_DLQ_BACKLOG", 10);
 }
 
 function rateLimitFloodOffendersWarn(): number {
   return parseNonNegativeIntEnv("RATE_LIMIT_FLOOD_OFFENDERS_WARN", 20);
+}
+
+function parseCriticalCronCheckNames(): string[] {
+  const raw = process.env.HEALTH_CRON_CRITICAL_CHECKS;
+  if (!raw) return [...DEFAULT_CRITICAL_CHECK_NAMES];
+  const parsed = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  if (parsed.length === 0) return [...DEFAULT_CRITICAL_CHECK_NAMES];
+  return Array.from(new Set(parsed));
 }
 
 function getHeaderString(value: unknown): string | undefined {
@@ -173,63 +256,72 @@ function asIsoFromDbNowText(raw: unknown): string | null {
   return `${trimmed.slice(0, firstSpace)}T${trimmed.slice(firstSpace + 1)}`;
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label}_timeout`)), timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+async function queryNowText(queryable: Pick<DbPool, "query">, timeoutMs: number): Promise<string> {
+  const result = await withTimeout(
+    queryable.query<{ ts: string }>(`SELECT now()::text AS ts`),
+    timeoutMs,
+    "health_now",
+  );
+  return result.rows[0]?.ts ?? "";
+}
+
 function detectCronSupport(tableColumns: Map<string, Set<string>>): CronWatchdogSupport {
-  const candidates = ["cron_health", "cron_job_health"] as const;
-  for (const table of candidates) {
-    const cols = tableColumns.get(table);
-    if (!cols) continue;
-    const jobColumn = cols.has("job_name")
-      ? "job_name"
-      : cols.has("cron_job")
-        ? "cron_job"
-        : null;
-    if (!jobColumn || !cols.has("last_success_at")) continue;
-    return {
-      supported: true,
-      tableName: `public.${table}`,
-      jobColumn,
-      lastSuccessColumn: "last_success_at",
-    };
-  }
-  return { supported: false };
+  const cols = tableColumns.get("cron_health");
+  if (!cols) return { supported: false };
+  if (!cols.has("check_name") || !cols.has("last_success_at")) return { supported: false };
+  return {
+    supported: true,
+    tableName: "public.cron_health",
+    checkNameColumn: "check_name",
+    lastSuccessColumn: "last_success_at",
+  };
 }
 
 function detectProjectionSupport(tableColumns: Map<string, Set<string>>): ProjectionLagSupport {
-  const candidates = ["projector_cursors", "projection_cursors", "projector_offsets"] as const;
-  for (const table of candidates) {
-    const cols = tableColumns.get(table);
-    if (!cols) continue;
-    const updatedAtColumn = cols.has("updated_at")
-      ? "updated_at"
-      : cols.has("last_applied_at")
-        ? "last_applied_at"
-        : null;
-    if (!updatedAtColumn) continue;
-    return {
-      supported: true,
-      tableName: `public.${table}`,
-      updatedAtColumn,
-    };
+  const cols = tableColumns.get("projector_watermarks");
+  if (!cols) return { supported: false };
+  if (!cols.has("workspace_id") || !cols.has("last_applied_event_occurred_at")) {
+    return { supported: false };
   }
-  return { supported: false };
+  return {
+    supported: true,
+    tableName: "public.projector_watermarks",
+    workspaceColumn: "workspace_id",
+    watermarkColumn: "last_applied_event_occurred_at",
+  };
 }
 
 function detectDlqSupport(tableColumns: Map<string, Set<string>>): DlqBacklogSupport {
   const candidates = ["dead_letter_messages", "dlq_messages"] as const;
   for (const table of candidates) {
     const cols = tableColumns.get(table);
-    if (!cols || !cols.has("created_at")) continue;
+    if (!cols || !cols.has("workspace_id")) continue;
 
-    const pendingColumns: Array<"handled_at" | "resolved_at" | "reviewed_at"> = [];
+    const pendingColumns: Array<"reviewed_at" | "handled_at" | "resolved_at"> = [];
+    if (cols.has("reviewed_at")) pendingColumns.push("reviewed_at");
     if (cols.has("handled_at")) pendingColumns.push("handled_at");
     if (cols.has("resolved_at")) pendingColumns.push("resolved_at");
-    if (cols.has("reviewed_at")) pendingColumns.push("reviewed_at");
     if (pendingColumns.length === 0) continue;
 
     return {
       supported: true,
       tableName: `public.${table}`,
-      createdAtColumn: "created_at",
+      workspaceColumn: "workspace_id",
       pendingColumns,
     };
   }
@@ -238,34 +330,47 @@ function detectDlqSupport(tableColumns: Map<string, Set<string>>): DlqBacklogSup
 
 function detectRateLimitSupport(tableColumns: Map<string, Set<string>>): RateLimitFloodSupport {
   const streaksCols = tableColumns.get("rate_limit_streaks");
-  if (streaksCols && streaksCols.has("consecutive_429") && streaksCols.has("last_429_at")) {
+  if (
+    streaksCols &&
+    streaksCols.has("workspace_id") &&
+    streaksCols.has("consecutive_429") &&
+    streaksCols.has("last_429_at")
+  ) {
     return {
       supported: true,
       mode: "streaks",
       tableName: "public.rate_limit_streaks",
+      workspaceColumn: "workspace_id",
       consecutiveColumn: "consecutive_429",
       last429Column: "last_429_at",
     };
   }
 
   const bucketsCols = tableColumns.get("rate_limit_buckets");
-  if (
-    bucketsCols &&
-    bucketsCols.has("window_start") &&
-    bucketsCols.has("window_sec") &&
-    bucketsCols.has("count")
-  ) {
+  if (bucketsCols && bucketsCols.has("bucket_key") && bucketsCols.has("window_start") && bucketsCols.has("count")) {
     return {
       supported: true,
       mode: "buckets",
       tableName: "public.rate_limit_buckets",
+      bucketKeyColumn: "bucket_key",
       windowStartColumn: "window_start",
-      windowSecColumn: "window_sec",
       countColumn: "count",
     };
   }
 
   return { supported: false };
+}
+
+function detectActiveIncidentsSupport(tableColumns: Map<string, Set<string>>): ActiveIncidentsSupport {
+  const cols = tableColumns.get("proj_incidents");
+  if (!cols) return { supported: false };
+  if (!cols.has("workspace_id") || !cols.has("status")) return { supported: false };
+  return {
+    supported: true,
+    tableName: "public.proj_incidents",
+    workspaceColumn: "workspace_id",
+    statusColumn: "status",
+  };
 }
 
 async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
@@ -303,14 +408,12 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
     const tableNames = [
       "evt_events",
       "cron_health",
-      "cron_job_health",
-      "projector_cursors",
-      "projection_cursors",
-      "projector_offsets",
+      "projector_watermarks",
       "dead_letter_messages",
       "dlq_messages",
       "rate_limit_streaks",
       "rate_limit_buckets",
+      "proj_incidents",
     ];
 
     const columnRows = await client.query<{ table_name: string; column_name: string }>(
@@ -354,11 +457,12 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
         requiredColumnsPresent: missingColumns.length === 0,
         idempotencyIndexExists,
       },
-      optionalSupport: {
+      support: {
         cronWatchdog: detectCronSupport(tableColumns),
         projectionLag: detectProjectionSupport(tableColumns),
         dlqBacklog: detectDlqSupport(tableColumns),
         rateLimitFlood: detectRateLimitSupport(tableColumns),
+        activeIncidents: detectActiveIncidentsSupport(tableColumns),
       },
     };
   } finally {
@@ -367,15 +471,10 @@ async function runSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
 }
 
 async function getSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
-  const stale =
-    !schemaCache || Date.now() - schemaCache.refreshedAtMs >= SCHEMA_CACHE_TTL_MS;
-  if (!stale && schemaCache) {
-    return schemaCache;
-  }
+  const stale = !schemaCache || Date.now() - schemaCache.refreshedAtMs >= SCHEMA_CACHE_TTL_MS;
+  if (!stale && schemaCache) return schemaCache;
 
-  if (schemaCachePromise) {
-    return schemaCachePromise;
-  }
+  if (schemaCachePromise) return schemaCachePromise;
 
   schemaCachePromise = runSchemaChecks(pool)
     .then((next) => {
@@ -389,300 +488,420 @@ async function getSchemaChecks(pool: DbPool): Promise<SchemaCheckCache> {
   return schemaCachePromise;
 }
 
-async function runTimedRead<T>(client: DbClient, fn: () => Promise<T>): Promise<T> {
+function isCacheEntryFresh(entry: SummaryCacheEntry | undefined): boolean {
+  if (!entry) return false;
+  return Date.now() - entry.stored_at_ms < entry.ttl_ms;
+}
+
+async function beginTimedReadTx(client: DbClient, timeoutMs: number): Promise<void> {
   await client.query("BEGIN");
+  await client.query(`SELECT set_config('statement_timeout', $1, true)`, [`${timeoutMs}ms`]);
+}
+
+async function fetchLiveServerTime(pool: DbPool, timeoutMs: number): Promise<string | null> {
+  const client = await pool.connect();
   try {
-    await client.query(
-      `SELECT set_config('statement_timeout', $1, true)`,
-      [`${OPTIONAL_QUERY_TIMEOUT_MS}ms`],
-    );
-    const value = await fn();
+    await beginTimedReadTx(client, timeoutMs);
+    const nowRes = await client.query<{ server_time: string }>(`SELECT now()::text AS server_time`);
     await client.query("COMMIT");
-    return value;
-  } catch (err) {
+    return asIsoFromDbNowText(nowRes.rows[0]?.server_time ?? null);
+  } catch {
     await client.query("ROLLBACK").catch(() => {});
-    throw err;
+    throw new Error("db.connectivity");
+  } finally {
+    client.release();
   }
 }
 
-function errorString(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+function issueSeverityRank(severity: TopIssueSeverity): number {
+  return severity === "DOWN" ? 0 : 1;
 }
 
-async function checkCronWatchdog(
-  client: DbClient,
-  support: CronWatchdogSupport,
-): Promise<OptionalCheckPayload> {
-  if (!support.supported) {
-    return {
-      supported: false,
-      ok: true,
-      details: { reason: "unsupported" },
-    };
-  }
+function compareTopIssues(a: TopIssue, b: TopIssue): number {
+  const severityDiff = issueSeverityRank(a.severity) - issueSeverityRank(b.severity);
+  if (severityDiff !== 0) return severityDiff;
 
-  try {
-    const row = await runTimedRead(client, async () => {
-      const res = await client.query<{
-        age_sec: number | null;
-        last_success_at: string | null;
-      }>(
-        `SELECT
-           EXTRACT(EPOCH FROM (now() - ${support.lastSuccessColumn}))::int AS age_sec,
-           ${support.lastSuccessColumn}::text AS last_success_at
-         FROM ${support.tableName}
-         ORDER BY ${support.lastSuccessColumn} DESC NULLS LAST
-         LIMIT 1`,
-      );
-      return res.rows[0] ?? null;
+  const aAge = a.age_sec;
+  const bAge = b.age_sec;
+  if (aAge == null && bAge != null) return 1;
+  if (aAge != null && bAge == null) return -1;
+  if (aAge != null && bAge != null && aAge !== bAge) return bAge - aAge;
+
+  return a.kind.localeCompare(b.kind);
+}
+
+function computeHealthSummaryStatus(input: {
+  cron_freshness_sec: number | null;
+  projection_lag_sec: number | null;
+  latest_event_exists: boolean;
+  dlq_backlog_count: number;
+  active_incidents_count: number;
+  rate_limit_flood_detected: boolean;
+}): HealthSummaryStatus {
+  const cronDown = input.cron_freshness_sec == null || input.cron_freshness_sec > downCronFreshnessSec();
+  const projectionDown =
+    input.latest_event_exists &&
+    (input.projection_lag_sec == null || input.projection_lag_sec > downProjectionLagSec());
+
+  if (cronDown || projectionDown) return "DOWN";
+  if (
+    input.dlq_backlog_count > degradedDlqBacklogThreshold() ||
+    input.active_incidents_count > 0 ||
+    input.rate_limit_flood_detected
+  ) {
+    return "DEGRADED";
+  }
+  return "OK";
+}
+
+function buildTopIssues(input: {
+  cron_freshness_sec: number | null;
+  projection_lag_sec: number | null;
+  latest_event_exists: boolean;
+  dlq_backlog_count: number;
+  active_incidents_count: number;
+  rate_limit_flood_detected: boolean;
+}): TopIssue[] {
+  const issues: TopIssue[] = [];
+
+  if (input.cron_freshness_sec == null || input.cron_freshness_sec > downCronFreshnessSec()) {
+    issues.push({
+      kind: "cron_stale",
+      severity: "DOWN",
+      age_sec: input.cron_freshness_sec,
+      details: {
+        cron_freshness_sec: input.cron_freshness_sec ?? 0,
+        freshness_missing: input.cron_freshness_sec == null,
+      },
     });
-
-    if (!row || !row.last_success_at) {
-      return {
-        supported: true,
-        ok: false,
-        details: {
-          reason: "no_rows",
-          table: support.tableName,
-        },
-      };
-    }
-
-    const maxAgeSec = cronFreshnessMaxSec();
-    const ageSec = Number(row.age_sec ?? Number.MAX_SAFE_INTEGER);
-    return {
-      supported: true,
-      ok: ageSec <= maxAgeSec,
-      details: {
-        table: support.tableName,
-        age_sec: ageSec,
-        max_age_sec: maxAgeSec,
-        last_success_at: row.last_success_at,
-      },
-    };
-  } catch (err) {
-    return {
-      supported: true,
-      ok: false,
-      details: {
-        table: support.tableName,
-        error: errorString(err),
-      },
-    };
-  }
-}
-
-async function checkProjectionLag(
-  client: DbClient,
-  support: ProjectionLagSupport,
-): Promise<OptionalCheckPayload> {
-  if (!support.supported) {
-    return {
-      supported: false,
-      ok: true,
-      details: { reason: "unsupported" },
-    };
   }
 
-  try {
-    const row = await runTimedRead(client, async () => {
-      const res = await client.query<{
-        cursor_age_sec: number | null;
-        cursor_updated_at: string | null;
-      }>(
-        `SELECT
-           EXTRACT(EPOCH FROM (now() - ${support.updatedAtColumn}))::int AS cursor_age_sec,
-           ${support.updatedAtColumn}::text AS cursor_updated_at
-         FROM ${support.tableName}
-         ORDER BY ${support.updatedAtColumn} DESC NULLS LAST
-         LIMIT 1`,
-      );
-      return res.rows[0] ?? null;
+  if (input.latest_event_exists && input.projection_lag_sec == null) {
+    issues.push({
+      kind: "projection_watermark_missing",
+      severity: "DOWN",
+      age_sec: null,
+      details: {
+        latest_event_exists: true,
+      },
     });
-
-    if (!row || !row.cursor_updated_at) {
-      return {
-        supported: true,
-        ok: false,
-        details: {
-          reason: "no_rows",
-          table: support.tableName,
-        },
-      };
-    }
-
-    const maxAgeSec = projectionCursorMaxAgeSec();
-    const ageSec = Number(row.cursor_age_sec ?? Number.MAX_SAFE_INTEGER);
-    return {
-      supported: true,
-      ok: ageSec <= maxAgeSec,
+  } else if (
+    input.projection_lag_sec != null &&
+    input.projection_lag_sec > downProjectionLagSec()
+  ) {
+    issues.push({
+      kind: "projection_lagging",
+      severity: "DOWN",
+      age_sec: input.projection_lag_sec,
       details: {
-        table: support.tableName,
-        cursor_age_sec: ageSec,
-        max_age_sec: maxAgeSec,
-        cursor_updated_at: row.cursor_updated_at,
+        projection_lag_sec: input.projection_lag_sec,
       },
-    };
-  } catch (err) {
-    return {
-      supported: true,
-      ok: false,
-      details: {
-        table: support.tableName,
-        error: errorString(err),
-      },
-    };
-  }
-}
-
-async function checkDlqBacklog(
-  client: DbClient,
-  support: DlqBacklogSupport,
-): Promise<OptionalCheckPayload> {
-  if (!support.supported) {
-    return {
-      supported: false,
-      ok: true,
-      details: { reason: "unsupported" },
-    };
-  }
-
-  const pendingFilter = `(${support.pendingColumns
-    .map((column) => `${column} IS NULL`)
-    .join(" OR ")})`;
-
-  try {
-    const row = await runTimedRead(client, async () => {
-      const res = await client.query<{
-        oldest_age_sec: number | null;
-        pending_count: number;
-      }>(
-        `SELECT
-           EXTRACT(EPOCH FROM (now() - MIN(${support.createdAtColumn})))::int AS oldest_age_sec,
-           COUNT(*)::int AS pending_count
-         FROM ${support.tableName}
-         WHERE ${pendingFilter}`,
-      );
-      return res.rows[0] ?? { oldest_age_sec: null, pending_count: 0 };
     });
-
-    const warnCount = dlqPendingWarnCount();
-    const pendingCount = Number(row.pending_count ?? 0);
-    return {
-      supported: true,
-      ok: pendingCount < warnCount,
-      details: {
-        table: support.tableName,
-        pending_count: pendingCount,
-        warn_count: warnCount,
-        oldest_age_sec: row.oldest_age_sec,
-      },
-    };
-  } catch (err) {
-    return {
-      supported: true,
-      ok: false,
-      details: {
-        table: support.tableName,
-        error: errorString(err),
-      },
-    };
-  }
-}
-
-async function checkRateLimitFlood(
-  client: DbClient,
-  support: RateLimitFloodSupport,
-): Promise<OptionalCheckPayload> {
-  if (!support.supported) {
-    return {
-      supported: false,
-      ok: true,
-      details: { reason: "unsupported" },
-    };
   }
 
-  try {
-    if (support.mode === "streaks") {
-      const row = await runTimedRead(client, async () => {
-        const res = await client.query<{ offenders: number }>(
-          `SELECT COUNT(*)::int AS offenders
-           FROM ${support.tableName}
-           WHERE ${support.consecutiveColumn} >= 3
-             AND ${support.last429Column} > now() - interval '15 minutes'`,
-        );
-        return res.rows[0] ?? { offenders: 0 };
-      });
-
-      const warnThreshold = rateLimitFloodOffendersWarn();
-      const offenders = Number(row.offenders ?? 0);
-      return {
-        supported: true,
-        ok: offenders < warnThreshold,
-        details: {
-          mode: support.mode,
-          table: support.tableName,
-          offenders,
-          warn_threshold: warnThreshold,
-        },
-      };
-    }
-
-    const row = await runTimedRead(client, async () => {
-      const res = await client.query<{ max_in_window: number | null }>(
-        `SELECT MAX(${support.countColumn})::int AS max_in_window
-         FROM ${support.tableName}
-         WHERE ${support.windowStartColumn} > now() - interval '5 minutes'`,
-      );
-      return res.rows[0] ?? { max_in_window: null };
+  if (input.dlq_backlog_count > degradedDlqBacklogThreshold()) {
+    issues.push({
+      kind: "dlq_backlog",
+      severity: "DEGRADED",
+      age_sec: null,
+      details: {
+        dlq_backlog_count: input.dlq_backlog_count,
+      },
     });
-
-    const warnThreshold = rateLimitFloodOffendersWarn();
-    const maxInWindow = Number(row.max_in_window ?? 0);
-    return {
-      supported: true,
-      ok: maxInWindow < warnThreshold,
-      details: {
-        mode: support.mode,
-        table: support.tableName,
-        max_in_window: maxInWindow,
-        warn_threshold: warnThreshold,
-      },
-    };
-  } catch (err) {
-    return {
-      supported: true,
-      ok: false,
-      details: {
-        mode: support.mode,
-        table: support.tableName,
-        error: errorString(err),
-      },
-    };
   }
+
+  if (input.rate_limit_flood_detected) {
+    issues.push({
+      kind: "rate_limit_flood",
+      severity: "DEGRADED",
+      age_sec: null,
+      details: {
+        rate_limit_flood_detected: true,
+      },
+    });
+  }
+
+  if (input.active_incidents_count > 0) {
+    issues.push({
+      kind: "active_incidents",
+      severity: "DEGRADED",
+      age_sec: null,
+      details: {
+        active_incidents_count: input.active_incidents_count,
+      },
+    });
+  }
+
+  return issues.sort(compareTopIssues).slice(0, 5);
 }
 
-async function runOptionalChecks(
+function responseTtlMs(status: HealthSummaryStatus): number {
+  return status === "DOWN" ? cacheTtlErrorMs() : cacheTtlOkMs();
+}
+
+async function computeHealthComputation(
   client: DbClient,
+  workspace_id: string,
   cache: SchemaCheckCache,
-): Promise<{
-  cron_watchdog: OptionalCheckPayload;
-  projection_lag: OptionalCheckPayload;
-  dlq_backlog: OptionalCheckPayload;
-  rate_limit_flood: OptionalCheckPayload;
-}> {
-  const cron_watchdog = await checkCronWatchdog(client, cache.optionalSupport.cronWatchdog);
-  const projection_lag = await checkProjectionLag(client, cache.optionalSupport.projectionLag);
-  const dlq_backlog = await checkDlqBacklog(client, cache.optionalSupport.dlqBacklog);
-  const rate_limit_flood = await checkRateLimitFlood(client, cache.optionalSupport.rateLimitFlood);
+): Promise<HealthComputation> {
+  const serverTimeRes = await client.query<{ server_time: string }>(
+    `SELECT now()::text AS server_time`,
+  );
+  const server_time = asIsoFromDbNowText(serverTimeRes.rows[0]?.server_time ?? null);
+
+  let cron_freshness_sec: number | null = null;
+  if (cache.support.cronWatchdog.supported) {
+    const criticalCheckNames = parseCriticalCronCheckNames();
+    const cronRes = await client.query<{ cron_freshness_sec: number | null }>(
+      `WITH expected AS (
+         SELECT unnest($1::text[]) AS check_name
+       ),
+       joined AS (
+         SELECT e.check_name, c.${cache.support.cronWatchdog.lastSuccessColumn} AS last_success_at
+         FROM expected e
+         LEFT JOIN ${cache.support.cronWatchdog.tableName} c
+           ON c.${cache.support.cronWatchdog.checkNameColumn} = e.check_name
+       )
+       SELECT
+         CASE
+           WHEN COUNT(*) FILTER (WHERE last_success_at IS NULL) > 0 THEN NULL
+           ELSE MIN(EXTRACT(EPOCH FROM (now() - last_success_at))::int)
+         END AS cron_freshness_sec
+       FROM joined`,
+      [criticalCheckNames],
+    );
+    cron_freshness_sec = cronRes.rows[0]?.cron_freshness_sec ?? null;
+  }
+
+  const projectionRes = await client.query<{
+    latest_event_at: string | null;
+    watermark_at: string | null;
+    projection_lag_sec: number | null;
+  }>(
+    `WITH latest AS (
+       SELECT MAX(occurred_at) AS latest_event_at
+       FROM evt_events
+       WHERE workspace_id = $1
+     ),
+     wm AS (
+       SELECT
+         ${
+           cache.support.projectionLag.supported
+             ? `MAX(${cache.support.projectionLag.watermarkColumn})`
+             : "NULL::timestamptz"
+         } AS watermark_at
+       FROM ${cache.support.projectionLag.supported ? cache.support.projectionLag.tableName : "(SELECT 1) t"}
+       ${cache.support.projectionLag.supported ? `WHERE ${cache.support.projectionLag.workspaceColumn} = $1` : ""}
+     )
+     SELECT
+       latest.latest_event_at::text AS latest_event_at,
+       wm.watermark_at::text AS watermark_at,
+       CASE
+         WHEN latest.latest_event_at IS NULL THEN 0
+         WHEN wm.watermark_at IS NULL THEN NULL
+         ELSE GREATEST(0, EXTRACT(EPOCH FROM (latest.latest_event_at - wm.watermark_at))::int)
+       END AS projection_lag_sec
+     FROM latest
+     CROSS JOIN wm`,
+    [workspace_id],
+  );
+
+  const latest_event_exists = projectionRes.rows[0]?.latest_event_at != null;
+  const projection_lag_sec = projectionRes.rows[0]?.projection_lag_sec ?? null;
+
+  let dlq_backlog_count = 0;
+  if (cache.support.dlqBacklog.supported) {
+    const pendingFilter = cache.support.dlqBacklog.pendingColumns
+      .map((column) => `${column} IS NULL`)
+      .join(" OR ");
+    const dlqRes = await client.query<{ dlq_backlog_count: number }>(
+      `SELECT COUNT(*)::int AS dlq_backlog_count
+       FROM ${cache.support.dlqBacklog.tableName}
+       WHERE ${cache.support.dlqBacklog.workspaceColumn} = $1
+         AND (${pendingFilter})`,
+      [workspace_id],
+    );
+    dlq_backlog_count = Number(dlqRes.rows[0]?.dlq_backlog_count ?? 0);
+  }
+
+  let rate_limit_flood_detected = false;
+  let rate_limit_offenders = 0;
+  if (cache.support.rateLimitFlood.supported) {
+    if (cache.support.rateLimitFlood.mode === "streaks") {
+      const streakRes = await client.query<{ offenders: number }>(
+        `SELECT COUNT(*)::int AS offenders
+         FROM ${cache.support.rateLimitFlood.tableName}
+         WHERE ${cache.support.rateLimitFlood.workspaceColumn} = $1
+           AND ${cache.support.rateLimitFlood.consecutiveColumn} >= 3
+           AND ${cache.support.rateLimitFlood.last429Column} > now() - interval '15 minutes'`,
+        [workspace_id],
+      );
+      rate_limit_offenders = Number(streakRes.rows[0]?.offenders ?? 0);
+      rate_limit_flood_detected = rate_limit_offenders >= rateLimitFloodOffendersWarn();
+    } else {
+      const bucketsRes = await client.query<{ max_in_window: number | null }>(
+        `SELECT MAX(${cache.support.rateLimitFlood.countColumn})::int AS max_in_window
+         FROM ${cache.support.rateLimitFlood.tableName}
+         WHERE ${cache.support.rateLimitFlood.windowStartColumn} > now() - interval '5 minutes'
+           AND (
+             ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('agent_min:' || $1 || ':%')
+             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('agent_hour:' || $1 || ':%')
+             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('exp_hour:' || $1 || ':%')
+             OR ${cache.support.rateLimitFlood.bucketKeyColumn} LIKE ('hb_min:' || $1 || ':%')
+           )`,
+        [workspace_id],
+      );
+      rate_limit_offenders = Number(bucketsRes.rows[0]?.max_in_window ?? 0);
+      rate_limit_flood_detected = rate_limit_offenders >= rateLimitFloodOffendersWarn();
+    }
+  }
+
+  let active_incidents_count = 0;
+  if (cache.support.activeIncidents.supported) {
+    const incidentsRes = await client.query<{ active_incidents_count: number }>(
+      `SELECT COUNT(*)::int AS active_incidents_count
+       FROM ${cache.support.activeIncidents.tableName}
+       WHERE ${cache.support.activeIncidents.workspaceColumn} = $1
+         AND ${cache.support.activeIncidents.statusColumn} = 'open'`,
+      [workspace_id],
+    );
+    active_incidents_count = Number(incidentsRes.rows[0]?.active_incidents_count ?? 0);
+  }
+
+  const summaryInput = {
+    cron_freshness_sec,
+    projection_lag_sec,
+    latest_event_exists,
+    dlq_backlog_count,
+    active_incidents_count,
+    rate_limit_flood_detected,
+  };
+
+  const health_summary = computeHealthSummaryStatus(summaryInput);
+  const top_issues = buildTopIssues(summaryInput);
+
+  const optional: SystemHealthPayload["checks"]["optional"] = {
+    cron_watchdog: {
+      supported: cache.support.cronWatchdog.supported,
+      ok: cron_freshness_sec != null && cron_freshness_sec <= downCronFreshnessSec(),
+      details: {
+        cron_freshness_sec: cron_freshness_sec ?? 0,
+        down_threshold_sec: downCronFreshnessSec(),
+        freshness_missing: cron_freshness_sec == null,
+      },
+    },
+    projection_lag: {
+      supported: cache.support.projectionLag.supported,
+      ok:
+        !latest_event_exists ||
+        (projection_lag_sec != null && projection_lag_sec <= downProjectionLagSec()),
+      details: {
+        projection_lag_sec: projection_lag_sec ?? 0,
+        down_threshold_sec: downProjectionLagSec(),
+        watermark_missing_while_events_exist: latest_event_exists && projection_lag_sec == null,
+      },
+    },
+    dlq_backlog: {
+      supported: cache.support.dlqBacklog.supported,
+      ok: dlq_backlog_count <= degradedDlqBacklogThreshold(),
+      details: {
+        dlq_backlog_count,
+        degraded_threshold: degradedDlqBacklogThreshold(),
+      },
+    },
+    rate_limit_flood: {
+      supported: cache.support.rateLimitFlood.supported,
+      ok: !rate_limit_flood_detected,
+      details: {
+        rate_limit_flood_detected,
+        offender_count: rate_limit_offenders,
+        warn_threshold: rateLimitFloodOffendersWarn(),
+      },
+    },
+  };
 
   return {
-    cron_watchdog,
-    projection_lag,
-    dlq_backlog,
-    rate_limit_flood,
+    server_time,
+    summary: {
+      health_summary,
+      cron_freshness_sec,
+      projection_lag_sec,
+      dlq_backlog_count,
+      rate_limit_flood_detected,
+      active_incidents_count,
+      top_issues,
+    },
+    optional,
   };
+}
+
+async function computeAndCacheSummary(
+  pool: DbPool,
+  workspace_id: string,
+  cache: SchemaCheckCache,
+): Promise<SummaryComputeResult> {
+  const client = await pool.connect();
+  try {
+    await beginTimedReadTx(client, dbStatementTimeoutMs());
+    const computed = await computeHealthComputation(client, workspace_id, cache);
+    await client.query("COMMIT");
+
+    const payload: SystemHealthPayload = {
+      schema_version: SCHEMA_VERSION,
+      ok: true,
+      workspace_id,
+      checks: {
+        db: { ok: true },
+        kernel_schema_versions: {
+          ok: true,
+          has_rows: cache.kernelSchemaVersions.hasRows,
+          current_version: cache.kernelSchemaVersions.currentVersion,
+        },
+        evt_events: {
+          ok: true,
+          required_columns_present: cache.evtEvents.requiredColumnsPresent,
+          missing_columns: cache.evtEvents.missingColumns,
+        },
+        evt_events_idempotency: {
+          ok: true,
+          index_name: "uidx_evt_events_idempotency_key",
+        },
+        optional: computed.optional,
+      },
+      summary: computed.summary,
+    };
+
+    const entry: SummaryCacheEntry = {
+      payload,
+      stored_at_ms: Date.now(),
+      ttl_ms: responseTtlMs(computed.summary.health_summary),
+    };
+    summaryCacheByWorkspace.set(workspace_id, entry);
+
+    return {
+      entry,
+      server_time: computed.server_time,
+    };
+  } catch {
+    await client.query("ROLLBACK").catch(() => {});
+    throw new Error("projection_unavailable");
+  } finally {
+    client.release();
+  }
+}
+
+function contractErrorReasonFromFailure(
+  failure: "db.connectivity" | "projection_unavailable",
+): "internal_error" | "projection_unavailable" {
+  if (failure === "db.connectivity") return "internal_error";
+  return "projection_unavailable";
+}
+
+function bodyWorkspaceId(bodyRecord: Record<string, unknown>): string | null {
+  const raw = bodyRecord.workspace_id;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export async function registerSystemHealthRoutes(
@@ -691,7 +910,7 @@ export async function registerSystemHealthRoutes(
 ): Promise<void> {
   app.get("/health", async (_req, reply) => {
     try {
-      const nowText = await queryNowText(pool, HEALTH_QUERY_TIMEOUT_MS, "health_db_now");
+      const nowText = await queryNowText(pool, HEALTH_QUERY_TIMEOUT_MS);
       const ts = asIsoFromDbNowText(nowText);
       return reply.code(SUCCESS_HTTP_STATUS).send({ ok: true, ts });
     } catch {
@@ -730,89 +949,123 @@ export async function registerSystemHealthRoutes(
         );
     }
 
-    let client: DbClient | undefined;
+    const bodyWorkspace = bodyWorkspaceId(bodyRecord);
+    if (bodyWorkspace && bodyWorkspace !== workspace_id) {
+      const reason_code = "unauthorized_workspace" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(
+          buildContractError(reason_code, {
+            header_workspace_id: workspace_id,
+            body_workspace_id: bodyWorkspace,
+          }),
+        );
+    }
+
+    let schema: SchemaCheckCache;
     try {
-      client = await pool.connect();
-      const nowText = await queryNowText(client, SYSTEM_NOW_TIMEOUT_MS, "system_health_db_now");
-      const server_time = asIsoFromDbNowText(nowText);
-
-      const cache = await getSchemaChecks(pool);
-      const failedChecks: string[] = [];
-
-      if (!cache.evtEvents.tableExists) {
-        failedChecks.push("evt_events.table_missing");
-      }
-      if (!cache.evtEvents.requiredColumnsPresent) {
-        failedChecks.push("evt_events.required_columns_missing");
-      }
-      const hasInternalFailure = failedChecks.length > 0;
-
-      if (!cache.kernelSchemaVersions.tableExists) {
-        failedChecks.push("kernel_schema_versions.table_missing");
-      }
-      if (!cache.kernelSchemaVersions.hasRows) {
-        failedChecks.push("kernel_schema_versions.empty");
-      }
-      if (!cache.evtEvents.idempotencyIndexExists) {
-        failedChecks.push("evt_events.idempotency_index_missing");
-      }
-
-      if (hasInternalFailure) {
-        const reason_code = "internal_error" as const;
-        return reply
-          .code(httpStatusForReasonCode(reason_code))
-          .send(buildContractError(reason_code, { failed_checks: failedChecks }));
-      }
-
-      if (failedChecks.length > 0) {
-        const reason_code = "projection_unavailable" as const;
-        return reply
-          .code(httpStatusForReasonCode(reason_code))
-          .send(buildContractError(reason_code, { failed_checks: failedChecks }));
-      }
-
-      const optional = await runOptionalChecks(client, cache);
-
-      return reply.code(SUCCESS_HTTP_STATUS).send({
-        schema_version: SCHEMA_VERSION,
-        server_time,
-        ok: true,
-        workspace_id,
-        checks: {
-          db: { ok: true },
-          kernel_schema_versions: {
-            ok: true,
-            has_rows: cache.kernelSchemaVersions.hasRows,
-            current_version: cache.kernelSchemaVersions.currentVersion,
-          },
-          evt_events: {
-            ok: true,
-            required_columns_present: cache.evtEvents.requiredColumnsPresent,
-            missing_columns: cache.evtEvents.missingColumns,
-          },
-          evt_events_idempotency: {
-            ok: true,
-            index_name: "uidx_evt_events_idempotency_key",
-          },
-          optional,
-        },
-      });
-    } catch (err) {
+      schema = await getSchemaChecks(pool);
+    } catch {
       const reason_code = "internal_error" as const;
-      req.log.error(
-        {
-          event: "system.health.error",
-          reason_code,
-          err_name: err instanceof Error ? err.name : "Error",
-          err_message: err instanceof Error ? err.message : String(err),
-        },
-        "system health check failed",
-      );
       return reply
         .code(httpStatusForReasonCode(reason_code))
         .send(buildContractError(reason_code, { failed_checks: ["db.connectivity"] }));
-    } finally {
-      client?.release();
     }
+
+    const failedChecks: string[] = [];
+    if (!schema.evtEvents.tableExists) {
+      failedChecks.push("evt_events.table_missing");
+    }
+    if (!schema.evtEvents.requiredColumnsPresent) {
+      failedChecks.push("evt_events.required_columns_missing");
+    }
+    if (failedChecks.length > 0) {
+      const reason_code = "internal_error" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { failed_checks: failedChecks }));
+    }
+
+    if (!schema.kernelSchemaVersions.tableExists) {
+      failedChecks.push("kernel_schema_versions.table_missing");
+    }
+    if (!schema.kernelSchemaVersions.hasRows) {
+      failedChecks.push("kernel_schema_versions.empty");
+    }
+    if (!schema.evtEvents.idempotencyIndexExists) {
+      failedChecks.push("evt_events.idempotency_index_missing");
+    }
+    if (failedChecks.length > 0) {
+      const reason_code = "projection_unavailable" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { failed_checks: failedChecks }));
+    }
+
+    let usedCache = false;
+    let computeResult: SummaryComputeResult;
+    const cacheEntry = summaryCacheByWorkspace.get(workspace_id);
+
+    if (cacheEntry && isCacheEntryFresh(cacheEntry)) {
+      usedCache = true;
+      computeResult = {
+        entry: cacheEntry,
+        server_time: null,
+      };
+    } else {
+      const inFlight = summaryInFlightByWorkspace.get(workspace_id);
+      if (inFlight) {
+        usedCache = true;
+        try {
+          computeResult = await inFlight;
+        } catch (err) {
+          const failure =
+            err instanceof Error && err.message === "projection_unavailable"
+              ? "projection_unavailable"
+              : "db.connectivity";
+          const reason_code = contractErrorReasonFromFailure(failure);
+          return reply
+            .code(httpStatusForReasonCode(reason_code))
+            .send(buildContractError(reason_code, { failed_checks: ["summary.compute"] }));
+        }
+      } else {
+        const computePromise = computeAndCacheSummary(pool, workspace_id, schema).finally(() => {
+          summaryInFlightByWorkspace.delete(workspace_id);
+        });
+        summaryInFlightByWorkspace.set(workspace_id, computePromise);
+        try {
+          computeResult = await computePromise;
+        } catch (err) {
+          const failure =
+            err instanceof Error && err.message === "projection_unavailable"
+              ? "projection_unavailable"
+              : "db.connectivity";
+          const reason_code = contractErrorReasonFromFailure(failure);
+          return reply
+            .code(httpStatusForReasonCode(reason_code))
+            .send(buildContractError(reason_code, { failed_checks: ["summary.compute"] }));
+        }
+      }
+    }
+
+    let liveServerTime: string | null = computeResult.server_time;
+    if (usedCache) {
+      try {
+        liveServerTime = await fetchLiveServerTime(pool, dbStatementTimeoutMs());
+      } catch {
+        const reason_code = "internal_error" as const;
+        return reply
+          .code(httpStatusForReasonCode(reason_code))
+          .send(buildContractError(reason_code, { failed_checks: ["db.connectivity"] }));
+      }
+    }
+
+    return reply.code(SUCCESS_HTTP_STATUS).send({
+      ...computeResult.entry.payload,
+      server_time: liveServerTime,
+      meta: {
+        cached: usedCache,
+      },
+    });
   });
 }
