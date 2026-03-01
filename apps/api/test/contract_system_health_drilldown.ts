@@ -355,9 +355,11 @@ async function main(): Promise<void> {
     const wsPlain = `ws_like_plain_${randomUUID().slice(0, 6)}`;
     const tokenLike = await bootstrapAccessToken(baseUrl, bootstrapTokenHeader, wsLike);
     await bootstrapAccessToken(baseUrl, bootstrapTokenHeader, wsPlain);
-    const bucketTs = "2026-01-04T00:00:00Z";
+    const bucketTs = new Date().toISOString();
+    const staleBucketKey = `agent_min:${wsLike}:agent_stale`;
     await insertRateLimitBucket(db, `agent_min:${wsLike}:agent_a`, bucketTs, 60, 9);
     await insertRateLimitBucket(db, `agent_min:${wsPlain}:agent_b`, bucketTs, 60, 5);
+    await insertRateLimitBucket(db, staleBucketKey, "2000-01-01T00:00:00Z", 60, 99);
     const likeScoped = await getIssues(baseUrl, wsLike, tokenLike, {
       kind: "rate_limit_flood",
       limit: "50",
@@ -367,6 +369,10 @@ async function main(): Promise<void> {
     assert.ok(likeItems.length >= 1, likeScoped.text);
     assert.ok(
       likeItems.every((item) => item.entity_id.startsWith(`agent_min:${wsLike}:`)),
+      JSON.stringify(likeItems),
+    );
+    assert.ok(
+      !likeItems.some((item) => item.entity_id === staleBucketKey),
       JSON.stringify(likeItems),
     );
 

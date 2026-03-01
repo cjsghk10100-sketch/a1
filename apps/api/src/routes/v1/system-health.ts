@@ -1404,6 +1404,7 @@ async function queryDrilldownRateLimitFloodStreaks(
     FROM ${support.tableName}
     WHERE ${support.workspaceColumn} = $1
       AND ${support.consecutiveColumn} >= 3
+      AND ${support.last429Column} > now() - interval '15 minutes'
       ${cursorClause}
     ORDER BY COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz) DESC, agent_id::text DESC
     LIMIT $${params.length}
@@ -1422,6 +1423,7 @@ async function queryDrilldownRateLimitFloodStreaks(
     FROM ${support.tableName}
     WHERE ${support.workspaceColumn} = $1
       AND ${support.consecutiveColumn} >= 3
+      AND ${support.last429Column} > now() - interval '15 minutes'
       ${cursorClause}
     ORDER BY COALESCE(${support.last429Column}, '1970-01-01T00:00:00Z'::timestamptz) DESC, agent_id::text DESC
     LIMIT $${params.length}
@@ -1520,7 +1522,8 @@ async function queryDrilldownRateLimitFlood(
          END AS age_sec,
          ${support.countColumn}::int AS bucket_count
        FROM ${support.tableName}
-       WHERE (
+       WHERE ${support.windowStartColumn} > now() - interval '5 minutes'
+         AND (
          ${support.bucketKeyColumn} LIKE ('agent_min:' || $1 || ':%') ESCAPE '\\'
          OR ${support.bucketKeyColumn} LIKE ('agent_hour:' || $1 || ':%') ESCAPE '\\'
          OR ${support.bucketKeyColumn} LIKE ('exp_hour:' || $1 || ':%') ESCAPE '\\'
