@@ -391,7 +391,8 @@ function parseDrilldownCursor(raw: unknown): DrilldownCursor | null {
     typeof updated_at !== "string" ||
     updated_at.trim().length === 0 ||
     typeof entity_id !== "string" ||
-    entity_id.trim().length === 0
+    entity_id.trim().length === 0 ||
+    !isValidDrilldownCursorTimestamp(updated_at.trim())
   ) {
     throw new Error("invalid_cursor");
   }
@@ -399,6 +400,14 @@ function parseDrilldownCursor(raw: unknown): DrilldownCursor | null {
     updated_at: updated_at.trim(),
     entity_id: entity_id.trim(),
   };
+}
+
+function isValidDrilldownCursorTimestamp(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  const isoLike = trimmed.replace(" ", "T");
+  const tzNormalized = /[+-]\d{2}$/.test(isoLike) ? `${isoLike}:00` : isoLike;
+  return Number.isFinite(Date.parse(tzNormalized));
 }
 
 function pruneIssuesRateLimitWindows(nowSec: number): void {
@@ -1627,27 +1636,52 @@ async function queryDrilldownProjectionLagging(
 
 async function queryDrilldownProjectionWatermarkMissing(
   client: DbClient,
-  support: ProjectionLagSupport,
+  cache: SchemaCheckCache,
   workspace_id: string,
   server_time: string,
 ): Promise<DrilldownPage> {
-  let watermarkMissing = true;
-  if (support.supported) {
+  const latest_event_at = await queryLatestWorkspaceEventAt(client, workspace_id);
+  const latest_event_exists = latest_event_at != null;
+  if (!latest_event_exists) {
+    return { items: [], truncated: false, applied_limit: 0 };
+  }
+
+  let watermark_at: string | null = null;
+  if (cache.support.projectionLag.supported) {
     try {
       const row = await client.query<{ watermark_at: string | null }>(
-        `SELECT ${support.watermarkColumn}::text AS watermark_at
-         FROM ${support.tableName}
-         WHERE ${support.workspaceColumn} = $1
+        `SELECT ${cache.support.projectionLag.watermarkColumn}::text AS watermark_at
+         FROM ${cache.support.projectionLag.tableName}
+         WHERE ${cache.support.projectionLag.workspaceColumn} = $1
          LIMIT 1`,
         [workspace_id],
       );
-      const watermark_at = row.rows[0]?.watermark_at ?? null;
-      watermarkMissing = !watermark_at;
+      watermark_at = row.rows[0]?.watermark_at ?? null;
     } catch (err) {
       if (!isMissingTableError(err)) throw err;
     }
   }
 
+  let fallback_watermark_at: string | null = null;
+  if (!watermark_at && cache.support.projectionLagFallbackTables.length > 0) {
+    const unions = cache.support.projectionLagFallbackTables
+      .map(
+        (tableName) =>
+          `SELECT MAX(updated_at) AS updated_at
+           FROM ${tableName}
+           WHERE workspace_id = $1`,
+      )
+      .join(" UNION ALL ");
+    const fallbackRes = await client.query<{ fallback_watermark_at: string | null }>(
+      `SELECT MAX(updated_at)::text AS fallback_watermark_at
+       FROM (${unions}) AS projection_maxes`,
+      [workspace_id],
+    );
+    fallback_watermark_at = fallbackRes.rows[0]?.fallback_watermark_at ?? null;
+  }
+
+  const effective_watermark_at = watermark_at ?? fallback_watermark_at;
+  const watermarkMissing = effective_watermark_at == null;
   if (!watermarkMissing) {
     return { items: [], truncated: false, applied_limit: 0 };
   }
@@ -1917,7 +1951,7 @@ export async function registerSystemHealthRoutes(
       } else if (kind === "projection_watermark_missing") {
         page = await queryDrilldownProjectionWatermarkMissing(
           client,
-          schema.support.projectionLag,
+          schema,
           workspace_id,
           server_time,
         );

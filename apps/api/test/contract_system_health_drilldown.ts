@@ -180,6 +180,43 @@ async function insertDlqRows(
   }
 }
 
+async function insertProjectionFallbackRow(
+  db: pg.Client,
+  workspaceId: string,
+  updatedAt: string,
+): Promise<void> {
+  const runId = `run_fb_${randomUUID().slice(0, 8)}`;
+  await db.query(
+    `INSERT INTO proj_runs (
+       run_id,
+       workspace_id,
+       room_id,
+       thread_id,
+       status,
+       title,
+       goal,
+       input,
+       output,
+       error,
+       tags,
+       created_at,
+       started_at,
+       ended_at,
+       updated_at,
+       correlation_id,
+       last_event_id
+     ) VALUES (
+       $1, $2, NULL, NULL, 'queued', 'fallback', 'fallback',
+       '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '{}'::text[],
+       $3::timestamptz, NULL, NULL, $3::timestamptz,
+       $4, $5
+     )
+     ON CONFLICT (run_id) DO UPDATE
+     SET updated_at = EXCLUDED.updated_at`,
+    [runId, workspaceId, updatedAt, `corr_${runId}`, `evt_${runId}`],
+  );
+}
+
 async function getIssues(
   baseUrl: string,
   workspaceId: string,
@@ -309,6 +346,22 @@ async function main(): Promise<void> {
     assert.equal(badCursor.status, HTTP_INVALID, badCursor.text);
     assert.equal((badCursor.json as ErrorPayload).reason_code, "invalid_payload_combination");
 
+    // T7b syntactically valid cursor with non-timestamp updated_at is rejected
+    const invalidTimestampCursor = Buffer.from(
+      JSON.stringify({ updated_at: "not-a-date", entity_id: "msg_000" }),
+      "utf8",
+    ).toString("base64url");
+    const badCursorTimestamp = await getIssues(baseUrl, wsPag, tokenPag, {
+      kind: "dlq_backlog",
+      limit: "10",
+      cursor: invalidTimestampCursor,
+    });
+    assert.equal(badCursorTimestamp.status, HTTP_INVALID, badCursorTimestamp.text);
+    assert.equal(
+      (badCursorTimestamp.json as ErrorPayload).reason_code,
+      "invalid_payload_combination",
+    );
+
     // T8 cron global table safety
     await db.query(
       `INSERT INTO cron_health (check_name, last_success_at, last_failure_at, consecutive_failures, last_error, metadata)
@@ -327,6 +380,20 @@ async function main(): Promise<void> {
     });
     assert.equal(cronWithCursor.status, HTTP_OK, cronWithCursor.text);
     assert.equal((cronWithCursor.json as DrilldownResponse).truncated, false);
+
+    // T9b projection_watermark_missing honors fallback projection watermark
+    const wsFallback = `ws_fb_${randomUUID().slice(0, 6)}`;
+    const tokenFallback = await bootstrapAccessToken(baseUrl, bootstrapTokenHeader, wsFallback);
+    await db.query(`DELETE FROM projector_watermarks WHERE workspace_id = $1`, [wsFallback]);
+    await insertProjectionFallbackRow(db, wsFallback, "2026-01-03T00:00:00Z");
+    const fallbackWatermark = await getIssues(baseUrl, wsFallback, tokenFallback, {
+      kind: "projection_watermark_missing",
+      limit: "99",
+      cursor: "ignored-for-non-paginated-kind",
+    });
+    assert.equal(fallbackWatermark.status, HTTP_OK, fallbackWatermark.text);
+    assert.equal((fallbackWatermark.json as DrilldownResponse).items.length, 0);
+    assert.equal((fallbackWatermark.json as DrilldownResponse).truncated, false);
 
     // T10 server_time ends with Z
     assert.ok((cronWithCursor.json as DrilldownResponse).server_time.endsWith("Z"), cronWithCursor.text);
