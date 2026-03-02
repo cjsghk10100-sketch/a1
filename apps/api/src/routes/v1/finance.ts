@@ -309,7 +309,7 @@ async function computeFinanceMetricsPayload(
        )
        SELECT
          to_char(dr.day_utc, 'YYYY-MM-DD') AS day_utc,
-         COALESCE(FLOOR(source_daily.estimated_cost_units), 0)::bigint::text AS estimated_cost_units
+         COALESCE(source_daily.estimated_cost_units, 0)::text AS estimated_cost_units
        FROM date_range dr
        LEFT JOIN source_daily ON source_daily.day_utc = dr.day_utc
        ORDER BY dr.day_utc ASC`,
@@ -318,7 +318,7 @@ async function computeFinanceMetricsPayload(
 
     const totalsRes = await client.query<{ estimated_cost_units: string }>(
       `SELECT
-         COALESCE(FLOOR(SUM(estimated_cost_units)), 0)::bigint::text AS estimated_cost_units
+         COALESCE(SUM(estimated_cost_units), 0)::text AS estimated_cost_units
        FROM ${FINANCE_DAILY_SOURCE_TABLE}
        WHERE workspace_id = $1
          AND target_type = 'workspace'

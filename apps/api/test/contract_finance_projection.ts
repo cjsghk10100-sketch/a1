@@ -322,6 +322,7 @@ async function main(): Promise<void> {
 
       await upsertWorkspaceFinanceDaily(db, workspaceA, -6, 10);
       await upsertWorkspaceFinanceDaily(db, workspaceA, -4, 20);
+      await upsertWorkspaceFinanceDaily(db, workspaceA, -2, 0.5);
       await upsertWorkspaceFinanceDaily(db, workspaceA, -1, 30);
       await upsertWorkspaceFinanceDaily(db, workspaceB, -1, 999);
 
@@ -350,7 +351,15 @@ async function main(): Promise<void> {
       );
       assert.ok(t5.json.totals, "totals must be present when source table exists");
       assert.equal(typeof t5.json.totals?.estimated_cost_units, "string");
-      assert.equal(t5.json.totals?.estimated_cost_units, "60", "workspace_B rows must not leak into workspace_A totals");
+      assert.equal(
+        t5.json.totals?.estimated_cost_units,
+        "60.5",
+        "workspace_B rows must not leak and fractional units must be preserved",
+      );
+      assert.ok(
+        t5.json.series_daily.some((row) => row.estimated_cost_units === "0.5"),
+        "fractional daily units must be preserved in series output",
+      );
     } else {
       // T6 source missing fallback (Option C)
       clearFinanceCache();
