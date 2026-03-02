@@ -430,9 +430,14 @@ async function computeFinanceMetricsPayload(
   workspace_id: string,
   days_back: number,
 ): Promise<FinanceMetricsPayload> {
+  await client.query("SAVEPOINT sp_finance_source_a");
   try {
-    return await queryFromProjFinanceDaily(client, workspace_id, days_back);
+    const payload = await queryFromProjFinanceDaily(client, workspace_id, days_back);
+    await client.query("RELEASE SAVEPOINT sp_finance_source_a");
+    return payload;
   } catch (err) {
+    await client.query("ROLLBACK TO SAVEPOINT sp_finance_source_a").catch(() => {});
+    await client.query("RELEASE SAVEPOINT sp_finance_source_a").catch(() => {});
     if (!isUndefinedTableError(err) && !isUndefinedColumnError(err)) {
       throw err;
     }

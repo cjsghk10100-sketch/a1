@@ -311,6 +311,20 @@ async function main(): Promise<void> {
     });
     assert.equal(sourceProbe.status, HTTP_OK, sourceProbe.text);
     const effectiveSource = sourceProbe.json.meta.source;
+    const sourcePresenceRes = await db.query<{ has_a: boolean; has_b: boolean }>(
+      `SELECT
+         to_regclass('public.proj_finance_daily') IS NOT NULL AS has_a,
+         to_regclass('public.sec_survival_ledger_daily') IS NOT NULL AS has_b`,
+    );
+    const hasSourceA = sourcePresenceRes.rows[0]?.has_a === true;
+    const hasSourceB = sourcePresenceRes.rows[0]?.has_b === true;
+    if (!hasSourceA && hasSourceB) {
+      assert.equal(
+        effectiveSource,
+        "sec_survival_ledger_daily",
+        "must fallback to sec_survival_ledger_daily when proj_finance_daily is unavailable",
+      );
+    }
 
     if (effectiveSource === "sec_survival_ledger_daily") {
       // T5 source-backed gap-fill and totals (workspace isolation)
