@@ -16,6 +16,7 @@ import { registerEgressRoutes } from "./egress.js";
 import { registerEngineRoutes } from "./engines.js";
 import { registerEventRoutes } from "./events.js";
 import { registerExperimentRoutes } from "./experiments.js";
+import { registerFinanceRoutes } from "./finance.js";
 import { registerIncidentRoutes } from "./incidents.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
 import { registerMessageRoutes } from "./messages.js";
@@ -59,6 +60,7 @@ export async function registerV1Routes(
   await registerEngineRoutes(app, pool);
   await registerEventRoutes(app, pool);
   await registerExperimentRoutes(app, pool);
+  await registerFinanceRoutes(app, pool);
   await registerIncidentRoutes(app, pool);
   await registerLifecycleRoutes(app, pool);
   await registerMessageRoutes(app, pool);
