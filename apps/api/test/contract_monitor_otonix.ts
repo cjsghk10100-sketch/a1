@@ -26,6 +26,14 @@ type MonitorResponse = {
   action: string;
   allowed_actions: string[];
   target: string;
+  target_request: {
+    method: "GET" | "POST";
+    path: string;
+    required_query_fields?: string[];
+    required_body_fields?: string[];
+    default_query?: Record<string, string>;
+    example_body?: Record<string, unknown>;
+  };
 };
 
 type ErrorPayload = {
@@ -208,6 +216,10 @@ async function main(): Promise<void> {
     assert.equal(t1.json.read_only, true);
     assert.equal(t1.json.action, "health_summary");
     assert.equal(t1.json.schema_version, SCHEMA_VERSION);
+    assert.equal(t1.json.target, "/v1/system/health");
+    assert.equal(t1.json.target_request.method, "POST");
+    assert.equal(t1.json.target_request.path, "/v1/system/health");
+    assert.deepEqual(t1.json.target_request.required_body_fields, ["schema_version"]);
 
     // T2: missing workspace header.
     const t2 = await requestJson<ErrorPayload>(
@@ -278,6 +290,10 @@ async function main(): Promise<void> {
       authHeaders,
     );
     assert.equal(t7a.status, HTTP_OK, t7a.text);
+    assert.match(t7a.json.target, /^\/v1\/system\/health\/issues\?kind=/);
+    assert.equal(t7a.json.target_request.method, "GET");
+    assert.equal(t7a.json.target_request.path, "/v1/system/health/issues");
+    assert.deepEqual(t7a.json.target_request.required_query_fields, ["kind"]);
     const t7b = await requestJson<MonitorResponse>(
       baseUrl,
       "GET",
@@ -286,6 +302,10 @@ async function main(): Promise<void> {
       authHeaders,
     );
     assert.equal(t7b.status, HTTP_OK, t7b.text);
+    assert.equal(t7b.json.target, "/v1/finance/projection");
+    assert.equal(t7b.json.target_request.method, "POST");
+    assert.equal(t7b.json.target_request.path, "/v1/finance/projection");
+    assert.deepEqual(t7b.json.target_request.required_body_fields, ["schema_version"]);
     const after = await workspaceEventCount(db, workspaceId);
     assert.equal(after, before, "monitor/otonix must be read-only and append zero events");
   } finally {
@@ -300,4 +320,3 @@ main().catch((err) => {
   console.error(err);
   process.exitCode = 1;
 });
-

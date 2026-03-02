@@ -19,6 +19,35 @@ const READ_ONLY_ACTION_ALLOWLIST = [
 ] as const;
 
 type MonitorAction = (typeof READ_ONLY_ACTION_ALLOWLIST)[number];
+type MonitorTargetRequest = {
+  method: "GET" | "POST";
+  path: string;
+  required_query_fields?: readonly string[];
+  required_body_fields?: readonly string[];
+  default_query?: Record<string, string>;
+  example_body?: Record<string, unknown>;
+};
+
+const TARGET_REQUEST_BY_ACTION: Record<MonitorAction, MonitorTargetRequest> = {
+  health_summary: {
+    method: "POST",
+    path: "/v1/system/health",
+    required_body_fields: ["schema_version"],
+    example_body: { schema_version: SCHEMA_VERSION },
+  },
+  health_issues: {
+    method: "GET",
+    path: "/v1/system/health/issues",
+    required_query_fields: ["kind"],
+    default_query: { kind: "active_incidents" },
+  },
+  finance_projection: {
+    method: "POST",
+    path: "/v1/finance/projection",
+    required_body_fields: ["schema_version"],
+    example_body: { schema_version: SCHEMA_VERSION },
+  },
+};
 
 function workspaceIdFromReq(req: {
   headers: Record<string, unknown>;
@@ -46,6 +75,13 @@ function isWriteLikeAction(action: string): boolean {
 
 function isAllowedReadAction(action: string): action is MonitorAction {
   return (READ_ONLY_ACTION_ALLOWLIST as readonly string[]).includes(action);
+}
+
+function buildActionTarget(action: MonitorAction): string {
+  const target = TARGET_REQUEST_BY_ACTION[action];
+  if (!target.default_query) return target.path;
+  const qs = new URLSearchParams(target.default_query).toString();
+  return qs.length > 0 ? `${target.path}?${qs}` : target.path;
 }
 
 export async function registerMonitorOtonixRoutes(
@@ -133,6 +169,7 @@ export async function registerMonitorOtonixRoutes(
         );
     }
 
+    const target_request = TARGET_REQUEST_BY_ACTION[rawAction];
     return reply.code(HTTP_OK).send({
       schema_version: SCHEMA_VERSION,
       workspace_id,
@@ -140,12 +177,8 @@ export async function registerMonitorOtonixRoutes(
       read_only: true,
       action: rawAction,
       allowed_actions: READ_ONLY_ACTION_ALLOWLIST,
-      target: {
-        health_summary: "/v1/system/health",
-        health_issues: "/v1/system/health/issues",
-        finance_projection: "/v1/finance/projection",
-      }[rawAction],
+      target: buildActionTarget(rawAction),
+      target_request,
     });
   });
 }
-
