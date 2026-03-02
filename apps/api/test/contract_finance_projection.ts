@@ -325,6 +325,36 @@ async function main(): Promise<void> {
         "must fallback to sec_survival_ledger_daily when proj_finance_daily is unavailable",
       );
     }
+    if (hasSourceA && hasSourceB) {
+      // Regression guard: source A table may exist but be empty before projector wiring/backfill.
+      // In that case route must fallback to source B instead of returning zero-filled A rows.
+      clearFinanceCache();
+      await db.query(`DELETE FROM public.proj_finance_daily WHERE workspace_id = $1`, [workspaceA]);
+      await db.query(
+        `DELETE FROM sec_survival_ledger_daily
+         WHERE workspace_id = ANY($1::text[])
+           AND target_type = 'workspace'`,
+        [[workspaceA, workspaceB]],
+      );
+      await upsertWorkspaceFinanceDaily(db, workspaceA, -1, 42.5);
+      await upsertWorkspaceFinanceDaily(db, workspaceB, -1, 999);
+
+      const fallbackAEmpty = await requestProjection(workspaceA, tokenA, {
+        schema_version: SCHEMA_VERSION,
+        days_back: 7,
+      });
+      assert.equal(fallbackAEmpty.status, HTTP_OK, fallbackAEmpty.text);
+      assert.equal(
+        fallbackAEmpty.json.meta.source,
+        "sec_survival_ledger_daily",
+        "must fallback to survival source when proj_finance_daily has no rows in range",
+      );
+      assert.equal(
+        fallbackAEmpty.json.totals?.estimated_cost_units,
+        "42.5",
+        "fallback totals must reflect workspace-scoped survival data",
+      );
+    }
 
     if (effectiveSource === "sec_survival_ledger_daily") {
       // T5 source-backed gap-fill and totals (workspace isolation)

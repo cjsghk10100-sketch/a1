@@ -353,6 +353,25 @@ async function queryFromProjFinanceDaily(
   };
 }
 
+async function hasProjFinanceDailyRowsInRange(
+  client: DbClient,
+  workspace_id: string,
+  days_back: number,
+): Promise<boolean> {
+  const existsRes = await client.query<{ has_rows: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM ${FINANCE_DAILY_SOURCE_A}
+       WHERE workspace_id = $1
+         AND day_utc >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+         AND day_utc <= (now() AT TIME ZONE 'UTC')::date
+       LIMIT 1
+     ) AS has_rows`,
+    [workspace_id, days_back],
+  );
+  return existsRes.rows[0]?.has_rows === true;
+}
+
 async function queryFromSurvivalDaily(
   client: DbClient,
   workspace_id: string,
@@ -430,17 +449,24 @@ async function computeFinanceMetricsPayload(
   workspace_id: string,
   days_back: number,
 ): Promise<FinanceMetricsPayload> {
+  let sourceAHasData = false;
   await client.query("SAVEPOINT sp_finance_source_a");
   try {
-    const payload = await queryFromProjFinanceDaily(client, workspace_id, days_back);
-    await client.query("RELEASE SAVEPOINT sp_finance_source_a");
-    return payload;
+    sourceAHasData = await hasProjFinanceDailyRowsInRange(client, workspace_id, days_back);
+    if (!sourceAHasData) {
+      await client.query("RELEASE SAVEPOINT sp_finance_source_a");
+    } else {
+      const payload = await queryFromProjFinanceDaily(client, workspace_id, days_back);
+      await client.query("RELEASE SAVEPOINT sp_finance_source_a");
+      return payload;
+    }
   } catch (err) {
     await client.query("ROLLBACK TO SAVEPOINT sp_finance_source_a").catch(() => {});
     await client.query("RELEASE SAVEPOINT sp_finance_source_a").catch(() => {});
     if (!isUndefinedTableError(err) && !isUndefinedColumnError(err)) {
       throw err;
     }
+    sourceAHasData = false;
   }
 
   try {
