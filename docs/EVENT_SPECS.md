@@ -103,6 +103,30 @@ When reading persisted events (e.g. via `/v1/events`, room SSE), the server also
 - `engine.token.issued` (v1)
 - `engine.token.revoked` (v1)
 - `engine.deactivated` (v1)
+- `finance.usage_recorded` (v1)
+
+## Event Detail: `finance.usage_recorded` (v1)
+
+Stream + identity:
+- `stream.stream_type`: `workspace`
+- `stream.stream_id`: `workspace_id`
+- `entity_type`: `finance`
+- `entity_id`: `<usage_id>`
+
+Required `data` fields:
+- `usage_id`: string (MUST match `entity_id`)
+- `cost_usd_micros`: integer-like (`string` or `number`), `>= 0`
+- `prompt_tokens`: integer-like (`string` or `number`), `>= 0`
+- `completion_tokens`: integer-like (`string` or `number`), `>= 0`
+
+Optional `data` fields (ignored by v0 projector):
+- `provider`
+- `model`
+- `run_id`
+- `message_id`
+
+Idempotency guidance (writer-side):
+- `idempotency_key = finance_usage:${workspace_id}:${usage_id}`
 
 ## Implemented Non-Event Runtime Contracts
 
