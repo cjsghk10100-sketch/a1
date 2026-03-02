@@ -11,5 +11,11 @@ export interface FinanceUsageRecordedDataV1 {
   message_id?: string;
 }
 
-export type FinanceUsageRecordedV1 = EventEnvelopeV1<"finance.usage_recorded", FinanceUsageRecordedDataV1>;
+export type FinanceUsageRecordedV1 = EventEnvelopeV1<
+  "finance.usage_recorded",
+  FinanceUsageRecordedDataV1
+> & {
+  entity_type: "finance";
+  entity_id: string;
+};
 export type FinanceEventV1 = FinanceUsageRecordedV1;
