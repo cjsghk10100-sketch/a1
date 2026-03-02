@@ -133,10 +133,13 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
 
   app.addHook("preHandler", async (req, reply) => {
     const path = requestPath(req.url);
-    if (req.url === "/health") return;
-    if (!req.url.startsWith("/v1/")) return;
-    if (req.url.startsWith("/v1/auth/")) return;
+    if (path === "/health") return;
+    const isV1Path = path.startsWith("/v1/");
+    const isMonitorOtonixPath = path === "/monitor/otonix";
+    if (!isV1Path && !isMonitorOtonixPath) return;
+    if (path.startsWith("/v1/auth/")) return;
     if (
+      isV1Path &&
       isEngineTokenRoute(req.url) &&
       (hasEngineTokenHeaders(req.headers as Record<string, unknown>) || hasEngineTokenBody((req as { body?: unknown }).body))
     ) {

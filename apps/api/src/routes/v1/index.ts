@@ -20,6 +20,7 @@ import { registerFinanceRoutes } from "./finance.js";
 import { registerIncidentRoutes } from "./incidents.js";
 import { registerLifecycleRoutes } from "./lifecycle.js";
 import { registerMessageRoutes } from "./messages.js";
+import { registerMonitorOtonixRoutes } from "./monitor-otonix.js";
 import { registerPipelineRoutes } from "./pipeline.js";
 import { registerPolicyRoutes } from "./policy.js";
 import { registerPrincipalRoutes } from "./principals.js";
@@ -64,6 +65,7 @@ export async function registerV1Routes(
   await registerIncidentRoutes(app, pool);
   await registerLifecycleRoutes(app, pool);
   await registerMessageRoutes(app, pool);
+  await registerMonitorOtonixRoutes(app, pool);
   await registerPipelineRoutes(app, pool);
   await registerPolicyRoutes(app, pool);
   await registerPrincipalRoutes(app, pool);
