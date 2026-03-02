@@ -107,6 +107,7 @@ export const EXPECTED_PROJECTORS = [
   "proj_experiments",
   "proj_scorecards",
   "proj_evidence_manifests",
+  "proj_finance",
 ] as const;
 
 type TopIssueSeverity = "DOWN" | "DEGRADED";

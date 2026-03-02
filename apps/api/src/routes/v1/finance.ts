@@ -290,7 +290,7 @@ async function queryFromProjFinanceDaily(
      source_daily AS (
        SELECT
          day_utc::date AS day_utc,
-         SUM(estimated_cost_units) AS estimated_cost_units,
+         SUM(cost_usd_micros) AS estimated_cost_units,
          SUM(prompt_tokens) AS prompt_tokens,
          SUM(completion_tokens) AS completion_tokens,
          SUM(total_tokens) AS total_tokens
@@ -319,7 +319,7 @@ async function queryFromProjFinanceDaily(
     total_tokens: string;
   }>(
     `SELECT
-       COALESCE(SUM(estimated_cost_units), 0)::text AS estimated_cost_units,
+       COALESCE(SUM(cost_usd_micros), 0)::text AS estimated_cost_units,
        COALESCE(SUM(prompt_tokens), 0)::text AS prompt_tokens,
        COALESCE(SUM(completion_tokens), 0)::text AS completion_tokens,
        COALESCE(SUM(total_tokens), 0)::text AS total_tokens

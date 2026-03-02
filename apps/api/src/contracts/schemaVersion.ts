@@ -9,6 +9,7 @@ export const SCHEMA_VERSION = "2.1" as const;
 // Kernel minor hardening (runtime safety + concurrency) keeps SCHEMA_VERSION pinned to 2.1.
 // Kernel minor changes in PR-10 (system health summary v0.2) keep SCHEMA_VERSION pinned to 2.1.
 // Kernel minor changes in PR-11 (system health drilldown v0.1) keep SCHEMA_VERSION pinned to 2.1.
+// Kernel minor changes in PR-12B (finance usage event + projector) keep SCHEMA_VERSION pinned to 2.1.
 export const SUPPORTED_VERSIONS = ["2.0", "2.1"] as const;
 export type SupportedSchemaVersion = (typeof SUPPORTED_VERSIONS)[number];
 
