@@ -12,14 +12,19 @@ import type { DbClient, DbPool } from "../../db/pool.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
 /**
- * Finance source chosen for PR-12A:
- * - table: public.sec_survival_ledger_daily
- * - day bucket column: snapshot_date (UTC date)
- * - numeric column: estimated_cost_units
- * - bounded safety: workspace+date filter using existing index
+ * Finance source order for PR-12A:
+ * - A) public.proj_finance_daily (if compatible columns exist)
+ * - B) public.sec_survival_ledger_daily
+ * - C) none (table missing / incompatible)
+ *
+ * Safety:
+ * - Every tenant query is workspace-scoped.
+ * - Date range is bounded by DB UTC day window and days_back <= 365.
+ * - Uses existing survival index:
  *   sec_survival_ledger_daily_workspace_date_idx (workspace_id, snapshot_date DESC, updated_at DESC)
  */
-const FINANCE_DAILY_SOURCE_TABLE = "public.sec_survival_ledger_daily";
+const FINANCE_DAILY_SOURCE_A = "public.proj_finance_daily";
+const FINANCE_DAILY_SOURCE_B = "public.sec_survival_ledger_daily";
 const SUCCESS_HTTP_STATUS = httpStatusForReasonCode("duplicate_idempotent_replay");
 const DEFAULT_DAYS_BACK = 30;
 const MAX_DAYS_BACK = 365;
@@ -27,38 +32,39 @@ const MIN_DAYS_BACK = 1;
 const DEFAULT_FINANCE_CACHE_MAX_ENTRIES = 1000;
 const OPS_DASHBOARD_FINANCE_PER_WORKSPACE_PER_MIN = 300;
 
-type FinanceWarning = {
-  kind: string;
-  details?: Record<string, number | boolean>;
-};
+type FinanceSource = "proj_finance_daily" | "sec_survival_ledger_daily" | "none";
 
 type FinanceSeriesRow = {
   day_utc: string;
   estimated_cost_units: string;
+  prompt_tokens: string | null;
+  completion_tokens: string | null;
+  total_tokens: string | null;
 };
 
 type FinanceTotals = {
-  estimated_cost_units: string;
+  estimated_cost_units: string | null;
+  prompt_tokens: string | null;
+  completion_tokens: string | null;
+  total_tokens: string | null;
 };
 
 type FinanceMetricsPayload = {
   schema_version: typeof SCHEMA_VERSION;
-  workspace_id: string;
-  range: {
-    days_back: number;
-    from_day_utc: string;
-    to_day_utc: string;
+  meta: {
+    applied_days_back: number;
+    source: FinanceSource;
   };
   totals: FinanceTotals | null;
   series_daily: FinanceSeriesRow[];
-  warnings: FinanceWarning[];
+  warnings: string[];
 };
 
 type FinanceResponse = FinanceMetricsPayload & {
   server_time: string;
-  meta: {
+  meta: FinanceMetricsPayload["meta"] & {
     cached: boolean;
-    cache_ttl_sec: number;
+    cache_age_ms: number | null;
   };
 };
 
@@ -73,14 +79,8 @@ type RateLimitWindow = {
   count: number;
 };
 
-type DateRange = {
-  from_day_utc: string;
-  to_day_utc: string;
-};
-
 type LivePingResult = {
   server_time: string;
-  range: DateRange;
 };
 
 const financeMetricsCache = new Map<string, FinanceCacheEntry>();
@@ -225,6 +225,10 @@ function isUndefinedTableError(err: unknown): boolean {
   return pgErrorCode(err) === "42P01";
 }
 
+function isUndefinedColumnError(err: unknown): boolean {
+  return pgErrorCode(err) === "42703";
+}
+
 async function beginTimedReadTx(client: DbClient): Promise<void> {
   await client.query("BEGIN READ ONLY");
   await client.query(`SELECT set_config('statement_timeout', $1, true)`, [
@@ -232,28 +236,16 @@ async function beginTimedReadTx(client: DbClient): Promise<void> {
   ]);
 }
 
-async function fetchLivePing(pool: DbPool, days_back: number): Promise<LivePingResult> {
+async function fetchLivePing(pool: DbPool): Promise<LivePingResult> {
   const client = await pool.connect();
   try {
     await beginTimedReadTx(client);
-    const pingRes = await client.query<{
-      server_time: string;
-      from_day_utc: string;
-      to_day_utc: string;
-    }>(
-      `SELECT
-         (now() AT TIME ZONE 'UTC')::text || 'Z' AS server_time,
-         to_char(((now() AT TIME ZONE 'UTC')::date - ($1::int - 1))::date, 'YYYY-MM-DD') AS from_day_utc,
-         to_char((now() AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD') AS to_day_utc`,
-      [days_back],
+    const pingRes = await client.query<{ server_time: string }>(
+      `SELECT (now() AT TIME ZONE 'UTC')::text || 'Z' AS server_time`,
     );
     await client.query("COMMIT");
     return {
       server_time: asIsoUtcFromDbText(pingRes.rows[0]?.server_time),
-      range: {
-        from_day_utc: pingRes.rows[0]?.from_day_utc ?? "1970-01-01",
-        to_day_utc: pingRes.rows[0]?.to_day_utc ?? "1970-01-01",
-      },
     };
   } catch {
     await client.query("ROLLBACK").catch(() => {});
@@ -263,16 +255,173 @@ async function fetchLivePing(pool: DbPool, days_back: number): Promise<LivePingR
   }
 }
 
-async function queryDateRange(client: DbClient, days_back: number): Promise<DateRange> {
-  const rangeRes = await client.query<{ from_day_utc: string; to_day_utc: string }>(
-    `SELECT
-       to_char(((now() AT TIME ZONE 'UTC')::date - ($1::int - 1))::date, 'YYYY-MM-DD') AS from_day_utc,
-       to_char((now() AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD') AS to_day_utc`,
-    [days_back],
-  );
+function buildNonePayload(days_back: number, warning: "finance_source_not_found" | "finance_db_error"): FinanceMetricsPayload {
   return {
-    from_day_utc: rangeRes.rows[0]?.from_day_utc ?? "1970-01-01",
-    to_day_utc: rangeRes.rows[0]?.to_day_utc ?? "1970-01-01",
+    schema_version: SCHEMA_VERSION,
+    meta: {
+      applied_days_back: days_back,
+      source: "none",
+    },
+    totals: null,
+    series_daily: [],
+    warnings: [warning],
+  };
+}
+
+async function queryFromProjFinanceDaily(
+  client: DbClient,
+  workspace_id: string,
+  days_back: number,
+): Promise<FinanceMetricsPayload> {
+  const seriesRes = await client.query<{
+    day_utc: string;
+    estimated_cost_units: string;
+    prompt_tokens: string | null;
+    completion_tokens: string | null;
+    total_tokens: string | null;
+  }>(
+    `WITH date_range AS (
+       SELECT generate_series(
+         (now() AT TIME ZONE 'UTC')::date - ($2::int - 1),
+         (now() AT TIME ZONE 'UTC')::date,
+         '1 day'::interval
+       )::date AS day_utc
+     ),
+     source_daily AS (
+       SELECT
+         day_utc::date AS day_utc,
+         SUM(estimated_cost_units) AS estimated_cost_units,
+         SUM(prompt_tokens) AS prompt_tokens,
+         SUM(completion_tokens) AS completion_tokens,
+         SUM(total_tokens) AS total_tokens
+       FROM ${FINANCE_DAILY_SOURCE_A}
+       WHERE workspace_id = $1
+         AND day_utc >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+         AND day_utc <= (now() AT TIME ZONE 'UTC')::date
+       GROUP BY day_utc::date
+     )
+     SELECT
+       to_char(dr.day_utc, 'YYYY-MM-DD') AS day_utc,
+       COALESCE(source_daily.estimated_cost_units, 0)::text AS estimated_cost_units,
+       COALESCE(source_daily.prompt_tokens, 0)::text AS prompt_tokens,
+       COALESCE(source_daily.completion_tokens, 0)::text AS completion_tokens,
+       COALESCE(source_daily.total_tokens, 0)::text AS total_tokens
+     FROM date_range dr
+     LEFT JOIN source_daily ON source_daily.day_utc = dr.day_utc
+     ORDER BY dr.day_utc ASC`,
+    [workspace_id, days_back],
+  );
+
+  const totalsRes = await client.query<{
+    estimated_cost_units: string;
+    prompt_tokens: string;
+    completion_tokens: string;
+    total_tokens: string;
+  }>(
+    `SELECT
+       COALESCE(SUM(estimated_cost_units), 0)::text AS estimated_cost_units,
+       COALESCE(SUM(prompt_tokens), 0)::text AS prompt_tokens,
+       COALESCE(SUM(completion_tokens), 0)::text AS completion_tokens,
+       COALESCE(SUM(total_tokens), 0)::text AS total_tokens
+     FROM ${FINANCE_DAILY_SOURCE_A}
+     WHERE workspace_id = $1
+       AND day_utc >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+       AND day_utc <= (now() AT TIME ZONE 'UTC')::date`,
+    [workspace_id, days_back],
+  );
+
+  return {
+    schema_version: SCHEMA_VERSION,
+    meta: {
+      applied_days_back: days_back,
+      source: "proj_finance_daily",
+    },
+    totals: {
+      estimated_cost_units: totalsRes.rows[0]?.estimated_cost_units ?? "0",
+      prompt_tokens: totalsRes.rows[0]?.prompt_tokens ?? "0",
+      completion_tokens: totalsRes.rows[0]?.completion_tokens ?? "0",
+      total_tokens: totalsRes.rows[0]?.total_tokens ?? "0",
+    },
+    series_daily: seriesRes.rows.map((row) => ({
+      day_utc: row.day_utc,
+      estimated_cost_units: row.estimated_cost_units ?? "0",
+      prompt_tokens: row.prompt_tokens ?? "0",
+      completion_tokens: row.completion_tokens ?? "0",
+      total_tokens: row.total_tokens ?? "0",
+    })),
+    warnings: [],
+  };
+}
+
+async function queryFromSurvivalDaily(
+  client: DbClient,
+  workspace_id: string,
+  days_back: number,
+): Promise<FinanceMetricsPayload> {
+  const seriesRes = await client.query<{
+    day_utc: string;
+    estimated_cost_units: string;
+  }>(
+    `WITH date_range AS (
+       SELECT generate_series(
+         (now() AT TIME ZONE 'UTC')::date - ($2::int - 1),
+         (now() AT TIME ZONE 'UTC')::date,
+         '1 day'::interval
+       )::date AS day_utc
+     ),
+     source_daily AS (
+       SELECT
+         snapshot_date::date AS day_utc,
+         SUM(estimated_cost_units) AS estimated_cost_units
+       FROM ${FINANCE_DAILY_SOURCE_B}
+       WHERE workspace_id = $1
+         AND target_type = 'workspace'
+         AND target_id = $1
+         AND snapshot_date >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+         AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date
+       GROUP BY snapshot_date::date
+     )
+     SELECT
+       to_char(dr.day_utc, 'YYYY-MM-DD') AS day_utc,
+       COALESCE(source_daily.estimated_cost_units, 0)::text AS estimated_cost_units
+     FROM date_range dr
+     LEFT JOIN source_daily ON source_daily.day_utc = dr.day_utc
+     ORDER BY dr.day_utc ASC`,
+    [workspace_id, days_back],
+  );
+
+  const totalsRes = await client.query<{ estimated_cost_units: string }>(
+    `SELECT
+       COALESCE(SUM(estimated_cost_units), 0)::text AS estimated_cost_units
+     FROM ${FINANCE_DAILY_SOURCE_B}
+     WHERE workspace_id = $1
+       AND target_type = 'workspace'
+       AND target_id = $1
+       AND snapshot_date >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+       AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date`,
+    [workspace_id, days_back],
+  );
+
+  return {
+    schema_version: SCHEMA_VERSION,
+    meta: {
+      applied_days_back: days_back,
+      source: "sec_survival_ledger_daily",
+    },
+    totals: {
+      estimated_cost_units: totalsRes.rows[0]?.estimated_cost_units ?? "0",
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_tokens: null,
+    },
+    series_daily: seriesRes.rows.map((row) => ({
+      day_utc: row.day_utc,
+      estimated_cost_units: row.estimated_cost_units ?? "0",
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_tokens: null,
+    })),
+    warnings: [],
   };
 }
 
@@ -281,84 +430,26 @@ async function computeFinanceMetricsPayload(
   workspace_id: string,
   days_back: number,
 ): Promise<FinanceMetricsPayload> {
-  const range = await queryDateRange(client, days_back);
+  await client.query("SAVEPOINT sp_finance_source_a");
+  try {
+    const payload = await queryFromProjFinanceDaily(client, workspace_id, days_back);
+    await client.query("RELEASE SAVEPOINT sp_finance_source_a");
+    return payload;
+  } catch (err) {
+    await client.query("ROLLBACK TO SAVEPOINT sp_finance_source_a").catch(() => {});
+    await client.query("RELEASE SAVEPOINT sp_finance_source_a").catch(() => {});
+    if (!isUndefinedTableError(err) && !isUndefinedColumnError(err)) {
+      throw err;
+    }
+  }
 
   try {
-    const seriesRes = await client.query<{
-      day_utc: string;
-      estimated_cost_units: string;
-    }>(
-      `WITH date_range AS (
-         SELECT generate_series(
-           (now() AT TIME ZONE 'UTC')::date - ($2::int - 1),
-           (now() AT TIME ZONE 'UTC')::date,
-           '1 day'::interval
-         )::date AS day_utc
-       ),
-       source_daily AS (
-         SELECT
-           snapshot_date::date AS day_utc,
-           SUM(estimated_cost_units) AS estimated_cost_units
-         FROM ${FINANCE_DAILY_SOURCE_TABLE}
-         WHERE workspace_id = $1
-           AND target_type = 'workspace'
-           AND target_id = $1
-           AND snapshot_date >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
-           AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date
-         GROUP BY snapshot_date::date
-       )
-       SELECT
-         to_char(dr.day_utc, 'YYYY-MM-DD') AS day_utc,
-         COALESCE(source_daily.estimated_cost_units, 0)::text AS estimated_cost_units
-       FROM date_range dr
-       LEFT JOIN source_daily ON source_daily.day_utc = dr.day_utc
-       ORDER BY dr.day_utc ASC`,
-      [workspace_id, days_back],
-    );
-
-    const totalsRes = await client.query<{ estimated_cost_units: string }>(
-      `SELECT
-         COALESCE(SUM(estimated_cost_units), 0)::text AS estimated_cost_units
-       FROM ${FINANCE_DAILY_SOURCE_TABLE}
-       WHERE workspace_id = $1
-         AND target_type = 'workspace'
-         AND target_id = $1
-         AND snapshot_date >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
-         AND snapshot_date <= (now() AT TIME ZONE 'UTC')::date`,
-      [workspace_id, days_back],
-    );
-
-    return {
-      schema_version: SCHEMA_VERSION,
-      workspace_id,
-      range: {
-        days_back,
-        from_day_utc: range.from_day_utc,
-        to_day_utc: range.to_day_utc,
-      },
-      totals: {
-        estimated_cost_units: totalsRes.rows[0]?.estimated_cost_units ?? "0",
-      },
-      series_daily: seriesRes.rows.map((row) => ({
-        day_utc: row.day_utc,
-        estimated_cost_units: row.estimated_cost_units ?? "0",
-      })),
-      warnings: [],
-    };
+    return await queryFromSurvivalDaily(client, workspace_id, days_back);
   } catch (err) {
-    if (!isUndefinedTableError(err)) throw err;
-    return {
-      schema_version: SCHEMA_VERSION,
-      workspace_id,
-      range: {
-        days_back,
-        from_day_utc: range.from_day_utc,
-        to_day_utc: range.to_day_utc,
-      },
-      totals: null,
-      series_daily: [],
-      warnings: [{ kind: "finance_source_not_found" }],
-    };
+    if (!isUndefinedTableError(err) && !isUndefinedColumnError(err)) {
+      throw err;
+    }
+    return buildNonePayload(days_back, "finance_source_not_found");
   }
 }
 
@@ -385,7 +476,6 @@ async function computeAndCacheMetricsEntry(
   pool: DbPool,
   workspace_id: string,
   days_back: number,
-  fallbackRange: DateRange,
 ): Promise<FinanceCacheEntry> {
   let payload: FinanceMetricsPayload;
   let ttl_ms = financeCacheSuccessTtlMs();
@@ -393,18 +483,7 @@ async function computeAndCacheMetricsEntry(
   try {
     payload = await computeFinanceMetricsInReadTx(pool, workspace_id, days_back);
   } catch {
-    payload = {
-      schema_version: SCHEMA_VERSION,
-      workspace_id,
-      range: {
-        days_back,
-        from_day_utc: fallbackRange.from_day_utc,
-        to_day_utc: fallbackRange.to_day_utc,
-      },
-      totals: null,
-      series_daily: [],
-      warnings: [{ kind: "finance_db_error" }],
-    };
+    payload = buildNonePayload(days_back, "finance_db_error");
     ttl_ms = financeCacheErrorTtlMs();
   }
 
@@ -493,7 +572,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
 
     let livePing: LivePingResult;
     try {
-      livePing = await fetchLivePing(pool, days_back);
+      livePing = await fetchLivePing(pool);
     } catch {
       const reason_code = "internal_error" as const;
       return reply
@@ -517,15 +596,10 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
     if (!entry) {
       const inFlight = financeMetricsInFlight.get(key);
       if (inFlight) {
-        cached = true;
+        cached = false;
         entry = await inFlight;
       } else {
-        const computePromise = computeAndCacheMetricsEntry(
-          pool,
-          workspace_id,
-          days_back,
-          livePing.range,
-        ).finally(() => {
+        const computePromise = computeAndCacheMetricsEntry(pool, workspace_id, days_back).finally(() => {
           financeMetricsInFlight.delete(key);
         });
         financeMetricsInFlight.set(key, computePromise);
@@ -533,12 +607,14 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
       }
     }
 
+    const cache_age_ms = cached ? Math.max(0, monotonicNowMs() - entry.stored_at_monotonic_ms) : null;
     const responsePayload: FinanceResponse = {
       ...entry.payload,
       server_time,
       meta: {
+        ...entry.payload.meta,
         cached,
-        cache_ttl_sec: Math.floor(entry.ttl_ms / 1000),
+        cache_age_ms,
       },
     };
 

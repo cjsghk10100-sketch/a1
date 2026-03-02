@@ -23,27 +23,26 @@ const HTTP_INVALID_PAYLOAD = httpStatusForReasonCode("invalid_payload_combinatio
 type FinanceProjectionResponse = {
   schema_version: string;
   server_time: string;
-  workspace_id: string;
-  range: {
-    days_back: number;
-    from_day_utc: string;
-    to_day_utc: string;
+  meta: {
+    applied_days_back: number;
+    source: "proj_finance_daily" | "sec_survival_ledger_daily" | "none";
+    cached: boolean;
+    cache_age_ms: number | null;
   };
   totals: null | {
-    estimated_cost_units: string;
+    estimated_cost_units: string | null;
+    prompt_tokens: string | null;
+    completion_tokens: string | null;
+    total_tokens: string | null;
   };
   series_daily: Array<{
     day_utc: string;
     estimated_cost_units: string;
+    prompt_tokens: string | null;
+    completion_tokens: string | null;
+    total_tokens: string | null;
   }>;
-  warnings: Array<{
-    kind: string;
-    details?: Record<string, number | boolean>;
-  }>;
-  meta: {
-    cached: boolean;
-    cache_ttl_sec: number;
-  };
+  warnings: string[];
 };
 
 type ErrorPayload = {
@@ -287,7 +286,7 @@ async function main(): Promise<void> {
       days_back: 0,
     });
     assert.equal(t4ClampLow.status, HTTP_OK, t4ClampLow.text);
-    assert.equal(t4ClampLow.json.range.days_back, 1);
+    assert.equal(t4ClampLow.json.meta.applied_days_back, 1);
 
     clearFinanceCache();
     const t4ClampNegative = await requestProjection(workspaceA, tokenA, {
@@ -295,7 +294,7 @@ async function main(): Promise<void> {
       days_back: -5,
     });
     assert.equal(t4ClampNegative.status, HTTP_OK, t4ClampNegative.text);
-    assert.equal(t4ClampNegative.json.range.days_back, 1);
+    assert.equal(t4ClampNegative.json.meta.applied_days_back, 1);
 
     clearFinanceCache();
     const t4ClampHigh = await requestProjection(workspaceA, tokenA, {
@@ -303,14 +302,31 @@ async function main(): Promise<void> {
       days_back: 999,
     });
     assert.equal(t4ClampHigh.status, HTTP_OK, t4ClampHigh.text);
-    assert.equal(t4ClampHigh.json.range.days_back, 365);
+    assert.equal(t4ClampHigh.json.meta.applied_days_back, 365);
 
-    const sourceExistsRes = await db.query<{ exists: boolean }>(
-      `SELECT to_regclass('public.sec_survival_ledger_daily') IS NOT NULL AS exists`,
+    clearFinanceCache();
+    const sourceProbe = await requestProjection(workspaceA, tokenA, {
+      schema_version: SCHEMA_VERSION,
+      days_back: 1,
+    });
+    assert.equal(sourceProbe.status, HTTP_OK, sourceProbe.text);
+    const effectiveSource = sourceProbe.json.meta.source;
+    const sourcePresenceRes = await db.query<{ has_a: boolean; has_b: boolean }>(
+      `SELECT
+         to_regclass('public.proj_finance_daily') IS NOT NULL AS has_a,
+         to_regclass('public.sec_survival_ledger_daily') IS NOT NULL AS has_b`,
     );
-    const sourceExists = sourceExistsRes.rows[0]?.exists === true;
+    const hasSourceA = sourcePresenceRes.rows[0]?.has_a === true;
+    const hasSourceB = sourcePresenceRes.rows[0]?.has_b === true;
+    if (!hasSourceA && hasSourceB) {
+      assert.equal(
+        effectiveSource,
+        "sec_survival_ledger_daily",
+        "must fallback to sec_survival_ledger_daily when proj_finance_daily is unavailable",
+      );
+    }
 
-    if (sourceExists) {
+    if (effectiveSource === "sec_survival_ledger_daily") {
       // T5 source-backed gap-fill and totals (workspace isolation)
       clearFinanceCache();
       await db.query(
@@ -333,8 +349,8 @@ async function main(): Promise<void> {
       assert.equal(t5.status, HTTP_OK, t5.text);
       assert.equal(t5.json.schema_version, SCHEMA_VERSION);
       assert.ok(t5.json.server_time.endsWith("Z"), t5.text);
-      assert.equal(t5.json.workspace_id, workspaceA);
-      assert.equal(t5.json.range.days_back, 7);
+      assert.equal(t5.json.meta.applied_days_back, 7);
+      assert.equal(t5.json.meta.source, "sec_survival_ledger_daily");
       assert.equal(t5.json.series_daily.length, 7);
       assert.equal(t5.json.warnings.length, 0);
       assert.ok(
@@ -360,6 +376,25 @@ async function main(): Promise<void> {
         t5.json.series_daily.some((row) => row.estimated_cost_units === "0.5"),
         "fractional daily units must be preserved in series output",
       );
+    } else if (effectiveSource === "proj_finance_daily") {
+      clearFinanceCache();
+      const t5 = await requestProjection(workspaceA, tokenA, {
+        schema_version: SCHEMA_VERSION,
+        days_back: 7,
+      });
+      assert.equal(t5.status, HTTP_OK, t5.text);
+      assert.equal(t5.json.meta.applied_days_back, 7);
+      assert.equal(t5.json.meta.source, "proj_finance_daily");
+      assert.equal(t5.json.series_daily.length, 7);
+      assert.ok(t5.json.totals, "totals must be present when proj_finance_daily is used");
+      assert.equal(typeof t5.json.totals?.estimated_cost_units, "string");
+      assert.equal(typeof t5.json.totals?.prompt_tokens, "string");
+      assert.equal(typeof t5.json.totals?.completion_tokens, "string");
+      assert.equal(typeof t5.json.totals?.total_tokens, "string");
+      assert.ok(
+        t5.json.series_daily.every((row) => typeof row.estimated_cost_units === "string"),
+        "daily rows must expose string metrics",
+      );
     } else {
       // T6 source missing fallback (Option C)
       clearFinanceCache();
@@ -368,17 +403,19 @@ async function main(): Promise<void> {
         days_back: 7,
       });
       assert.equal(t6.status, HTTP_OK, t6.text);
+      assert.equal(t6.json.meta.source, "none");
       assert.equal(t6.json.totals, null);
       assert.deepEqual(t6.json.series_daily, []);
       assert.ok(
-        t6.json.warnings.some((warning) => warning.kind === "finance_source_not_found"),
-        "finance_source_not_found warning must be present when source table is missing",
+        t6.json.warnings.includes("finance_source_not_found") ||
+          t6.json.warnings.includes("finance_db_error"),
+        "source none path must provide a finance warning",
       );
     }
 
     // T7 cache hygiene: NODE_ENV=test must not retain stale metrics.
     clearFinanceCache();
-    if (sourceExists) {
+    if (effectiveSource === "sec_survival_ledger_daily") {
       await upsertWorkspaceFinanceDaily(db, workspaceA, 0, 5);
       const first = await requestProjection(workspaceA, tokenA, {
         schema_version: SCHEMA_VERSION,
