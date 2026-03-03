@@ -1,5 +1,6 @@
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
+const { mkdir, writeFile } = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
@@ -64,11 +65,20 @@ function parseRunnerMode(raw) {
   return "embedded";
 }
 
+function parseWebApp(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "ops-dashboard" || value === "ops_dashboard" || value === "ops") {
+    return "ops-dashboard";
+  }
+  return "web";
+}
+
 const apiPort = parsePort(process.env.DESKTOP_API_PORT, 3000);
 const webPort = parsePort(process.env.DESKTOP_WEB_PORT, 5173);
 const apiTimeoutMs = parseTimeout(process.env.DESKTOP_API_START_TIMEOUT_MS, 45_000);
 const webTimeoutMs = parseTimeout(process.env.DESKTOP_WEB_START_TIMEOUT_MS, 45_000);
 const runnerMode = parseRunnerMode(process.env.DESKTOP_RUNNER_MODE);
+const webApp = parseWebApp(process.env.DESKTOP_WEB_APP);
 const engineWorkspaceId = process.env.DESKTOP_ENGINE_WORKSPACE_ID?.trim() || "ws_dev";
 const engineRoomId = process.env.DESKTOP_ENGINE_ROOM_ID?.trim() || "";
 const engineActorId = process.env.DESKTOP_ENGINE_ACTOR_ID?.trim() || "desktop_engine";
@@ -89,9 +99,13 @@ const restartBaseDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_BASE_DEL
 const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY_MS, 30_000);
 const noWindow = parseBoolean(process.env.DESKTOP_NO_WINDOW, false);
 const exitAfterReady = parseBoolean(process.env.DESKTOP_EXIT_AFTER_READY, false);
+const isOpsDashboard = webApp === "ops-dashboard";
 
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
-const bootstrapUrl = `${webBaseUrl}/desktop-bootstrap`;
+const bootstrapUrl = isOpsDashboard
+  ? `${webBaseUrl}/overview?workspace=${encodeURIComponent(engineWorkspaceId)}`
+  : `${webBaseUrl}/desktop-bootstrap`;
+const opsDashboardConfigPath = path.join(REPO_ROOT, "apps/ops-dashboard/public/config.json");
 
 if (desktopUserDataDir) {
   try {
@@ -166,20 +180,26 @@ const components = {
   web: createManagedComponent("web", {
     enabled: true,
     required: true,
-    args: ["-C", "apps/web", "dev", "--host", "127.0.0.1", "--port", String(webPort)],
-    env: {
-      VITE_DEV_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
-      VITE_DESKTOP_RUNNER_MODE: runnerMode,
-      VITE_DESKTOP_API_PORT: String(apiPort),
-      VITE_DESKTOP_WEB_PORT: String(webPort),
-      VITE_DESKTOP_ENGINE_WORKSPACE_ID: engineWorkspaceId,
-      VITE_DESKTOP_ENGINE_ROOM_ID: engineRoomId,
-      VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
-      VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
-      VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
-      ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
-      VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
-    },
+    args: isOpsDashboard
+      ? ["-C", "apps/ops-dashboard", "dev", "--host", "127.0.0.1", "--port", String(webPort)]
+      : ["-C", "apps/web", "dev", "--host", "127.0.0.1", "--port", String(webPort)],
+    env: isOpsDashboard
+      ? {
+          VITE_OPS_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+        }
+      : {
+          VITE_DEV_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+          VITE_DESKTOP_RUNNER_MODE: runnerMode,
+          VITE_DESKTOP_API_PORT: String(apiPort),
+          VITE_DESKTOP_WEB_PORT: String(webPort),
+          VITE_DESKTOP_ENGINE_WORKSPACE_ID: engineWorkspaceId,
+          VITE_DESKTOP_ENGINE_ROOM_ID: engineRoomId,
+          VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
+          VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
+          VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
+          ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
+          VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
+        },
     ready_url: webBaseUrl,
     ready_timeout_ms: webTimeoutMs,
   }),
@@ -244,6 +264,92 @@ function ensurePortAvailable(port, label) {
     });
     server.listen(port, "127.0.0.1");
   });
+}
+
+async function requestJson(url, options) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  if (!text.trim()) {
+    return { status: response.status, ok: response.ok, json: {} };
+  }
+  try {
+    return { status: response.status, ok: response.ok, json: JSON.parse(text) };
+  } catch {
+    return { status: response.status, ok: response.ok, json: {} };
+  }
+}
+
+function readAccessToken(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const session = payload.session;
+  if (!session || typeof session !== "object") return "";
+  const accessToken = session.access_token;
+  return typeof accessToken === "string" ? accessToken : "";
+}
+
+async function issueOpsDashboardAccessToken() {
+  if (!ownerPassphrase) {
+    throw new Error("missing_owner_passphrase:DESKTOP_OWNER_PASSPHRASE is required for ops-dashboard mode");
+  }
+
+  const bootstrapResponse = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/bootstrap-owner`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-bootstrap-token": bootstrapToken,
+    },
+    body: JSON.stringify({
+      workspace_id: engineWorkspaceId,
+      display_name: "Desktop Ops Owner",
+      passphrase: ownerPassphrase,
+    }),
+  });
+
+  if (bootstrapResponse.status === 201) {
+    const accessToken = readAccessToken(bootstrapResponse.json);
+    if (accessToken) return accessToken;
+    throw new Error("desktop_ops_token_missing:bootstrap_owner");
+  }
+
+  if (bootstrapResponse.status !== 409) {
+    throw new Error(`desktop_ops_bootstrap_failed:${bootstrapResponse.status}`);
+  }
+
+  const loginResponse = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/login`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      workspace_id: engineWorkspaceId,
+      passphrase: ownerPassphrase,
+    }),
+  });
+
+  if (!loginResponse.ok) {
+    throw new Error(`desktop_ops_login_failed:${loginResponse.status}`);
+  }
+
+  const accessToken = readAccessToken(loginResponse.json);
+  if (!accessToken) {
+    throw new Error("desktop_ops_token_missing:login");
+  }
+  return accessToken;
+}
+
+async function prepareOpsDashboardConfig() {
+  const bearerToken = await issueOpsDashboardAccessToken();
+  const payload = {
+    apiBaseUrl: `http://127.0.0.1:${apiPort}`,
+    defaultWorkspaceId: engineWorkspaceId,
+    bearerToken,
+    schemaVersion: "2.1",
+    healthPollSec: 15,
+    financePollSec: 30,
+    financeDaysBack: 14,
+  };
+  await mkdir(path.dirname(opsDashboardConfigPath), { recursive: true });
+  await writeFile(opsDashboardConfigPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
 
 async function waitUntilReachable(url, timeoutMs) {
@@ -582,10 +688,11 @@ function createWindow(startUrl) {
 
 function createFailureWindow(error) {
   const message = String(error instanceof Error ? error.message : error).replaceAll("<", "&lt;");
+  const webAppPrefix = isOpsDashboard ? "DESKTOP_WEB_APP=ops-dashboard " : "";
   const runnerModeHelp =
     runnerMode === "external"
-      ? "DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:external"
-      : "DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:embedded";
+      ? `${webAppPrefix}DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:external`
+      : `${webAppPrefix}DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:embedded`;
   const html = `<!doctype html>
 <html>
   <head>
@@ -621,6 +728,9 @@ ${runnerModeHelp}</pre>
 async function startRuntime() {
   await Promise.all([ensurePortAvailable(apiPort, "api"), ensurePortAvailable(webPort, "web")]);
   await startComponent(components.api, "initial");
+  if (isOpsDashboard) {
+    await prepareOpsDashboardConfig();
+  }
   await startComponent(components.web, "initial");
   if (components.engine.enabled) {
     await startComponent(components.engine, "initial");
@@ -632,7 +742,7 @@ async function boot() {
   try {
     // eslint-disable-next-line no-console
     console.log(
-      `[desktop] booting runtime (mode:${runnerMode}, api:${apiPort}, web:${webPort}, api_timeout:${apiTimeoutMs}ms, web_timeout:${webTimeoutMs}ms, max_restarts:${restartMaxAttempts})`,
+      `[desktop] booting runtime (mode:${runnerMode}, web_app:${webApp}, api:${apiPort}, web:${webPort}, api_timeout:${apiTimeoutMs}ms, web_timeout:${webTimeoutMs}ms, max_restarts:${restartMaxAttempts})`,
     );
     await startRuntime();
     if (!noWindow) createWindow(bootstrapUrl);
