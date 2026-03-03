@@ -5,6 +5,7 @@ import { newIncidentId, type ActorType } from "@agentapp/shared";
 import { SCHEMA_VERSION } from "../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../db/pool.js";
 import { appendToStream } from "../eventStore/index.js";
+import { getTraceContext } from "../observability/traceContext.js";
 
 type Queryable = Pick<DbPool, "query"> | Pick<DbClient, "query">;
 
@@ -31,6 +32,19 @@ type AutomationContext = {
   log?: LoggerLike;
 };
 
+type AutomationFailTelemetryPayload = {
+  event: "automation.apply_failed";
+  trace_key: string;
+  workspace_id: string;
+  reason_code: string;
+  entity_type: string | null;
+  run_id: string | null;
+  scorecard_id: string | null;
+  correlation_id: string | null;
+  request_id: string | null;
+  timestamp: string;
+};
+
 type LatestEventRow = {
   event_id: string;
   event_type: string;
@@ -43,6 +57,7 @@ type LatestEventRow = {
 };
 
 const KNOWN_RISK_TIERS = new Set(["low", "medium", "high"]);
+let lastAutomationFailTelemetry: AutomationFailTelemetryPayload | null = null;
 
 function isAutomationEnabled(): boolean {
   const raw = process.env.PROMOTION_LOOP_ENABLED;
@@ -67,6 +82,32 @@ function normalizeRiskTier(value: unknown): RiskTier | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function safeReasonCode(err: unknown): string {
+  if (!isRecord(err)) return "unknown";
+  const errorRecord = isRecord(err.error) ? err.error : undefined;
+  const detailsRecord = isRecord(err.details) ? err.details : undefined;
+  const candidates = [
+    err.reason_code,
+    err.reasonCode,
+    err.code,
+    errorRecord?.reason_code,
+    detailsRecord?.reason_code,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const normalized = candidate.trim();
+    if (!/^[a-z][a-z0-9_]*$/i.test(normalized)) continue;
+    return normalized;
+  }
+  return "unknown";
+}
+
+function safeIdSeg(value: unknown, fallback: string): string {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) return fallback;
+  return normalized.replaceAll(":", "|");
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -891,6 +932,70 @@ export async function getLatestEvent(
   return fallback.rowCount === 1 ? fallback.rows[0] : null;
 }
 
+async function emitAutomationFailureTelemetry(
+  pool: DbPool,
+  ctx: AutomationContext,
+  err: unknown,
+): Promise<void> {
+  let payload: AutomationFailTelemetryPayload | null = null;
+  try {
+    const trace = getTraceContext();
+    const run_id = normalizeOptionalString(ctx.run_id) ?? null;
+    const scorecard_id = normalizeOptionalString(ctx.scorecard_id) ?? null;
+    const targetIdSegment = safeIdSeg(run_id ?? scorecard_id, "none");
+    const workspaceSegment = safeIdSeg(ctx.workspace_id, "none");
+
+    let triggerEventSegment = "no_evt";
+    try {
+      const latest = await getLatestEvent(pool, {
+        workspace_id: ctx.workspace_id,
+        entity_type: ctx.entity_type,
+        entity_id: ctx.entity_id,
+        event_types: [ctx.trigger],
+      });
+      triggerEventSegment = safeIdSeg(latest?.event_id, "no_evt");
+    } catch {
+      // Swallow event-id lookup failures for telemetry-only path.
+    }
+
+    payload = {
+      event: "automation.apply_failed",
+      trace_key: `auto_fail:${workspaceSegment}:${targetIdSegment}:${triggerEventSegment}`,
+      workspace_id: ctx.workspace_id,
+      reason_code: safeReasonCode(err),
+      entity_type: normalizeOptionalString(ctx.entity_type) ?? null,
+      run_id,
+      scorecard_id,
+      correlation_id: normalizeOptionalString(ctx.correlation_id) ?? trace?.correlation_id ?? null,
+      request_id: trace?.request_id ?? null,
+      timestamp: new Date().toISOString(),
+    };
+  } catch {
+    payload = {
+      event: "automation.apply_failed",
+      trace_key: `auto_fail:${safeIdSeg(ctx.workspace_id, "none")}:none:no_evt`,
+      workspace_id: ctx.workspace_id,
+      reason_code: "unknown",
+      entity_type: normalizeOptionalString(ctx.entity_type) ?? null,
+      run_id: normalizeOptionalString(ctx.run_id) ?? null,
+      scorecard_id: normalizeOptionalString(ctx.scorecard_id) ?? null,
+      correlation_id: normalizeOptionalString(ctx.correlation_id) ?? null,
+      request_id: null,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  if (process.env.NODE_ENV === "test") {
+    lastAutomationFailTelemetry = payload;
+  }
+
+  try {
+    ctx.log?.warn?.(payload);
+  } catch {
+    // Telemetry must never alter automation control flow.
+  }
+}
+
 async function runAutomationLogic(pool: DbPool, ctx: AutomationContext): Promise<void> {
   if (process.env.AUTOMATION_FAIL_TEST === "1") {
     throw new Error("automation_fail_test");
@@ -913,17 +1018,6 @@ async function runAutomationWithRetry(pool: DbPool, ctx: AutomationContext): Pro
       return;
     } catch (err) {
       lastError = err;
-      ctx.log?.warn?.(
-        {
-          workspace_id: ctx.workspace_id,
-          entity_type: ctx.entity_type,
-          entity_id: ctx.entity_id,
-          trigger: ctx.trigger,
-          attempt: attempt + 1,
-          err,
-        },
-        "automation attempt failed",
-      );
     }
   }
   throw lastError;
@@ -946,31 +1040,22 @@ export async function applyAutomation(pool: DbPool, ctx: AutomationContext): Pro
   try {
     await runAutomationWithRetry(pool, ctx);
   } catch (err) {
-    ctx.log?.error?.(
-      {
-        workspace_id: ctx.workspace_id,
-        entity_type: ctx.entity_type,
-        entity_id: ctx.entity_id,
-        trigger: ctx.trigger,
-        err,
-      },
-      "automation loop failed",
-    );
     try {
       await emitFallbackIncident(pool, ctx, err);
-    } catch (fallbackErr) {
-      ctx.log?.error?.(
-        {
-          workspace_id: ctx.workspace_id,
-          entity_type: ctx.entity_type,
-          entity_id: ctx.entity_id,
-          trigger: ctx.trigger,
-          err: fallbackErr,
-        },
-        "automation fallback incident failed",
-      );
+    } catch {
+      // Existing behavior keeps fallback failures non-fatal.
     }
+
+    void emitAutomationFailureTelemetry(pool, ctx, err);
   }
+}
+
+export function _getLastAutomationFailTelemetry(): AutomationFailTelemetryPayload | null {
+  return lastAutomationFailTelemetry;
+}
+
+export function _clearAutomationFailTelemetry(): void {
+  lastAutomationFailTelemetry = null;
 }
 
 export { isUniqueViolation };
