@@ -32,10 +32,12 @@
   - OR `rate_limit_flood_detected = true`
 - `OK`: otherwise.
 
+Hard constants (PR-14):
+- `DOWN_CRON_FRESHNESS_SEC = 600`
+- `DOWN_PROJECTION_LAG_SEC = 300`
+- `DEGRADED_DLQ_BACKLOG_THRESHOLD = 10`
+
 Env overrides:
-- `HEALTH_DOWN_CRON_FRESHNESS_SEC` (default `600`)
-- `HEALTH_DOWN_PROJECTION_LAG_SEC` (default `300`)
-- `HEALTH_DEGRADED_DLQ_BACKLOG` (default `10`)
 - `HEALTH_DB_STATEMENT_TIMEOUT_MS` (default `2000`)
 
 ## Caching Semantics
