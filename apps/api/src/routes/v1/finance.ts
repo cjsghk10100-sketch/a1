@@ -737,7 +737,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
       rateLimitResult = await enforceOpsDashboardRateLimit(pool, [
         {
           scope: "ops_finance_projection_per_workspace_per_min",
-          bucket_key: `ops_dashboard:${workspace_id}`,
+          bucket_key: `ops_dashboard:finance_projection:${workspace_id}`,
           limit: OPS_DASHBOARD_FINANCE_PER_WORKSPACE_PER_MIN,
           window_sec: OPS_DASHBOARD_FINANCE_WINDOW_SEC,
         },

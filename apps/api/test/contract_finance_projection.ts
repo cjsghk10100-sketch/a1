@@ -19,6 +19,7 @@ const HTTP_OK = httpStatusForReasonCode("duplicate_idempotent_replay");
 const HTTP_MISSING_WORKSPACE = httpStatusForReasonCode("missing_workspace_header");
 const HTTP_UNSUPPORTED_VERSION = httpStatusForReasonCode("unsupported_version");
 const HTTP_INVALID_PAYLOAD = httpStatusForReasonCode("invalid_payload_combination");
+const HTTP_RATE_LIMITED = httpStatusForReasonCode("rate_limited");
 
 type FinanceProjectionResponse = {
   schema_version: string;
@@ -240,6 +241,20 @@ async function main(): Promise<void> {
     assert.equal(bootstrapB.status, 201, bootstrapB.text);
     const tokenB = readAccessToken(bootstrapB.json);
 
+    const workspaceRate = `ws_finance_rate_${randomUUID().slice(0, 6)}`;
+    const bootstrapRate = await postJson<{ session: { access_token: string } }>(
+      baseUrl,
+      "/v1/auth/bootstrap-owner",
+      {
+        workspace_id: workspaceRate,
+        display_name: "Finance Contract Rate",
+        passphrase: `pass_${workspaceRate}`,
+      },
+      { "x-bootstrap-token": bootstrapToken },
+    );
+    assert.equal(bootstrapRate.status, 201, bootstrapRate.text);
+    const tokenRate = readAccessToken(bootstrapRate.json);
+
     const requestProjection = async (
       workspaceId: string,
       token: string,
@@ -249,6 +264,26 @@ async function main(): Promise<void> {
         authorization: `Bearer ${token}`,
         "x-workspace-id": workspaceId,
       });
+
+    const requestHealthIssues = async (
+      workspaceId: string,
+      token: string,
+      kind: string,
+    ): Promise<{ status: number; json: unknown; text: string }> => {
+      const res = await fetch(`${baseUrl}/v1/system/health/issues?kind=${encodeURIComponent(kind)}`, {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "x-workspace-id": workspaceId,
+        },
+      });
+      const text = await res.text();
+      return {
+        status: res.status,
+        json: text ? (JSON.parse(text) as unknown) : {},
+        text,
+      };
+    };
 
     // T1 route mounted
     clearFinanceCache();
@@ -348,6 +383,23 @@ async function main(): Promise<void> {
       include: Array.from({ length: 11 }, (_, idx) => `k_${idx}`),
     });
     assert.equal(t7IncludeTooMany.status, HTTP_INVALID_PAYLOAD, t7IncludeTooMany.text);
+
+    // T7b finance and health issues must use isolated rate-limit buckets
+    clearFinanceCache();
+    await db.query(
+      `INSERT INTO rate_limit_buckets (bucket_key, window_start, window_sec, count, updated_at)
+       VALUES ($1, date_trunc('minute', now()), 60, $2, now())
+       ON CONFLICT (bucket_key, window_start, window_sec)
+       DO UPDATE SET count = EXCLUDED.count, updated_at = EXCLUDED.updated_at`,
+      [`ops_dashboard:finance_projection:${workspaceRate}`, 300],
+    );
+    const t7bFinanceRateLimited = await requestProjection(workspaceRate, tokenRate, {
+      schema_version: SCHEMA_VERSION,
+      days_back: 7,
+    });
+    assert.equal(t7bFinanceRateLimited.status, HTTP_RATE_LIMITED, t7bFinanceRateLimited.text);
+    const t7bHealthUnaffected = await requestHealthIssues(workspaceRate, tokenRate, "cron_stale");
+    assert.equal(t7bHealthUnaffected.status, HTTP_OK, t7bHealthUnaffected.text);
 
     clearFinanceCache();
     const sourceProbe = await requestProjection(workspaceA, tokenA, {

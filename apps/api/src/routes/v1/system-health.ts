@@ -1882,7 +1882,7 @@ export async function registerSystemHealthRoutes(
       issuesRateLimitResult = await enforceOpsDashboardRateLimit(pool, [
         {
           scope: "ops_system_health_issues_per_workspace_per_min",
-          bucket_key: `ops_dashboard:${workspace_id}`,
+          bucket_key: `ops_dashboard:system_health_issues:${workspace_id}`,
           limit: OPS_ISSUES_RATE_LIMIT_PER_MIN,
           window_sec: OPS_ISSUES_RATE_LIMIT_WINDOW_SEC,
         },
