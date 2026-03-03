@@ -734,11 +734,9 @@ async function appendRunFailed(
         : undefined,
     correlation_id: latest.correlation_id,
     actor: runActor(),
-  }).catch((err) => {
+  }).catch(() => {
     input.logger?.warn(
-      `[run_worker] automation loop failed after run.failed persistence for ${latest.run_id}: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      `[run_worker] automation loop rejected after run.failed persistence for ${latest.run_id}`,
     );
   });
 }

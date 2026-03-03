@@ -271,14 +271,14 @@ export async function registerScorecardRoutes(app: FastifyInstance, pool: DbPool
       correlation_id,
       actor: { actor_type, actor_id },
       log: req.log,
-    }).catch((err) => {
+    }).catch(() => {
       req.log.warn(
         {
-          err,
+          event: "automation.apply_failed_unhandled",
           workspace_id,
           scorecard_id,
         },
-        "automation loop failed after scorecard persistence",
+        "automation loop rejected after scorecard persistence",
       );
     });
     return reply.code(201).send({ scorecard_id });

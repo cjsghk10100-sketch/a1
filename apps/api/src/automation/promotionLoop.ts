@@ -831,7 +831,7 @@ async function handleScorecardRecorded(pool: DbPool, ctx: AutomationContext): Pr
 }
 
 async function emitFallbackIncident(pool: DbPool, ctx: AutomationContext, err: unknown): Promise<void> {
-  const reason = err instanceof Error ? err.message : String(err);
+  const error_reason_code = safeReasonCode(err);
   const subjectId = normalizeOptionalString(ctx.run_id) ?? normalizeOptionalString(ctx.scorecard_id) ?? ctx.entity_id;
   const correlation_id = domainCorrelationId(ctx, subjectId);
   const idempotency_key = `incident:automation_internal_error:${ctx.workspace_id}:${ctx.entity_type}:${ctx.entity_id}:${ctx.trigger}`;
@@ -865,7 +865,7 @@ async function emitFallbackIncident(pool: DbPool, ctx: AutomationContext, err: u
         entity_id: subjectId,
         details: {
           trigger: ctx.trigger,
-          error: reason.slice(0, 500),
+          error_reason_code,
         },
       },
       policy_context: {},
