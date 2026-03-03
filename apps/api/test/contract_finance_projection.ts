@@ -28,6 +28,7 @@ type FinanceProjectionResponse = {
     source: "proj_finance_daily" | "sec_survival_ledger_daily" | "none";
     cached: boolean;
     cache_age_ms: number | null;
+    include_applied?: string[];
   };
   totals: null | {
     estimated_cost_units: string | null;
@@ -43,6 +44,11 @@ type FinanceProjectionResponse = {
     total_tokens: string | null;
   }>;
   warnings: string[];
+  top_models?: Array<{
+    model: string;
+    estimated_cost_units: string;
+    total_tokens: string;
+  }>;
 };
 
 type ErrorPayload = {
@@ -248,6 +254,11 @@ async function main(): Promise<void> {
     clearFinanceCache();
     const t1 = await requestProjection(workspaceA, tokenA, { schema_version: SCHEMA_VERSION });
     assert.notEqual(t1.status, 404, t1.text);
+    assert.ok(!("top_models" in t1.json), "baseline response must not include top_models");
+    assert.ok(
+      !("include_applied" in t1.json.meta),
+      "baseline response meta must not include include_applied",
+    );
 
     // T2 missing x-workspace-id
     clearFinanceCache();
@@ -281,6 +292,14 @@ async function main(): Promise<void> {
     assert.equal(t4InvalidFloat.status, HTTP_INVALID_PAYLOAD, t4InvalidFloat.text);
 
     clearFinanceCache();
+    const t4NumericString = await requestProjection(workspaceA, tokenA, {
+      schema_version: SCHEMA_VERSION,
+      days_back: "7",
+    });
+    assert.equal(t4NumericString.status, HTTP_OK, t4NumericString.text);
+    assert.equal(t4NumericString.json.meta.applied_days_back, 7);
+
+    clearFinanceCache();
     const t4ClampLow = await requestProjection(workspaceA, tokenA, {
       schema_version: SCHEMA_VERSION,
       days_back: 0,
@@ -304,6 +323,32 @@ async function main(): Promise<void> {
     assert.equal(t4ClampHigh.status, HTTP_OK, t4ClampHigh.text);
     assert.equal(t4ClampHigh.json.meta.applied_days_back, 365);
 
+    // T5 unknown include is ignored (baseline shape preserved)
+    clearFinanceCache();
+    const t5UnknownInclude = await requestProjection(workspaceA, tokenA, {
+      schema_version: SCHEMA_VERSION,
+      include: ["does_not_exist"],
+    });
+    assert.equal(t5UnknownInclude.status, HTTP_OK, t5UnknownInclude.text);
+    assert.ok(!("top_models" in t5UnknownInclude.json));
+    assert.ok(!("include_applied" in t5UnknownInclude.json.meta));
+
+    // T6 invalid include payload (string)
+    clearFinanceCache();
+    const t6IncludeString = await requestProjection(workspaceA, tokenA, {
+      schema_version: SCHEMA_VERSION,
+      include: "top_models",
+    });
+    assert.equal(t6IncludeString.status, HTTP_INVALID_PAYLOAD, t6IncludeString.text);
+
+    // T7 invalid include payload (too many items)
+    clearFinanceCache();
+    const t7IncludeTooMany = await requestProjection(workspaceA, tokenA, {
+      schema_version: SCHEMA_VERSION,
+      include: Array.from({ length: 11 }, (_, idx) => `k_${idx}`),
+    });
+    assert.equal(t7IncludeTooMany.status, HTTP_INVALID_PAYLOAD, t7IncludeTooMany.text);
+
     clearFinanceCache();
     const sourceProbe = await requestProjection(workspaceA, tokenA, {
       schema_version: SCHEMA_VERSION,
@@ -316,8 +361,18 @@ async function main(): Promise<void> {
          to_regclass('public.proj_finance_daily') IS NOT NULL AS has_a,
          to_regclass('public.sec_survival_ledger_daily') IS NOT NULL AS has_b`,
     );
+    const modelDimensionRes = await db.query<{ has_model_col: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'proj_finance_daily'
+           AND column_name = 'model'
+       ) AS has_model_col`,
+    );
     const hasSourceA = sourcePresenceRes.rows[0]?.has_a === true;
     const hasSourceB = sourcePresenceRes.rows[0]?.has_b === true;
+    const hasModelDimension = modelDimensionRes.rows[0]?.has_model_col === true;
     if (!hasSourceA && hasSourceB) {
       assert.equal(
         effectiveSource,
@@ -443,7 +498,136 @@ async function main(): Promise<void> {
       );
     }
 
-    // T7 cache hygiene: NODE_ENV=test must not retain stale metrics.
+    // T8 include top_models opt-in behavior
+    clearFinanceCache();
+    if (hasSourceA && hasModelDimension) {
+      await db.query(`DELETE FROM public.proj_finance_daily WHERE workspace_id = $1`, [workspaceA]);
+      await db.query(
+        `INSERT INTO public.proj_finance_daily (
+           workspace_id,
+           day_utc,
+           model,
+           cost_usd_micros,
+           prompt_tokens,
+           completion_tokens,
+           total_tokens,
+           event_count,
+           last_event_id,
+           last_event_occurred_at
+         ) VALUES
+           (
+             $1,
+             (now() AT TIME ZONE 'UTC')::date - 2,
+             'model.beta',
+             500,
+             10,
+             10,
+             20,
+             1,
+             $2,
+             now()
+           ),
+           (
+             $1,
+             (now() AT TIME ZONE 'UTC')::date - 1,
+             'model.alpha',
+             500,
+             20,
+             0,
+             20,
+             1,
+             $3,
+             now()
+           )
+         ON CONFLICT (workspace_id, day_utc)
+         DO UPDATE SET
+           model = EXCLUDED.model,
+           cost_usd_micros = EXCLUDED.cost_usd_micros,
+           prompt_tokens = EXCLUDED.prompt_tokens,
+           completion_tokens = EXCLUDED.completion_tokens,
+           total_tokens = EXCLUDED.total_tokens,
+           event_count = EXCLUDED.event_count,
+           last_event_id = EXCLUDED.last_event_id,
+           last_event_occurred_at = EXCLUDED.last_event_occurred_at,
+           updated_at = now()`,
+        [workspaceA, `evt_fin_beta_${randomUUID().slice(0, 8)}`, `evt_fin_alpha_${randomUUID().slice(0, 8)}`],
+      );
+    }
+
+    const t8IncludeTopModels = await requestProjection(workspaceA, tokenA, {
+      schema_version: SCHEMA_VERSION,
+      days_back: 7,
+      include: ["top_models"],
+    });
+    assert.equal(t8IncludeTopModels.status, HTTP_OK, t8IncludeTopModels.text);
+    assert.deepEqual(t8IncludeTopModels.json.meta.include_applied, ["top_models"]);
+    assert.ok(Array.isArray(t8IncludeTopModels.json.top_models), "top_models must be an array when requested");
+
+    if (hasSourceA && hasModelDimension && t8IncludeTopModels.json.meta.source === "proj_finance_daily") {
+      assert.ok((t8IncludeTopModels.json.top_models?.length ?? 0) >= 2, "expected model rows");
+      const topModels = t8IncludeTopModels.json.top_models ?? [];
+      for (let idx = 0; idx + 1 < topModels.length; idx += 1) {
+        const current = topModels[idx];
+        const next = topModels[idx + 1];
+        const currentCost = Number(current.estimated_cost_units);
+        const nextCost = Number(next.estimated_cost_units);
+        assert.ok(
+          currentCost > nextCost || (currentCost === nextCost && current.model.localeCompare(next.model, "en-US") <= 0),
+          "top_models must be sorted by cost desc then model asc",
+        );
+      }
+      assert.ok(
+        topModels.every(
+          (row) =>
+            typeof row.estimated_cost_units === "string" &&
+            typeof row.total_tokens === "string",
+        ),
+        "top_models numeric fields must be strings",
+      );
+    } else {
+      assert.deepEqual(t8IncludeTopModels.json.top_models ?? [], []);
+      assert.ok(
+        t8IncludeTopModels.json.warnings.includes("top_models_unsupported"),
+        "unsupported model dimension must return top_models_unsupported warning",
+      );
+    }
+
+    // T9 cache-key separation between baseline and include variants.
+    {
+      const prevNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "development";
+      try {
+        clearFinanceCache();
+        const baseline = await requestProjection(workspaceA, tokenA, {
+          schema_version: SCHEMA_VERSION,
+          days_back: 3,
+        });
+        assert.equal(baseline.status, HTTP_OK, baseline.text);
+        assert.ok(!("top_models" in baseline.json));
+
+        const includeFirst = await requestProjection(workspaceA, tokenA, {
+          schema_version: SCHEMA_VERSION,
+          days_back: 3,
+          include: ["top_models"],
+        });
+        assert.equal(includeFirst.status, HTTP_OK, includeFirst.text);
+        assert.ok("top_models" in includeFirst.json, "include cache key must not reuse baseline entry");
+        assert.equal(includeFirst.json.meta.cached, false);
+
+        const includeSecond = await requestProjection(workspaceA, tokenA, {
+          schema_version: SCHEMA_VERSION,
+          days_back: 3,
+          include: ["top_models"],
+        });
+        assert.equal(includeSecond.status, HTTP_OK, includeSecond.text);
+        assert.equal(includeSecond.json.meta.cached, true, includeSecond.text);
+      } finally {
+        process.env.NODE_ENV = prevNodeEnv;
+        clearFinanceCache();
+      }
+    }
+
+    // T10 cache hygiene: NODE_ENV=test must not retain stale metrics.
     clearFinanceCache();
     if (effectiveSource === "sec_survival_ledger_daily") {
       await upsertWorkspaceFinanceDaily(db, workspaceA, 0, 5);
