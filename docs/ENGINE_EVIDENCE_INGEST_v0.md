@@ -32,6 +32,10 @@
   - `accepted`
   - `deduped`
   - `rejected` (with `reason_code`)
+- Event validation is contract-locked:
+  - unknown `event_type` is rejected
+  - `event_version` above allowed max is rejected
+  - oversized batch (`events.length > 100`) is rejected before write phase
 
 ## Rate limiting
 
@@ -45,4 +49,3 @@
 - `500` response: retry full batch safely (dedupe handles replay).
 - `200` mixed response: retry only rejected events after fixing payload.
 - Accepted and deduped events are replay-safe.
-
