@@ -1,12 +1,14 @@
 import type { FinanceTopModel } from "../../api/types";
+import { useI18n } from "../../i18n/useI18n";
 import { formatCost, formatTokens } from "../../utils/format";
 
 export function TopModelsList({ models }: { models: FinanceTopModel[] }): JSX.Element {
+  const { t } = useI18n();
   return (
     <div className="rounded border p-3">
-      <div className="mb-2 text-sm font-semibold">Top models</div>
+      <div className="mb-2 text-sm font-semibold">{t("finance.topModels.title")}</div>
       {models.length === 0 ? (
-        <div className="text-sm text-slate-500">No model data.</div>
+        <div className="text-sm text-slate-500">{t("finance.topModels.empty")}</div>
       ) : (
         <ul className="space-y-1 text-sm">
           {models.map((model) => (

@@ -1,6 +1,7 @@
 import { Outlet } from "react-router-dom";
 
 import type { PanelStatusSnapshot } from "../config/DashboardContext";
+import { useI18n } from "../i18n/useI18n";
 import type { PanelDefinition } from "../panels/registry";
 import type { PollingDotState } from "../shared/PollingDot";
 import { GlobalHeader } from "./GlobalHeader";
@@ -29,6 +30,7 @@ export function OpsLayout({
   showGlobalError: boolean;
   apiBaseUrl: string;
 }): JSX.Element {
+  const { t } = useI18n();
   return (
     <div className="flex min-h-screen flex-col">
       <GlobalHeader
@@ -44,10 +46,10 @@ export function OpsLayout({
         <main className="relative flex-1 p-4">
           {showGlobalError ? (
             <div className="mb-3 rounded border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
-              <div className="font-medium">Dashboard cannot reach any API endpoint.</div>
-              <div className="mt-1">apiBaseUrl: {apiBaseUrl}</div>
+              <div className="font-medium">{t("layout.globalError.title")}</div>
+              <div className="mt-1">{t("layout.globalError.baseUrl", { value: apiBaseUrl })}</div>
               <button type="button" className="mt-2 rounded border px-2 py-1" onClick={onRefreshAll}>
-                Retry Now
+                {t("layout.globalError.retry")}
               </button>
             </div>
           ) : null}

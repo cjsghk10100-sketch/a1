@@ -1,4 +1,5 @@
 import type { DrilldownItem, HealthIssueKind } from "../../api/types";
+import { useI18n } from "../../i18n/useI18n";
 import { formatDuration } from "../../utils/format";
 import { toLocalTime } from "../../utils/time";
 
@@ -29,31 +30,32 @@ export function DrilldownPanel({
   onClose: () => void;
   onRefresh: () => void;
 }): JSX.Element {
+  const { t } = useI18n();
   return (
     <section className="mt-4 rounded border bg-white p-3">
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-sm font-semibold">Drilldown: {kind}</div>
+        <div className="text-sm font-semibold">{t("drilldown.title", { kind })}</div>
         <div className="flex gap-2">
           <button type="button" className="rounded border px-2 py-1 text-xs" onClick={onRefresh}>
-            Refresh
+            {t("drilldown.refresh")}
           </button>
           <button type="button" className="rounded border px-2 py-1 text-xs" onClick={onClose}>
-            ← Back
+            {t("drilldown.back")}
           </button>
         </div>
       </div>
 
       {items.length === 0 && !loading ? (
-        <div className="text-sm text-slate-500">No drilldown rows.</div>
+        <div className="text-sm text-slate-500">{t("drilldown.empty")}</div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b">
-                <th className="px-2 py-1 text-left">entity_id</th>
-                <th className="px-2 py-1 text-left">updated_at</th>
-                <th className="px-2 py-1 text-left">age</th>
-                <th className="px-2 py-1 text-left">details</th>
+                <th className="px-2 py-1 text-left">{t("drilldown.col.entityId")}</th>
+                <th className="px-2 py-1 text-left">{t("drilldown.col.updatedAt")}</th>
+                <th className="px-2 py-1 text-left">{t("drilldown.col.age")}</th>
+                <th className="px-2 py-1 text-left">{t("drilldown.col.details")}</th>
               </tr>
             </thead>
             <tbody>
@@ -81,7 +83,7 @@ export function DrilldownPanel({
           onClick={onLoadMore}
           disabled={loading}
         >
-          Load more
+          {t("drilldown.loadMore")}
         </button>
       ) : null}
     </section>

@@ -1,4 +1,5 @@
 import type { TopIssue } from "../../api/types";
+import { useI18n } from "../../i18n/useI18n";
 import { formatDuration } from "../../utils/format";
 
 export function TopIssuesList({
@@ -8,11 +9,12 @@ export function TopIssuesList({
   issues: TopIssue[];
   onOpen: (kind: TopIssue["kind"]) => void;
 }): JSX.Element {
+  const { t } = useI18n();
   return (
     <div className="rounded border p-3">
-      <div className="mb-2 text-sm font-semibold">Top issues</div>
+      <div className="mb-2 text-sm font-semibold">{t("topIssues.title")}</div>
       {issues.length === 0 ? (
-        <div className="text-sm text-slate-500">No active issues</div>
+        <div className="text-sm text-slate-500">{t("topIssues.empty")}</div>
       ) : (
         <ul className="space-y-1">
           {issues.map((issue) => (
