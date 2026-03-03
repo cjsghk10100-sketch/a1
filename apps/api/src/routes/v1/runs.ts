@@ -110,13 +110,13 @@ async function finalizeRunEvidenceSafely(
       actor: { actor_type: "service", actor_id: "api" },
       correlation_id: input.correlation_id,
     });
-  } catch (err) {
+  } catch {
     app.log.warn(
       {
+        event: "run.evidence_finalize_failed",
         run_id: input.run_id,
         workspace_id: input.workspace_id,
         correlation_id: input.correlation_id,
-        err,
       },
       "run terminal persisted but evidence finalize failed",
     );
