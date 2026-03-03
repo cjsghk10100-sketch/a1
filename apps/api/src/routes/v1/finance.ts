@@ -17,6 +17,10 @@ import { getRequestAuth } from "../../security/requestAuth.js";
  * - B) public.sec_survival_ledger_daily
  * - C) none (table missing / incompatible)
  *
+ * Top-models extension source:
+ * - public.proj_finance_model_daily (model-granular projection only)
+ * - Never derive model ranking from workspace/day aggregate rows.
+ *
  * Safety:
  * - Every tenant query is workspace-scoped.
  * - Date range is bounded by DB UTC day window and days_back <= 365.
@@ -25,6 +29,7 @@ import { getRequestAuth } from "../../security/requestAuth.js";
  */
 const FINANCE_DAILY_SOURCE_A = "public.proj_finance_daily";
 const FINANCE_DAILY_SOURCE_B = "public.sec_survival_ledger_daily";
+const FINANCE_TOP_MODELS_SOURCE = "public.proj_finance_model_daily";
 const SUCCESS_HTTP_STATUS = httpStatusForReasonCode("duplicate_idempotent_replay");
 const DEFAULT_DAYS_BACK = 30;
 const MAX_DAYS_BACK = 365;
@@ -499,7 +504,7 @@ function appendUniqueWarning(existingWarnings: string[], warning: string): strin
   return existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
 }
 
-async function queryTopModelsFromProjFinanceDaily(
+async function queryTopModelsFromModelDaily(
   client: DbClient,
   workspace_id: string,
   days_back: number,
@@ -520,7 +525,7 @@ async function queryTopModelsFromProjFinanceDaily(
          ) AS model_sanitized,
          SUM(cost_usd_micros) AS estimated_cost_units,
          SUM(total_tokens) AS total_tokens
-       FROM ${FINANCE_DAILY_SOURCE_A}
+       FROM ${FINANCE_TOP_MODELS_SOURCE}
        WHERE workspace_id = $1
          AND day_utc >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
          AND day_utc <= (now() AT TIME ZONE 'UTC')::date
@@ -566,18 +571,9 @@ async function applyIncludeExtensions(
     return { payload, has_include_error: false };
   }
 
-  if (basePayload.meta.source !== "proj_finance_daily") {
-    payload = {
-      ...payload,
-      warnings: appendUniqueWarning(payload.warnings, "top_models_unsupported"),
-      top_models: [],
-    };
-    return { payload, has_include_error: false };
-  }
-
   await client.query("SAVEPOINT sp_finance_top_models");
   try {
-    const topModels = await queryTopModelsFromProjFinanceDaily(client, workspace_id, days_back);
+    const topModels = await queryTopModelsFromModelDaily(client, workspace_id, days_back);
     await client.query("RELEASE SAVEPOINT sp_finance_top_models");
     payload = {
       ...payload,

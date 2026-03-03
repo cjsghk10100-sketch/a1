@@ -40,7 +40,9 @@
 ## Response
 - `server_time` is always live DB UTC time (`(now() AT TIME ZONE 'UTC')::text || 'Z'`), never cached.
 - `top_models` is returned only when `include=["top_models"]` is applied.
-  - If model dimension is unsupported in current source, response returns:
+  - `top_models` is computed only from a model-granular projection source (`proj_finance_model_daily`).
+  - It is **not** derived from workspace/day aggregate rows in `proj_finance_daily`.
+  - If model-granular source is unsupported, response returns:
     - `top_models: []`
     - warning `top_models_unsupported`
 - Returns:

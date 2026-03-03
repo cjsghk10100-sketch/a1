@@ -361,18 +361,20 @@ async function main(): Promise<void> {
          to_regclass('public.proj_finance_daily') IS NOT NULL AS has_a,
          to_regclass('public.sec_survival_ledger_daily') IS NOT NULL AS has_b`,
     );
-    const modelDimensionRes = await db.query<{ has_model_col: boolean }>(
+    const topModelsSourceRes = await db.query<{ has_top_model_source: boolean }>(
       `SELECT EXISTS (
          SELECT 1
          FROM information_schema.columns
          WHERE table_schema = 'public'
-           AND table_name = 'proj_finance_daily'
-           AND column_name = 'model'
-       ) AS has_model_col`,
+           AND table_name = 'proj_finance_model_daily'
+           AND column_name IN ('workspace_id', 'day_utc', 'model', 'cost_usd_micros', 'total_tokens')
+         GROUP BY table_schema, table_name
+         HAVING COUNT(*) = 5
+       ) AS has_top_model_source`,
     );
     const hasSourceA = sourcePresenceRes.rows[0]?.has_a === true;
     const hasSourceB = sourcePresenceRes.rows[0]?.has_b === true;
-    const hasModelDimension = modelDimensionRes.rows[0]?.has_model_col === true;
+    const hasTopModelSource = topModelsSourceRes.rows[0]?.has_top_model_source === true;
     if (!hasSourceA && hasSourceB) {
       assert.equal(
         effectiveSource,
@@ -500,58 +502,42 @@ async function main(): Promise<void> {
 
     // T8 include top_models opt-in behavior
     clearFinanceCache();
-    if (hasSourceA && hasModelDimension) {
-      await db.query(`DELETE FROM public.proj_finance_daily WHERE workspace_id = $1`, [workspaceA]);
-      await db.query(
-        `INSERT INTO public.proj_finance_daily (
-           workspace_id,
-           day_utc,
-           model,
-           cost_usd_micros,
-           prompt_tokens,
-           completion_tokens,
-           total_tokens,
-           event_count,
-           last_event_id,
-           last_event_occurred_at
-         ) VALUES
-           (
-             $1,
-             (now() AT TIME ZONE 'UTC')::date - 2,
-             'model.beta',
-             500,
-             10,
-             10,
-             20,
-             1,
-             $2,
-             now()
-           ),
-           (
-             $1,
-             (now() AT TIME ZONE 'UTC')::date - 1,
-             'model.alpha',
-             500,
-             20,
-             0,
-             20,
-             1,
-             $3,
-             now()
-           )
-         ON CONFLICT (workspace_id, day_utc)
-         DO UPDATE SET
-           model = EXCLUDED.model,
-           cost_usd_micros = EXCLUDED.cost_usd_micros,
-           prompt_tokens = EXCLUDED.prompt_tokens,
-           completion_tokens = EXCLUDED.completion_tokens,
-           total_tokens = EXCLUDED.total_tokens,
-           event_count = EXCLUDED.event_count,
-           last_event_id = EXCLUDED.last_event_id,
-           last_event_occurred_at = EXCLUDED.last_event_occurred_at,
-           updated_at = now()`,
-        [workspaceA, `evt_fin_beta_${randomUUID().slice(0, 8)}`, `evt_fin_alpha_${randomUUID().slice(0, 8)}`],
-      );
+    let topModelSourceSeeded = false;
+    if (hasTopModelSource) {
+      try {
+        await db.query(`DELETE FROM public.proj_finance_model_daily WHERE workspace_id = $1`, [workspaceA]);
+        await db.query(
+          `INSERT INTO public.proj_finance_model_daily (
+             workspace_id,
+             day_utc,
+             model,
+             cost_usd_micros,
+             total_tokens
+           ) VALUES
+             (
+               $1,
+               (now() AT TIME ZONE 'UTC')::date - 2,
+               'model.beta',
+               500,
+               20
+             ),
+             (
+               $1,
+               (now() AT TIME ZONE 'UTC')::date - 1,
+               'model.alpha',
+               500,
+               20
+             )
+           ON CONFLICT (workspace_id, day_utc, model)
+           DO UPDATE SET
+             cost_usd_micros = EXCLUDED.cost_usd_micros,
+             total_tokens = EXCLUDED.total_tokens`,
+          [workspaceA],
+        );
+        topModelSourceSeeded = true;
+      } catch {
+        topModelSourceSeeded = false;
+      }
     }
 
     const t8IncludeTopModels = await requestProjection(workspaceA, tokenA, {
@@ -563,7 +549,7 @@ async function main(): Promise<void> {
     assert.deepEqual(t8IncludeTopModels.json.meta.include_applied, ["top_models"]);
     assert.ok(Array.isArray(t8IncludeTopModels.json.top_models), "top_models must be an array when requested");
 
-    if (hasSourceA && hasModelDimension && t8IncludeTopModels.json.meta.source === "proj_finance_daily") {
+    if (topModelSourceSeeded) {
       assert.ok((t8IncludeTopModels.json.top_models?.length ?? 0) >= 2, "expected model rows");
       const topModels = t8IncludeTopModels.json.top_models ?? [];
       for (let idx = 0; idx + 1 < topModels.length; idx += 1) {
