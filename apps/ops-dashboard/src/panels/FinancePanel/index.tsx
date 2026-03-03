@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import type { FinanceResponse, FinanceWarning } from "../../api/types";
 import { useConfig } from "../../config/ConfigContext";
@@ -25,13 +25,19 @@ function normalizeWarnings(input: FinanceResponse["warnings"] | undefined): Fina
 export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.Element {
   const { config } = useConfig();
   const { client, workspaceId, refreshNonce, registerRefresh, reportPanelStatus } = useDashboardContext();
+  const financeFetcher = useCallback(
+    (signal: AbortSignal) =>
+      fetchFinance(client, config.schemaVersion, config.financeDaysBack, true, signal),
+    [client, config.schemaVersion, config.financeDaysBack],
+  );
 
   const polling = usePolling<FinanceResponse>(
-    (signal) => fetchFinance(client, config.schemaVersion, config.financeDaysBack, true, signal),
+    financeFetcher,
     config.financePollSec * 1000,
     {
       minIntervalMs: 30_000,
       resetKey: `${workspaceId}:${refreshNonce}`,
+      cacheKey: `finance:${workspaceId}:${config.financeDaysBack}:top_models`,
     },
   );
 
@@ -40,13 +46,27 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
   }, [registerRefresh, polling.forceRefresh]);
 
   const warnings = useMemo(() => normalizeWarnings(polling.data?.warnings), [polling.data?.warnings]);
+  const nonBlockingWarningsOnly = useMemo(() => {
+    if (warnings.length === 0) return false;
+    return warnings.every((warning) => warningKind(warning) === "top_models_unsupported");
+  }, [warnings]);
 
   const panelStatus = useMemo(() => {
-    if (!polling.data && polling.error) return "DOWN" as const;
-    if (polling.error || warnings.length > 0) return "DEGRADED" as const;
+    if (!polling.data && polling.error) {
+      if (polling.error.category === "timeout" || polling.error.category === "network") {
+        return "DEGRADED" as const;
+      }
+      return "DOWN" as const;
+    }
+    if (polling.error) {
+      const isTransient = polling.error.category === "timeout" || polling.error.category === "network";
+      // Keep panel status stable when stale data exists and only transient poll failure happened.
+      if (!polling.data || !isTransient) return "DEGRADED" as const;
+    }
+    if (warnings.length > 0 && !nonBlockingWarningsOnly) return "DEGRADED" as const;
     if (polling.data) return "OK" as const;
     return null;
-  }, [polling.data, polling.error, warnings.length]);
+  }, [polling.data, polling.error, warnings.length, nonBlockingWarningsOnly]);
 
   useEffect(() => {
     reportPanelStatus({
@@ -57,7 +77,7 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
     });
   }, [panelStatus, polling.lastUpdatedAt, polling.error, reportPanelStatus]);
 
-  if (polling.loading && !polling.data) {
+  if (!polling.data && !polling.error) {
     return <LoadingSkele lines={mode === "summary" ? 6 : 9} />;
   }
 
@@ -78,4 +98,9 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
       {mode === "full" ? <TopModelsList models={polling.data?.top_models ?? []} /> : null}
     </div>
   );
+}
+
+function warningKind(warning: FinanceWarning): string {
+  if (typeof warning === "string") return warning;
+  return warning.kind;
 }

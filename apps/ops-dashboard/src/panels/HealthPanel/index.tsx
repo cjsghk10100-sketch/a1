@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { HealthIssueKind, HealthResponse, TopIssue } from "../../api/types";
 import { useConfig } from "../../config/ConfigContext";
@@ -39,6 +39,35 @@ type NormalizedHealth = {
   thresholds: Thresholds;
   topIssues: TopIssue[];
 };
+
+function deriveHealthStatusFromSignals(
+  input: {
+    cron_freshness_sec: number | null;
+    projection_lag_sec: number | null;
+    dlq_backlog_count: number;
+    active_incidents_count: number;
+    rate_limit_flood_detected: boolean;
+  },
+  thresholds: Thresholds,
+): "OK" | "DEGRADED" | "DOWN" | null {
+  if (input.cron_freshness_sec == null || input.projection_lag_sec == null) {
+    return "DOWN";
+  }
+  if (thresholds.cron_down_sec != null && input.cron_freshness_sec > thresholds.cron_down_sec) {
+    return "DOWN";
+  }
+  if (thresholds.projection_down_sec != null && input.projection_lag_sec > thresholds.projection_down_sec) {
+    return "DOWN";
+  }
+  if (
+    (thresholds.dlq_degraded_count != null && input.dlq_backlog_count > thresholds.dlq_degraded_count) ||
+    input.active_incidents_count > 0 ||
+    input.rate_limit_flood_detected
+  ) {
+    return "DEGRADED";
+  }
+  return "OK";
+}
 
 function pickNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -107,8 +136,22 @@ function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
       readNumber(dlqDetails, ["degraded_threshold", "dlq_degraded_count", "threshold_count"]),
   };
 
+  const status =
+    summary.status ??
+    summary.health_summary ??
+    deriveHealthStatusFromSignals(
+      {
+        cron_freshness_sec: signals.cron_freshness_sec,
+        projection_lag_sec: signals.projection_lag_sec,
+        dlq_backlog_count: signals.dlq_backlog_count,
+        active_incidents_count: signals.active_incidents_count,
+        rate_limit_flood_detected: signals.rate_limit_flood_detected,
+      },
+      thresholds,
+    );
+
   return {
-    status: summary.status ?? summary.health_summary ?? null,
+    status,
     reasons,
     signals: {
       cron_freshness_sec: signals.cron_freshness_sec,
@@ -125,22 +168,38 @@ function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
 export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.Element {
   const { config } = useConfig();
   const { client, workspaceId, registerRefresh, reportPanelStatus, refreshNonce } = useDashboardContext();
+  const healthFetcher = useCallback(
+    (signal: AbortSignal) => fetchHealth(client, config.schemaVersion, signal),
+    [client, config.schemaVersion],
+  );
+  const drilldownFetcher = useCallback(
+    (kind: HealthIssueKind, limit: number, cursor?: string, signal?: AbortSignal) =>
+      fetchDrilldown(client, config.schemaVersion, kind, limit, cursor, signal),
+    [client, config.schemaVersion],
+  );
 
   const polling = usePolling<HealthResponse>(
-    (signal) => fetchHealth(client, config.schemaVersion, signal),
+    healthFetcher,
     config.healthPollSec * 1000,
     {
       minIntervalMs: 15_000,
       resetKey: `${workspaceId}:${refreshNonce}`,
+      cacheKey: `health:${workspaceId}`,
     },
   );
 
-  const drilldown = useDrilldown((kind, limit, cursor, signal) =>
-    fetchDrilldown(client, config.schemaVersion, kind, limit, cursor, signal),
-  );
+  const drilldown = useDrilldown(drilldownFetcher);
 
   const normalized = useMemo(() => normalizeHealth(polling.data), [polling.data]);
   const { history, requestPermission } = useStatusAlerts(normalized.status, normalized.reasons);
+  const reportedPanelStatus = useMemo(() => {
+    if (normalized.status) return normalized.status;
+    if (!polling.error) return null;
+    if (polling.error.category === "timeout" || polling.error.category === "network") {
+      return "DEGRADED" as const;
+    }
+    return "DOWN" as const;
+  }, [normalized.status, polling.error]);
 
   const previousServerTimeRef = useRef<string | null>(null);
   useEffect(() => {
@@ -173,13 +232,13 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
   useEffect(() => {
     reportPanelStatus({
       panelId: "health",
-      status: normalized.status ?? (polling.error ? "DOWN" : null),
+      status: reportedPanelStatus,
       lastUpdatedAt: polling.lastUpdatedAt,
       error: polling.error,
     });
-  }, [normalized.status, polling.error, polling.lastUpdatedAt, reportPanelStatus]);
+  }, [reportedPanelStatus, polling.error, polling.lastUpdatedAt, reportPanelStatus]);
 
-  if (polling.loading && !polling.data) {
+  if (!polling.data && !polling.error) {
     return <LoadingSkele lines={mode === "summary" ? 6 : 10} />;
   }
 

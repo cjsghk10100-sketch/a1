@@ -170,6 +170,7 @@ const components = {
     env: {
       PORT: String(apiPort),
       RUN_WORKER_EMBEDDED: runnerMode === "embedded" ? "1" : "0",
+      CRON_HEART_ENABLED: process.env.CRON_HEART_ENABLED ?? (isOpsDashboard ? "1" : "0"),
       AUTH_REQUIRE_SESSION: "1",
       AUTH_ALLOW_LEGACY_WORKSPACE_HEADER: runnerMode === "external" ? "1" : "0",
       AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
@@ -340,7 +341,8 @@ async function issueOpsDashboardAccessToken() {
 async function prepareOpsDashboardConfig() {
   const bearerToken = await issueOpsDashboardAccessToken();
   const payload = {
-    apiBaseUrl: `http://127.0.0.1:${apiPort}`,
+    // Route dashboard API calls through the web origin so Vite proxy handles /v1 -> API.
+    apiBaseUrl: webBaseUrl,
     defaultWorkspaceId: engineWorkspaceId,
     bearerToken,
     schemaVersion: "2.1",
