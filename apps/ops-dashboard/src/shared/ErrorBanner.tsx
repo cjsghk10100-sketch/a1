@@ -1,20 +1,25 @@
 import type { ApiErrorInfo } from "../api/types";
+import type { I18nKey } from "../i18n/messages";
+import { useI18n } from "../i18n/useI18n";
 import { formatRelativeTime } from "../utils/format";
 
-function categoryMessage(error: ApiErrorInfo): string {
+function readCategoryMessage(
+  error: ApiErrorInfo,
+  t: (key: I18nKey, values?: Record<string, string | number>) => string,
+): string {
   if (error.category === "auth") {
-    return "Authentication failed (401/403). Token may be expired. Update config.json and reload.";
+    return t("error.auth");
   }
   if (error.category === "network") {
-    return "Cannot reach API server. Check network connection.";
+    return t("error.network");
   }
   if (error.category === "server") {
-    return "API returned server error. Will retry automatically.";
+    return t("error.server");
   }
   if (error.category === "timeout") {
-    return "Request timed out after 15s. Will retry.";
+    return t("error.timeout");
   }
-  return "API rejected request. Check dashboard version/contract.";
+  return t("error.other");
 }
 
 export function ErrorBanner({
@@ -26,10 +31,13 @@ export function ErrorBanner({
   stale?: boolean;
   lastUpdatedAt?: Date | null;
 }): JSX.Element {
+  const { t } = useI18n();
   return (
     <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-      <div>{categoryMessage(error)}</div>
-      {stale && lastUpdatedAt ? <div>Showing data from {formatRelativeTime(lastUpdatedAt.toISOString())}</div> : null}
+      <div>{readCategoryMessage(error, t)}</div>
+      {stale && lastUpdatedAt ? (
+        <div>{t("error.showingDataFrom", { value: formatRelativeTime(lastUpdatedAt.toISOString()) })}</div>
+      ) : null}
     </div>
   );
 }

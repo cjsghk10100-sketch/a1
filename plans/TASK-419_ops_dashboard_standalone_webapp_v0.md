@@ -26,3 +26,8 @@
 - `pnpm -C apps/ops-dashboard typecheck` passes.
 - `pnpm -C apps/ops-dashboard build` passes.
 - Baseline dashboard renders health/finance/drilldown and handles stale/error paths.
+
+## PR-101 Follow-up Scope
+- Expand `DataExport` redaction to cover API keys/passwords and PII-like fields before copy/download.
+- Move dashboard labels/messages into EN/KO i18n resources and consume via shared `useI18n` helper.
+- Add contract tests for redaction coverage and KO label rendering.

@@ -1,5 +1,6 @@
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
+import { useI18n } from "../../i18n/useI18n";
 import { formatCost, formatTokens } from "../../utils/format";
 
 type ChartRow = {
@@ -21,8 +22,9 @@ function formatDay(dayUtc: string): string {
 }
 
 export function CostChart({ series }: { series: ChartRow[] }): JSX.Element {
+  const { t } = useI18n();
   if (series.length === 0) {
-    return <div className="text-sm text-slate-500">No cost data for this period</div>;
+    return <div className="text-sm text-slate-500">{t("finance.chart.empty")}</div>;
   }
 
   const data = series.map((row) => ({
@@ -43,7 +45,7 @@ export function CostChart({ series }: { series: ChartRow[] }): JSX.Element {
               const payload = item.payload as ChartRow & { estimated_cost_units: string; total_tokens: string | null };
               return [
                 `${formatCost(payload.estimated_cost_units)} — ${formatTokens(payload.total_tokens)}`,
-                "Cost",
+                t("finance.chart.costLegend"),
               ];
             }}
           />

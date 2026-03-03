@@ -1,4 +1,5 @@
 import { formatDuration } from "../../utils/format";
+import { useI18n } from "../../i18n/useI18n";
 
 type SignalState = "ok" | "warn" | "critical";
 
@@ -45,6 +46,7 @@ export function SignalsList({
     dlq_degraded_count: number | null;
   };
 }): JSX.Element {
+  const { t } = useI18n();
   const cronState = downThresholdState(cronFreshnessSec, thresholds.cron_down_sec);
   const projectionState = downThresholdState(projectionLagSec, thresholds.projection_down_sec);
   const dlqState = degradedThresholdState(dlqBacklogCount, thresholds.dlq_degraded_count);
@@ -52,16 +54,16 @@ export function SignalsList({
   const floodState: SignalState = rateLimitFloodDetected ? "warn" : "ok";
 
   const rows = [
-    ["Cron", cronFreshnessSec == null ? "—" : formatDuration(cronFreshnessSec), cronState],
-    ["Projection", projectionLagSec == null ? "—" : formatDuration(projectionLagSec), projectionState],
-    ["DLQ", String(dlqBacklogCount), dlqState],
-    ["Incidents", String(activeIncidentsCount), incidentsState],
-    ["Flood", rateLimitFloodDetected ? "yes" : "no", floodState],
+    [t("signals.cron"), cronFreshnessSec == null ? "—" : formatDuration(cronFreshnessSec), cronState],
+    [t("signals.projection"), projectionLagSec == null ? "—" : formatDuration(projectionLagSec), projectionState],
+    [t("signals.dlq"), String(dlqBacklogCount), dlqState],
+    [t("signals.incidents"), String(activeIncidentsCount), incidentsState],
+    [t("signals.flood"), rateLimitFloodDetected ? t("signals.yes") : t("signals.no"), floodState],
   ] as const;
 
   return (
     <div className="rounded border p-3">
-      <div className="mb-2 text-sm font-semibold">Signals</div>
+      <div className="mb-2 text-sm font-semibold">{t("signals.title")}</div>
       <ul className="space-y-1 text-sm">
         {rows.map(([label, value, state]) => (
           <li key={label} className="flex items-center justify-between">

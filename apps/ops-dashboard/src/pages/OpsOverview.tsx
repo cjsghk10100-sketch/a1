@@ -2,11 +2,13 @@ import { Suspense } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useDashboardContext } from "../config/DashboardContext";
+import { useI18n } from "../i18n/useI18n";
 import { PanelCard } from "../layout/PanelCard";
 import type { PanelDefinition } from "../panels/registry";
 import { LoadingSkele } from "../shared/LoadingSkele";
 
 export function OpsOverview({ panels }: { panels: PanelDefinition[] }): JSX.Element {
+  const { t } = useI18n();
   const { panelStatuses } = useDashboardContext();
   const location = useLocation();
 
@@ -19,11 +21,11 @@ export function OpsOverview({ panels }: { panels: PanelDefinition[] }): JSX.Elem
         return (
           <PanelCard
             key={panel.id}
-            title={panel.label}
+            title={t(panel.labelKey)}
             status={status}
             action={
               <Link to={`${panel.route}${location.search}`} className="text-xs text-blue-600 hover:underline">
-                Open
+                {t("overview.open")}
               </Link>
             }
           >

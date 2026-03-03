@@ -1,5 +1,6 @@
 import { fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiClient } from "../api/apiClient";
@@ -9,6 +10,7 @@ import { usePolling } from "../hooks/usePolling";
 import { useStatusAlerts } from "../hooks/useStatusAlerts";
 import { useWorkspace } from "../hooks/useWorkspace";
 import { buildPanelRoutes } from "../router";
+import { Sidebar } from "../layout/Sidebar";
 import { DataExport } from "../shared/DataExport";
 import { ErrorBanner } from "../shared/ErrorBanner";
 import { StatusBadge } from "../shared/StatusBadge";
@@ -317,7 +319,7 @@ describe("ops dashboard contracts", () => {
     }
   });
 
-  it("T21 DataExport copies JSON without token", async () => {
+  it("T21 DataExport redacts token/key/password/pii fields", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, {
       clipboard: { writeText },
@@ -330,6 +332,12 @@ describe("ops dashboard contracts", () => {
         data={{
           any: 1,
           bearerToken: "secret",
+          api_key: "k-123",
+          password: "pw-123",
+          user_email: "person@example.com",
+          profile: {
+            phone: "+82-10-1111-2222",
+          },
         }}
       />,
     );
@@ -339,7 +347,15 @@ describe("ops dashboard contracts", () => {
     const payload = String(writeText.mock.calls[0][0]);
     expect(() => JSON.parse(payload)).not.toThrow();
     expect(payload).not.toContain("secret");
+    expect(payload).not.toContain("k-123");
+    expect(payload).not.toContain("pw-123");
+    expect(payload).not.toContain("person@example.com");
+    expect(payload).not.toContain("+82-10-1111-2222");
     expect(payload).not.toContain("bearerToken");
+    expect(payload).not.toContain("api_key");
+    expect(payload).not.toContain("password");
+    expect(payload).not.toContain("user_email");
+    expect(payload).not.toContain("phone");
   });
 
   it("T22 useWorkspace reads workspace query param", () => {
@@ -379,5 +395,18 @@ describe("ops dashboard contracts", () => {
 
     expect(result.current.workspaceId).toBe("ws_prod");
     expect(new URL(window.location.href).searchParams.get("workspace")).toBe("ws_prod");
+  });
+
+  it("T24 sidebar labels are localized via i18n resources", () => {
+    window.history.replaceState({}, "", "/?workspace=ws_test&lang=ko");
+    render(
+      <MemoryRouter initialEntries={["/?workspace=ws_test&lang=ko"]}>
+        <Sidebar panels={PANEL_REGISTRY} statuses={{}} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("패널")).toBeInTheDocument();
+    expect(screen.getByText("개요")).toBeInTheDocument();
+    expect(screen.getByText("시스템 상태")).toBeInTheDocument();
   });
 });

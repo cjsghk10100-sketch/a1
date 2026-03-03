@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import { loadConfig } from "./config/loadConfig";
+import { translate } from "./i18n/messages";
 import "./index.css";
 
 async function bootstrap() {
@@ -19,7 +20,9 @@ async function bootstrap() {
       </React.StrictMode>,
     );
   } catch (error) {
-    rootElement.innerHTML = `<pre style="padding:16px;color:#b91c1c;">Failed to boot dashboard: ${String(error)}</pre>`;
+    rootElement.innerHTML = `<pre style="padding:16px;color:#b91c1c;">${translate("bootstrap.failed", {
+      value: String(error),
+    })}</pre>`;
   }
 }
 

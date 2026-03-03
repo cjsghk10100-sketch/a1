@@ -1,19 +1,62 @@
 import { useMemo } from "react";
 
+import { useI18n } from "../i18n/useI18n";
+
 type JsonRecord = Record<string, unknown>;
 
-function sanitize(value: unknown): unknown {
+const REDACTED = "[REDACTED]";
+
+const SECRET_KEY_PATTERNS = [
+  /token/i,
+  /authorization/i,
+  /bearer/i,
+  /api[_-]?key/i,
+  /secret/i,
+  /password/i,
+  /passphrase/i,
+  /private[_-]?key/i,
+  /cookie/i,
+  /session/i,
+  /credential/i,
+];
+
+const PII_KEY_PATTERNS = [
+  /(^|[_-])(email|phone|mobile|address|ip|ssn|resident|passport)([_-]|$)/i,
+  /(^|[_-])(first_name|last_name|full_name|display_name|user_name|username)([_-]|$)/i,
+];
+
+function isSensitiveKey(key: string): boolean {
+  return SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+function isPiiKey(key: string): boolean {
+  return PII_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+function isPiiValue(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return true;
+  if (/^\+?[0-9][0-9\s().-]{6,}$/.test(trimmed)) return true;
+  return false;
+}
+
+function sanitize(value: unknown, parentKey = ""): unknown {
   if (Array.isArray(value)) return value.map((entry) => sanitize(entry));
   if (value && typeof value === "object") {
     const out: JsonRecord = {};
     for (const [key, child] of Object.entries(value as JsonRecord)) {
       const lower = key.toLowerCase();
-      if (lower.includes("token") || lower.includes("authorization") || lower.includes("bearer")) {
+      if (isSensitiveKey(lower) || isPiiKey(lower)) {
         continue;
       }
-      out[key] = sanitize(child);
+      out[key] = sanitize(child, lower);
     }
     return out;
+  }
+  if (isSensitiveKey(parentKey) || isPiiKey(parentKey) || isPiiValue(value)) {
+    return REDACTED;
   }
   return value;
 }
@@ -37,6 +80,7 @@ export function DataExport({
   workspaceId: string;
   data: unknown;
 }): JSX.Element {
+  const { t } = useI18n();
   const payload = useMemo(
     () =>
       sanitize({
@@ -59,7 +103,7 @@ export function DataExport({
           void navigator.clipboard?.writeText(asJson);
         }}
       >
-        Copy JSON
+        {t("export.copyJson")}
       </button>
       <button
         type="button"
@@ -76,7 +120,7 @@ export function DataExport({
           downloadText(`${panelId}_${ts}.json`, asJson);
         }}
       >
-        Download JSON
+        {t("export.downloadJson")}
       </button>
     </div>
   );
