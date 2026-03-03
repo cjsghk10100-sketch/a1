@@ -81,6 +81,31 @@ function runActor() {
   return { actor_type: "service" as const, actor_id: "run_worker" };
 }
 
+function safeErrorCode(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const candidate = err as { reason_code?: unknown; code?: unknown; name?: unknown };
+  const normalizedReason =
+    typeof candidate.reason_code === "string" ? candidate.reason_code.trim() : undefined;
+  if (normalizedReason && /^[A-Za-z0-9._:-]{1,64}$/.test(normalizedReason)) {
+    return normalizedReason;
+  }
+  const normalizedCode = typeof candidate.code === "string" ? candidate.code.trim() : undefined;
+  if (normalizedCode && /^[A-Za-z0-9._:-]{1,64}$/.test(normalizedCode)) {
+    return normalizedCode;
+  }
+  const normalizedName = typeof candidate.name === "string" ? candidate.name.trim() : undefined;
+  if (normalizedName && /^[A-Za-z0-9._:-]{1,64}$/.test(normalizedName)) {
+    return normalizedName;
+  }
+  return null;
+}
+
+function runWorkerFailureMessage(err: unknown): string {
+  const code = safeErrorCode(err);
+  if (!code) return "run_worker_execution_failed";
+  return `run_worker_execution_failed:${code}`;
+}
+
 function normalizeOptionalString(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const value = raw.trim();
@@ -784,7 +809,7 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
 
     return "completed";
   } catch (err) {
-    const message = err instanceof Error ? err.message : "run_worker_execution_failed";
+    const message = runWorkerFailureMessage(err);
     logger.warn(`[run_worker] failed run ${run.run_id}: ${message}`);
     if (started) {
       try {
@@ -794,10 +819,9 @@ async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger)
           logger,
         });
       } catch (failErr) {
+        const appendErrorCode = safeErrorCode(failErr) ?? "unknown";
         logger.error(
-          `[run_worker] failed to append run.failed for ${run.run_id}: ${
-            failErr instanceof Error ? failErr.message : String(failErr)
-          }`,
+          `[run_worker] failed to append run.failed for ${run.run_id}: ${appendErrorCode}`,
         );
       }
     }

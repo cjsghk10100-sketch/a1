@@ -81,8 +81,7 @@ export function errorPayloadFromUnknown(
   if (err instanceof ContractViolationError) {
     return buildContractError(err.reason_code, err.details, err.message);
   }
-  const reason = err instanceof Error ? err.message : String(err);
-  return buildContractError(fallbackCode, {}, reason);
+  return buildContractError(fallbackCode, {});
 }
 
 function asRecord(input: unknown): Record<string, unknown> {

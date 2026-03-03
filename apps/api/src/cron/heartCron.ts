@@ -40,9 +40,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function toErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+function toSafeErrorCode(err: unknown): string {
+  if (!err || typeof err !== "object") return "unknown";
+  const candidate = err as { reason_code?: unknown; code?: unknown; name?: unknown };
+  const normalizedReason =
+    typeof candidate.reason_code === "string" ? candidate.reason_code.trim() : undefined;
+  if (normalizedReason && /^[A-Za-z0-9._:-]{1,64}$/.test(normalizedReason)) {
+    return normalizedReason;
+  }
+  const normalizedCode = typeof candidate.code === "string" ? candidate.code.trim() : undefined;
+  if (normalizedCode && /^[A-Za-z0-9._:-]{1,64}$/.test(normalizedCode)) {
+    return normalizedCode;
+  }
+  const normalizedName = typeof candidate.name === "string" ? candidate.name.trim() : undefined;
+  if (normalizedName && /^[A-Za-z0-9._:-]{1,64}$/.test(normalizedName)) {
+    return normalizedName;
+  }
+  return "unknown";
 }
 
 function randomJitterMs(maxMs: number): number {
@@ -237,13 +251,18 @@ export async function tickHeartCron(
             counts: totals,
           });
         } catch (err) {
-          const failureCount = await recordCronFailure(pool, HEART_CRON_CHECK_NAME, toErrorMessage(err), {
-            source: "cron",
-            lock_name: HEART_CRON_LOCK_NAME,
-            holder_id,
-            workspace_count: workspaceCount,
-            current_workspace: currentWorkspace,
-          });
+          const failureCount = await recordCronFailure(
+            pool,
+            HEART_CRON_CHECK_NAME,
+            toSafeErrorCode(err),
+            {
+              source: "cron",
+              lock_name: HEART_CRON_LOCK_NAME,
+              holder_id,
+              workspace_count: workspaceCount,
+              current_workspace: currentWorkspace,
+            },
+          );
 
           if (failureCount >= cfg.watchdogAlertThreshold) {
             const watchdogWorkspace =
@@ -254,7 +273,7 @@ export async function tickHeartCron(
             await emitWatchdogIncident(pool, {
               workspaceId: watchdogWorkspace,
               failureCount,
-              message: `heart_cron failures=${failureCount}: ${toErrorMessage(err)}`,
+              message: `heart_cron failures=${failureCount}: ${toSafeErrorCode(err)}`,
               windowSec: cfg.windowSec,
             }).catch(() => {});
           }
@@ -285,7 +304,7 @@ export async function tickHeartCron(
               ? ctx.correlation_id.slice(`cron:${HEART_CRON_CHECK_NAME}:`.length)
               : "unknown",
           err_name: err instanceof Error ? err.name : "Error",
-          err_message: err instanceof Error ? err.message : String(err),
+          err_message: toSafeErrorCode(err),
         });
         throw err;
       }
