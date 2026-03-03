@@ -116,8 +116,8 @@ function heartbeatMinIntervalSec(): number {
   const minInterval = Number.isFinite(envOverride)
     ? envOverride
     : (process.env.NODE_ENV === "test"
-        ? HEARTBEAT_MIN_INTERVAL_SEC_TEST
-        : HEARTBEAT_MIN_INTERVAL_SEC);
+      ? HEARTBEAT_MIN_INTERVAL_SEC_TEST
+      : HEARTBEAT_MIN_INTERVAL_SEC);
   return Math.max(0, Math.floor(minInterval));
 }
 
