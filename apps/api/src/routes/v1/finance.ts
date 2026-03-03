@@ -9,6 +9,7 @@ import {
   assertSupportedSchemaVersion,
 } from "../../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
+import { enforceOpsDashboardRateLimit } from "../../ratelimit/enforceOpsDashboardRateLimit.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
 /**
@@ -37,6 +38,7 @@ const MIN_DAYS_BACK = 1;
 const MAX_INCLUDE_ITEMS = 10;
 const DEFAULT_FINANCE_CACHE_MAX_ENTRIES = 1000;
 const OPS_DASHBOARD_FINANCE_PER_WORKSPACE_PER_MIN = 300;
+const OPS_DASHBOARD_FINANCE_WINDOW_SEC = 60;
 const TOP_MODELS_LIMIT = 5;
 
 type FinanceInclude = "top_models";
@@ -97,18 +99,12 @@ type FinanceComputeResult = {
   has_include_error: boolean;
 };
 
-type RateLimitWindow = {
-  windowStartSec: number;
-  count: number;
-};
-
 type LivePingResult = {
   server_time: string;
 };
 
 const financeMetricsCache = new Map<string, FinanceCacheEntry>();
 const financeMetricsInFlight = new Map<string, Promise<FinanceCacheEntry>>();
-const financeRateLimitWindows = new Map<string, RateLimitWindow>();
 
 function parseNonNegativeIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -245,30 +241,6 @@ function pruneFinanceCache(): void {
     const key = oldestFirst[idx]?.[0];
     if (key) financeMetricsCache.delete(key);
   }
-}
-
-function pruneFinanceRateLimitWindows(nowSec: number): void {
-  for (const [key, value] of financeRateLimitWindows.entries()) {
-    if (nowSec - value.windowStartSec >= 120) {
-      financeRateLimitWindows.delete(key);
-    }
-  }
-}
-
-function consumeOpsFinanceRateLimit(workspace_id: string): boolean {
-  const nowSec = Math.floor(Date.now() / 1000);
-  pruneFinanceRateLimitWindows(nowSec);
-
-  const windowStartSec = Math.floor(nowSec / 60) * 60;
-  const existing = financeRateLimitWindows.get(workspace_id);
-  if (!existing || existing.windowStartSec !== windowStartSec) {
-    financeRateLimitWindows.set(workspace_id, { windowStartSec, count: 1 });
-    return true;
-  }
-  if (existing.count >= OPS_DASHBOARD_FINANCE_PER_WORKSPACE_PER_MIN) return false;
-  existing.count += 1;
-  financeRateLimitWindows.set(workspace_id, existing);
-  return true;
 }
 
 function pgErrorCode(err: unknown): string | null {
@@ -703,7 +675,6 @@ function asObjectRecord(input: unknown): Record<string, unknown> {
 export function clearFinanceCache(): void {
   financeMetricsCache.clear();
   financeMetricsInFlight.clear();
-  financeRateLimitWindows.clear();
 }
 
 export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool): Promise<void> {
@@ -761,18 +732,27 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
     }
     const include_applied = parsedInclude.applied;
 
-    // TODO(PR-12A): unify this in-memory limiter with shared Ops Dashboard limiter helper.
-    if (!consumeOpsFinanceRateLimit(workspace_id)) {
+    let rateLimitResult: Awaited<ReturnType<typeof enforceOpsDashboardRateLimit>>;
+    try {
+      rateLimitResult = await enforceOpsDashboardRateLimit(pool, [
+        {
+          scope: "ops_finance_projection_per_workspace_per_min",
+          bucket_key: `ops_dashboard:finance_projection:${workspace_id}`,
+          limit: OPS_DASHBOARD_FINANCE_PER_WORKSPACE_PER_MIN,
+          window_sec: OPS_DASHBOARD_FINANCE_WINDOW_SEC,
+        },
+      ]);
+    } catch {
+      const reason_code = "internal_error" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { failed_checks: ["rate_limit"] }));
+    }
+    if (!rateLimitResult.ok) {
       const reason_code = "rate_limited" as const;
       return reply
         .code(httpStatusForReasonCode(reason_code))
-        .send(
-          buildContractError(reason_code, {
-            scope: "ops_finance_projection_per_workspace_per_min",
-            limit: OPS_DASHBOARD_FINANCE_PER_WORKSPACE_PER_MIN,
-            window_sec: 60,
-          }),
-        );
+        .send(buildContractError(reason_code, rateLimitResult.details));
     }
 
     let livePing: LivePingResult;
