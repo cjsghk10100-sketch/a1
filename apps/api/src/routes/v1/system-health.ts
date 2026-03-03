@@ -220,6 +220,12 @@ const DEFAULT_ISSUES_LIMIT = 50;
 const MAX_ISSUES_LIMIT = 100;
 const ISSUES_CURSOR_MAX_CHARS = 1024;
 const OPS_ISSUES_RATE_LIMIT_PER_MIN = 300;
+/** SLO hard threshold. Change requires code review (PR-14). */
+const DOWN_CRON_FRESHNESS_SEC = 600;
+/** SLO hard threshold. Change requires code review (PR-14). */
+const DOWN_PROJECTION_LAG_SEC = 300;
+/** SLO hard threshold. Change requires code review (PR-14). */
+const DEGRADED_DLQ_BACKLOG_THRESHOLD = 10;
 
 const REQUIRED_EVT_EVENTS_COLUMNS = [
   "idempotency_key",
@@ -238,6 +244,13 @@ const summaryCacheByWorkspace = new Map<string, SummaryCacheEntry>();
 const summaryInFlightByWorkspace = new Map<string, Promise<SummaryComputeResult>>();
 // TODO(PR-11): move drilldown rate limit to dedicated DB-backed ops bucket if needed.
 const issuesRateLimitWindows = new Map<string, { windowStartSec: number; count: number }>();
+
+export function clearHealthCache(): void {
+  summaryCacheByWorkspace.clear();
+  summaryInFlightByWorkspace.clear();
+  issuesRateLimitWindows.clear();
+  hasRateLimitLastIncidentAt = null;
+}
 
 function parseNonNegativeIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -265,15 +278,15 @@ function cacheMaxEntries(): number {
 }
 
 function downCronFreshnessSec(): number {
-  return parseNonNegativeIntEnv("HEALTH_DOWN_CRON_FRESHNESS_SEC", 600);
+  return DOWN_CRON_FRESHNESS_SEC;
 }
 
 function downProjectionLagSec(): number {
-  return parseNonNegativeIntEnv("HEALTH_DOWN_PROJECTION_LAG_SEC", 300);
+  return DOWN_PROJECTION_LAG_SEC;
 }
 
 function degradedDlqBacklogThreshold(): number {
-  return parseNonNegativeIntEnv("HEALTH_DEGRADED_DLQ_BACKLOG", 10);
+  return DEGRADED_DLQ_BACKLOG_THRESHOLD;
 }
 
 function rateLimitFloodOffendersWarn(): number {

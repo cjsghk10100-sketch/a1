@@ -9,6 +9,7 @@ import pg from "pg";
 import { httpStatusForReasonCode } from "../src/contracts/pipeline_v2_contract.js";
 import { SCHEMA_VERSION } from "../src/contracts/schemaVersion.js";
 import { createPool } from "../src/db/pool.js";
+import { clearHealthCache } from "../src/routes/v1/system-health.js";
 import { buildServer } from "../src/server.js";
 
 const { Client } = pg;
@@ -241,9 +242,32 @@ async function main(): Promise<void> {
   assertContractDbUrl(databaseUrl);
   await applyMigrations(databaseUrl);
 
-  process.env.HEALTH_DOWN_CRON_FRESHNESS_SEC = "600";
-  process.env.HEALTH_DOWN_PROJECTION_LAG_SEC = "300";
-  process.env.HEALTH_DEGRADED_DLQ_BACKLOG = "10";
+  const envKeys = [
+    "HEALTH_DOWN_CRON_FRESHNESS_SEC",
+    "HEALTH_DOWN_PROJECTION_LAG_SEC",
+    "HEALTH_DEGRADED_DLQ_BACKLOG",
+    "HEALTH_CACHE_TTL_SEC",
+    "HEALTH_ERROR_CACHE_TTL_SEC",
+    "HEALTH_DB_STATEMENT_TIMEOUT_MS",
+    "HEALTH_CRON_CRITICAL_CHECKS",
+  ] as const;
+  const envBackup = new Map<string, string | undefined>();
+  for (const key of envKeys) envBackup.set(key, process.env[key]);
+
+  const restoreEnv = (): void => {
+    for (const key of envKeys) {
+      const previous = envBackup.get(key);
+      if (previous === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous;
+      }
+    }
+  };
+
+  process.env.HEALTH_DOWN_CRON_FRESHNESS_SEC = "1";
+  process.env.HEALTH_DOWN_PROJECTION_LAG_SEC = "1";
+  process.env.HEALTH_DEGRADED_DLQ_BACKLOG = "9999";
   process.env.HEALTH_CACHE_TTL_SEC = "15";
   process.env.HEALTH_ERROR_CACHE_TTL_SEC = "5";
   process.env.HEALTH_DB_STATEMENT_TIMEOUT_MS = "2000";
@@ -293,7 +317,12 @@ async function main(): Promise<void> {
       return token;
     };
 
+    const resetCache = (): void => {
+      clearHealthCache();
+    };
+
     // T1 route exists and is executable
+    resetCache();
     const wsT1 = `ws_health_t1_${randomUUID().slice(0, 6)}`;
     const t1 = await postSystemHealth(baseUrl, wsT1, await ensureAccessToken(wsT1));
     assert.notEqual(t1.status, 404, t1.text);
@@ -312,6 +341,31 @@ async function main(): Promise<void> {
     assert.equal(typeof t1.json.checks.optional.projection_lag.supported, "boolean");
     assert.equal(typeof t1.json.checks.optional.dlq_backlog.supported, "boolean");
     assert.equal(typeof t1.json.checks.optional.rate_limit_flood.supported, "boolean");
+    // B10/B11: hard thresholds are fixed and env overrides are ignored.
+    assert.equal(t1.json.checks.optional.cron_watchdog.details.down_threshold_sec, 600);
+    assert.equal(t1.json.checks.optional.projection_lag.details.down_threshold_sec, 300);
+    assert.equal(t1.json.checks.optional.dlq_backlog.details.degraded_threshold, 10);
+
+    // B7: cron freshness NULL must force DOWN.
+    resetCache();
+    const previousChecks = process.env.HEALTH_CRON_CRITICAL_CHECKS;
+    const b7CheckName = `heart_cron_missing_${randomUUID().slice(0, 8)}`;
+    process.env.HEALTH_CRON_CRITICAL_CHECKS = b7CheckName;
+    try {
+      const wsB7 = `ws_health_b7_${randomUUID().slice(0, 6)}`;
+      const b7 = await postSystemHealth(baseUrl, wsB7, await ensureAccessToken(wsB7));
+      assert.equal(b7.status, HTTP_OK, b7.text);
+      assert.equal(b7.json.summary.health_summary, "DOWN");
+      assert.equal(b7.json.summary.cron_freshness_sec, null);
+      const b7IssueKinds = new Set(b7.json.summary.top_issues.map((issue) => issue.kind));
+      assert.equal(b7IssueKinds.has("cron_stale"), true);
+    } finally {
+      if (previousChecks === undefined) {
+        delete process.env.HEALTH_CRON_CRITICAL_CHECKS;
+      } else {
+        process.env.HEALTH_CRON_CRITICAL_CHECKS = previousChecks;
+      }
+    }
 
     // Seed stale cron freshness globally.
     await db.query(
@@ -359,7 +413,8 @@ async function main(): Promise<void> {
          metadata = '{}'::jsonb`,
     );
 
-    // T3 DOWN when watermark missing while events exist.
+    // B8: DOWN when watermark missing while events exist.
+    resetCache();
     const wsT3 = `ws_health_t3_${randomUUID().slice(0, 6)}`;
     await insertWorkspaceEvent(db, wsT3); // ensures events exist
     await db.query(
@@ -375,6 +430,7 @@ async function main(): Promise<void> {
     assert.equal(t3IssueKinds.has("projection_watermark_missing"), true);
 
     // T4 workspace isolation for workspace-scoped metrics.
+    resetCache();
     const wsA = `ws_health_a_${randomUUID().slice(0, 6)}`;
     const wsB = `ws_health_b_${randomUUID().slice(0, 6)}`;
     await db.query(
@@ -399,7 +455,33 @@ async function main(): Promise<void> {
     assert.ok(wsAResp.json.summary.dlq_backlog_count >= 2);
     assert.equal(wsBResp.json.summary.dlq_backlog_count, 0);
 
+    // B9: DOWN takes precedence when DOWN + DEGRADED conditions are both true.
+    resetCache();
+    const wsB9 = `ws_health_b9_${randomUUID().slice(0, 6)}`;
+    await insertWorkspaceEvent(db, wsB9);
+    await db.query(`DELETE FROM projector_watermarks WHERE workspace_id = $1`, [wsB9]);
+    await db.query(
+      `INSERT INTO dead_letter_messages (
+         workspace_id,
+         message_id,
+         first_failed_at,
+         last_failed_at,
+         failure_count,
+         last_error,
+         reviewed_at
+       )
+       SELECT $1, ('msg_' || g.i::text), now() - interval '120 seconds', now() - interval '30 seconds', 3, 'z', NULL
+       FROM generate_series(1, 12) AS g(i)
+       ON CONFLICT (workspace_id, message_id) DO NOTHING`,
+      [wsB9],
+    );
+    const b9 = await postSystemHealth(baseUrl, wsB9, await ensureAccessToken(wsB9));
+    assert.equal(b9.status, HTTP_OK, b9.text);
+    assert.equal(b9.json.summary.health_summary, "DOWN");
+    assert.ok(b9.json.summary.dlq_backlog_count > 10);
+
     // T5 deterministic top_issues ordering.
+    resetCache();
     const wsT5 = `ws_health_t5_${randomUUID().slice(0, 6)}`;
     await insertWorkspaceEvent(db, wsT5);
     await db.query(
@@ -467,6 +549,7 @@ async function main(): Promise<void> {
     assert.deepEqual(t5.json.summary.top_issues, sortedTopIssues);
 
     // T6 cache sanity: second call cached=true, server_time remains live.
+    resetCache();
     const wsT6 = `ws_health_t6_${randomUUID().slice(0, 6)}`;
     const t6a = await postSystemHealth(baseUrl, wsT6, await ensureAccessToken(wsT6));
     assert.equal(t6a.status, HTTP_OK, t6a.text);
@@ -479,6 +562,7 @@ async function main(): Promise<void> {
   } finally {
     await db.end();
     await app.close();
+    restoreEnv();
   }
 }
 
