@@ -31,6 +31,22 @@ function latestTimestamp(statuses: Record<string, PanelStatusSnapshot>): Date | 
   }, null);
 }
 
+function shouldShowGlobalError(
+  statuses: Record<string, PanelStatusSnapshot>,
+  requiredCount: number,
+): boolean {
+  const snapshots = Object.values(statuses);
+  if (snapshots.length < requiredCount) return false;
+  if (!snapshots.every((snapshot) => snapshot.error != null)) return false;
+
+  const now = Date.now();
+  const hasRecentSuccess = snapshots.some((snapshot) => {
+    if (!snapshot.lastUpdatedAt) return false;
+    return now - snapshot.lastUpdatedAt.getTime() <= 120_000;
+  });
+  return !hasRecentSuccess;
+}
+
 export function App({ config }: { config: AppConfig }): JSX.Element {
   const { workspaceId, setWorkspace } = useWorkspace(config);
   const [panelStatuses, setPanelStatuses] = useState<Record<string, PanelStatusSnapshot>>({});
@@ -65,10 +81,22 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
   }, []);
 
   const reportPanelStatus = useCallback((snapshot: PanelStatusSnapshot) => {
-    setPanelStatuses((prev) => ({
-      ...prev,
-      [snapshot.panelId]: snapshot,
-    }));
+    setPanelStatuses((prev) => {
+      const previous = prev[snapshot.panelId];
+      // Ignore transient mount/loading snapshots so route switches don't downgrade to UNKNOWN.
+      if (snapshot.status == null && snapshot.error == null && snapshot.lastUpdatedAt == null && previous) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [snapshot.panelId]: {
+          ...snapshot,
+          status: snapshot.status ?? previous?.status ?? null,
+          lastUpdatedAt: snapshot.lastUpdatedAt ?? previous?.lastUpdatedAt ?? null,
+          error: snapshot.error ?? null,
+        },
+      };
+    });
   }, []);
 
   const onWorkspaceChange = useCallback(
@@ -92,9 +120,7 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
   const globalStatus = useMemo(() => reduceGlobalStatus(panelStatuses), [panelStatuses]);
   const lastUpdatedAt = useMemo(() => latestTimestamp(panelStatuses), [panelStatuses]);
   const showGlobalError = useMemo(() => {
-    const snapshots = Object.values(panelStatuses);
-    if (snapshots.length < PANEL_REGISTRY.length) return false;
-    return snapshots.every((snapshot) => snapshot.error != null);
+    return shouldShowGlobalError(panelStatuses, PANEL_REGISTRY.length);
   }, [panelStatuses]);
 
   const pollingState: PollingDotState = useMemo(() => {

@@ -34,6 +34,13 @@ function mockJsonResponse(status: number, payload: unknown): Response {
   });
 }
 
+function mockTextResponse(status: number, body: string): Response {
+  return new Response(body, {
+    status,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
 function setDocumentHidden(value: boolean): void {
   Object.defineProperty(document, "hidden", {
     configurable: true,
@@ -85,6 +92,19 @@ describe("ops dashboard contracts", () => {
     expect(r500.ok ? "" : r500.error.category).toBe("server");
     expect(rNet.ok ? "" : rNet.error.category).toBe("network");
     expect(rTimeout.ok ? "" : rTimeout.error.category).toBe("timeout");
+  });
+
+  it("T2A ApiClient rejects non-JSON 200 response as invalid_response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockTextResponse(200, "<html>ok</html>")));
+
+    const client = new ApiClient(DEFAULT_CONFIG);
+    const result = await client.post("/v1/system/health", { schema_version: "2.1" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe("invalid_response");
+      expect(result.error.category).toBe("server");
+    }
   });
 
   it("T3 ApiClient headers include workspace and bearer", async () => {
@@ -177,6 +197,18 @@ describe("ops dashboard contracts", () => {
     expect((capturedSignal as AbortSignal | null)?.aborted).toBe(true);
   });
 
+  it("T8A usePolling converts fetcher throw into server error state", async () => {
+    const fetcher = vi.fn<Parameters<typeof usePolling<unknown>>[0]>().mockRejectedValue(new Error("boom"));
+    const hook = renderHook(() => usePolling(fetcher, 30_000));
+
+    await waitFor(() => {
+      expect(hook.result.current.error?.category).toBe("server");
+      expect(hook.result.current.loading).toBe(false);
+    });
+
+    hook.unmount();
+  });
+
   it("T9 formatCost", () => {
     expect(formatCost("1234567890")).toBe("$1,234.57");
     expect(formatCost("0")).toBe("$0.00");
@@ -212,7 +244,7 @@ describe("ops dashboard contracts", () => {
     expect(screen.getByText("OK").className).toContain("bg-green-600");
 
     rerender(<StatusBadge status={null} />);
-    expect(screen.getByText("UNKNOWN").className).toContain("bg-gray-400");
+    expect(screen.getByText("—").className).toContain("bg-gray-400");
   });
 
   it("T14 ErrorBanner category messages", () => {

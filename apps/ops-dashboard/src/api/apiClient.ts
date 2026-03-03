@@ -17,15 +17,15 @@ function categorizeError(status: number, reason: string): ApiErrorCategory {
 }
 
 function asRecord(input: unknown): Record<string, unknown> {
-  return input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
 }
 
-function parseJsonSafe(text: string): Record<string, unknown> {
-  if (!text) return {};
+function parseJsonSafe(text: string): Record<string, unknown> | null {
+  if (!text.trim()) return null;
   try {
     return asRecord(JSON.parse(text));
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -106,13 +106,24 @@ export class ApiClient {
       const payload = parseJsonSafe(await response.text());
 
       if (!response.ok) {
-        const reason = typeof payload.reason_code === "string" ? payload.reason_code : `http_${response.status}`;
+        const reason = typeof payload?.reason_code === "string" ? payload.reason_code : `http_${response.status}`;
         return {
           ok: false,
           error: {
             status: response.status,
             reason,
             category: categorizeError(response.status, reason),
+          },
+        };
+      }
+
+      if (payload == null) {
+        return {
+          ok: false,
+          error: {
+            status: response.status,
+            reason: "invalid_response",
+            category: "server",
           },
         };
       }

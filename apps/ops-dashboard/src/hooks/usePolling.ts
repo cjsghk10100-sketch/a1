@@ -11,25 +11,43 @@ export interface PollingState<T> {
   forceRefresh: () => void;
 }
 
+type PollingCacheEntry = {
+  data: unknown;
+  lastUpdatedAt: Date;
+};
+
+const pollingCache = new Map<string, PollingCacheEntry>();
+
 export function usePolling<T>(
   fetcher: (signal: AbortSignal) => Promise<ApiResult<T>>,
   intervalMs: number,
-  options?: { enabled?: boolean; minIntervalMs?: number; resetKey?: string | number; stopOnAuthError?: boolean },
+  options?: {
+    enabled?: boolean;
+    minIntervalMs?: number;
+    resetKey?: string | number;
+    stopOnAuthError?: boolean;
+    cacheKey?: string;
+  },
 ): PollingState<T> {
   const enabled = options?.enabled ?? true;
   const stopOnAuthError = options?.stopOnAuthError ?? true;
   const minIntervalMs = options?.minIntervalMs ?? 0;
   const effectiveIntervalMs = useMemo(() => Math.max(intervalMs, minIntervalMs), [intervalMs, minIntervalMs]);
+  const cacheKey = options?.cacheKey;
+  const cached = useMemo(() => {
+    if (!cacheKey) return null;
+    return pollingCache.get(cacheKey) ?? null;
+  }, [cacheKey]);
 
-  const [data, setData] = useState<T | null>(null);
+  const [data, setData] = useState<T | null>(() => (cached?.data as T | null) ?? null);
   const [error, setError] = useState<ApiErrorInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [loading, setLoading] = useState(cached == null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(() => cached?.lastUpdatedAt ?? null);
   const [stale, setStale] = useState(false);
 
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
-  const dataRef = useRef<T | null>(null);
+  const dataRef = useRef<T | null>((cached?.data as T | null) ?? null);
   const abortRef = useRef<AbortController | null>(null);
   const resetRef = useRef(options?.resetKey);
   const pausedByAuthRef = useRef(false);
@@ -45,17 +63,28 @@ export function usePolling<T>(
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-
     try {
       const result = await fetcher(controller.signal);
       if (!mountedRef.current) return;
+      // Ignore intentional aborts (route change/reset/manual cancel) so they don't
+      // surface as timeout/network errors in panel status.
+      if (controller.signal.aborted) {
+        return;
+      }
       if (result.ok) {
         pausedByAuthRef.current = false;
         dataRef.current = result.data;
         setData(result.data);
         setError(null);
         setStale(false);
-        setLastUpdatedAt(new Date());
+        const now = new Date();
+        setLastUpdatedAt(now);
+        if (cacheKey) {
+          pollingCache.set(cacheKey, {
+            data: result.data,
+            lastUpdatedAt: now,
+          });
+        }
       } else {
         if (stopOnAuthError && result.error.category === "auth") {
           pausedByAuthRef.current = true;
@@ -63,13 +92,21 @@ export function usePolling<T>(
         setError(result.error);
         setStale(dataRef.current != null);
       }
+    } catch {
+      if (!mountedRef.current || controller.signal.aborted) return;
+      setError({
+        status: 0,
+        reason: "polling_exception",
+        category: "server",
+      });
+      setStale(dataRef.current != null);
     } finally {
       if (mountedRef.current) {
         setLoading(false);
       }
       inFlightRef.current = false;
     }
-  }, [enabled, fetcher, stopOnAuthError]);
+  }, [cacheKey, enabled, fetcher, stopOnAuthError]);
 
   const forceRefresh = useCallback(() => {
     pausedByAuthRef.current = false;
@@ -120,17 +157,18 @@ export function usePolling<T>(
     abortRef.current?.abort();
     inFlightRef.current = false;
     pausedByAuthRef.current = false;
-    dataRef.current = null;
-    setData(null);
+    const resetCached = cacheKey ? pollingCache.get(cacheKey) ?? null : null;
+    dataRef.current = (resetCached?.data as T | null) ?? null;
+    setData((resetCached?.data as T | null) ?? null);
     setError(null);
-    setLastUpdatedAt(null);
+    setLastUpdatedAt(resetCached?.lastUpdatedAt ?? null);
     setStale(false);
-    setLoading(true);
+    setLoading(resetCached == null);
 
     if (enabled) {
       void execute();
     }
-  }, [enabled, execute, options?.resetKey]);
+  }, [cacheKey, enabled, execute, options?.resetKey]);
 
   return {
     data,
