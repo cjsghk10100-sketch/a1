@@ -9,6 +9,7 @@ import {
   assertSupportedSchemaVersion,
 } from "../../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
+import { enforceOpsDashboardRateLimit } from "../../ratelimit/enforceOpsDashboardRateLimit.js";
 import { getRequestAuth } from "../../security/requestAuth.js";
 
 type CronWatchdogSupport =
@@ -220,6 +221,7 @@ const DEFAULT_ISSUES_LIMIT = 50;
 const MAX_ISSUES_LIMIT = 100;
 const ISSUES_CURSOR_MAX_CHARS = 1024;
 const OPS_ISSUES_RATE_LIMIT_PER_MIN = 300;
+const OPS_ISSUES_RATE_LIMIT_WINDOW_SEC = 60;
 /** SLO hard threshold. Change requires code review (PR-14). */
 const DOWN_CRON_FRESHNESS_SEC = 600;
 /** SLO hard threshold. Change requires code review (PR-14). */
@@ -242,13 +244,10 @@ let hasRateLimitLastIncidentAt: boolean | null = null;
 
 const summaryCacheByWorkspace = new Map<string, SummaryCacheEntry>();
 const summaryInFlightByWorkspace = new Map<string, Promise<SummaryComputeResult>>();
-// TODO(PR-11): move drilldown rate limit to dedicated DB-backed ops bucket if needed.
-const issuesRateLimitWindows = new Map<string, { windowStartSec: number; count: number }>();
 
 export function clearHealthCache(): void {
   summaryCacheByWorkspace.clear();
   summaryInFlightByWorkspace.clear();
-  issuesRateLimitWindows.clear();
   hasRateLimitLastIncidentAt = null;
 }
 
@@ -422,31 +421,6 @@ function isValidDrilldownCursorTimestamp(value: string): boolean {
   const isoLike = trimmed.replace(" ", "T");
   const tzNormalized = /[+-]\d{2}$/.test(isoLike) ? `${isoLike}:00` : isoLike;
   return Number.isFinite(Date.parse(tzNormalized));
-}
-
-function pruneIssuesRateLimitWindows(nowSec: number): void {
-  for (const [key, value] of issuesRateLimitWindows.entries()) {
-    if (nowSec - value.windowStartSec >= 120) {
-      issuesRateLimitWindows.delete(key);
-    }
-  }
-}
-
-function consumeOpsIssuesRateLimit(workspaceId: string): boolean {
-  const nowSec = Math.floor(Date.now() / 1000);
-  pruneIssuesRateLimitWindows(nowSec);
-  const windowStartSec = Math.floor(nowSec / 60) * 60;
-  const existing = issuesRateLimitWindows.get(workspaceId);
-  if (!existing || existing.windowStartSec !== windowStartSec) {
-    issuesRateLimitWindows.set(workspaceId, { windowStartSec, count: 1 });
-    return true;
-  }
-  if (existing.count >= OPS_ISSUES_RATE_LIMIT_PER_MIN) {
-    return false;
-  }
-  existing.count += 1;
-  issuesRateLimitWindows.set(workspaceId, existing);
-  return true;
 }
 
 function escapeLikeToken(value: string): string {
@@ -1903,17 +1877,27 @@ export async function registerSystemHealthRoutes(
       }
     }
 
-    if (!consumeOpsIssuesRateLimit(workspace_id)) {
+    let issuesRateLimitResult: Awaited<ReturnType<typeof enforceOpsDashboardRateLimit>>;
+    try {
+      issuesRateLimitResult = await enforceOpsDashboardRateLimit(pool, [
+        {
+          scope: "ops_system_health_issues_per_workspace_per_min",
+          bucket_key: `ops_dashboard:${workspace_id}`,
+          limit: OPS_ISSUES_RATE_LIMIT_PER_MIN,
+          window_sec: OPS_ISSUES_RATE_LIMIT_WINDOW_SEC,
+        },
+      ]);
+    } catch {
+      const reason_code = "internal_error" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { failed_checks: ["rate_limit"] }));
+    }
+    if (!issuesRateLimitResult.ok) {
       const reason_code = "rate_limited" as const;
       return reply
         .code(httpStatusForReasonCode(reason_code))
-        .send(
-          buildContractError(reason_code, {
-            scope: "ops_system_health_issues_per_workspace_per_min",
-            limit: OPS_ISSUES_RATE_LIMIT_PER_MIN,
-            window_sec: 60,
-          }),
-        );
+        .send(buildContractError(reason_code, issuesRateLimitResult.details));
     }
 
     let schema: SchemaCheckCache;
