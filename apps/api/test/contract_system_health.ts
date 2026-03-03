@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -161,7 +162,7 @@ async function main(): Promise<void> {
 
   const pool = createPool(databaseUrl);
   const bootstrapToken = `bootstrap_${Date.now().toString(36)}`;
-  const workspaceId = "ws_system_health_contract";
+  const workspaceId = `ws_system_health_contract_${randomUUID().slice(0, 8)}`;
   const app = await buildServer({
     config: {
       port: 0,

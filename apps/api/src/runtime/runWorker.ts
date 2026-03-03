@@ -747,29 +747,31 @@ async function appendRunFailed(
     display: {},
   });
   await applyRunEvent(pool, event as RunEventV1);
-  void applyAutomation(pool, {
-    workspace_id: latest.workspace_id,
-    entity_type: "run",
-    entity_id: latest.run_id,
-    run_id: latest.run_id,
-    trigger: "run.failed",
-    event_data:
-      event.data && typeof event.data === "object" && !Array.isArray(event.data)
-        ? (event.data as Record<string, unknown>)
-        : undefined,
-    correlation_id: latest.correlation_id,
-    actor: runActor(),
-    log: input.logger as unknown as {
-      warn?: (obj: Record<string, unknown>, msg?: string) => void;
-      error?: (obj: Record<string, unknown>, msg?: string) => void;
-      debug?: (obj: Record<string, unknown>, msg?: string) => void;
-      info?: (obj: Record<string, unknown>, msg?: string) => void;
-    },
-  }).catch(() => {
+  try {
+    await applyAutomation(pool, {
+      workspace_id: latest.workspace_id,
+      entity_type: "run",
+      entity_id: latest.run_id,
+      run_id: latest.run_id,
+      trigger: "run.failed",
+      event_data:
+        event.data && typeof event.data === "object" && !Array.isArray(event.data)
+          ? (event.data as Record<string, unknown>)
+          : undefined,
+      correlation_id: latest.correlation_id,
+      actor: runActor(),
+      log: input.logger as unknown as {
+        warn?: (obj: Record<string, unknown>, msg?: string) => void;
+        error?: (obj: Record<string, unknown>, msg?: string) => void;
+        debug?: (obj: Record<string, unknown>, msg?: string) => void;
+        info?: (obj: Record<string, unknown>, msg?: string) => void;
+      },
+    });
+  } catch {
     input.logger?.warn(
       `[run_worker] automation loop rejected after run.failed persistence for ${latest.run_id}`,
     );
-  });
+  }
 }
 
 async function processRun(pool: DbPool, run: QueuedRunRow, logger: WorkerLogger): Promise<ProcessRunResult> {
