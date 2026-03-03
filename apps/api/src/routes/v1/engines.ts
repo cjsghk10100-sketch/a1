@@ -1101,7 +1101,6 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
             engine_id,
             engine_token,
             required_action: "evidence.ingest",
-            room_id: "*",
           },
           getEngineTokenSecret(),
         );

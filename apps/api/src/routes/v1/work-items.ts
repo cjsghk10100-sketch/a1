@@ -113,10 +113,11 @@ function leaseDurationSeconds(): number {
 
 function heartbeatMinIntervalSec(): number {
   const envOverride = Number(process.env.HEARTBEAT_MIN_INTERVAL_SEC);
-  const minInterval =
-    process.env.NODE_ENV === "test"
+  const minInterval = Number.isFinite(envOverride)
+    ? envOverride
+    : (process.env.NODE_ENV === "test"
       ? HEARTBEAT_MIN_INTERVAL_SEC_TEST
-      : (Number.isFinite(envOverride) ? envOverride : HEARTBEAT_MIN_INTERVAL_SEC);
+      : HEARTBEAT_MIN_INTERVAL_SEC);
   return Math.max(0, Math.floor(minInterval));
 }
 

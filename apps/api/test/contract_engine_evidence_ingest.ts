@@ -108,7 +108,9 @@ async function registerEngine(
   baseUrl: string,
   ownerToken: string,
   actorId: string,
+  options?: { rooms?: string[] },
 ): Promise<{ engine_id: string; engine_token: string }> {
+  const rooms = options?.rooms?.length ? options.rooms : ["*"];
   const res = await requestJson<{
     engine: { engine_id: string };
     token: { engine_token: string };
@@ -121,7 +123,7 @@ async function registerEngine(
       engine_name: `Engine ${actorId}`,
       scopes: {
         action_types: ["run.claim", "run.lease.heartbeat", "run.lease.release", "evidence.ingest"],
-        rooms: ["*"],
+        rooms,
       },
     },
     { authorization: `Bearer ${ownerToken}` },
@@ -199,6 +201,9 @@ async function main(): Promise<void> {
     const ownerA = await ensureOwnerToken(baseUrl, workspaceA);
     const ownerB = await ensureOwnerToken(baseUrl, workspaceB);
     const engineA = await registerEngine(baseUrl, ownerA, `ingest_a_${suffix}`);
+    const roomScopedEngineA = await registerEngine(baseUrl, ownerA, `ingest_room_scoped_${suffix}`, {
+      rooms: [`room_scope_${suffix}`],
+    });
     await registerEngine(baseUrl, ownerB, `ingest_b_${suffix}`);
 
     // T1: route mounts + requires workspace header.
@@ -247,6 +252,26 @@ async function main(): Promise<void> {
     );
     assert.equal(mismatch.status, httpStatusForReasonCode("unauthorized_workspace"));
     assert.equal(mismatch.json.reason_code, "unauthorized_workspace");
+
+    // T3b: room-scoped token with evidence.ingest action still allowed for workspace ingest.
+    const roomScoped = await requestJson<{
+      accepted: number;
+      rejected: number;
+    }>(
+      baseUrl,
+      "POST",
+      "/v1/engines/evidence/ingest",
+      {
+        schema_version: SCHEMA_VERSION,
+        engine_id: roomScopedEngineA.engine_id,
+        engine_token: roomScopedEngineA.engine_token,
+        events: [makeEvent({ workspaceId: workspaceA })],
+      },
+      { "x-workspace-id": workspaceA },
+    );
+    assert.equal(roomScoped.status, 200);
+    assert.equal(roomScoped.json.accepted, 1);
+    assert.equal(roomScoped.json.rejected, 0);
 
     // T4: happy path accepted=2.
     const e1 = makeEvent({ workspaceId: workspaceA });
@@ -449,4 +474,3 @@ main().catch((err) => {
   console.error(err instanceof Error ? err.message : err);
   process.exitCode = 1;
 });
-
