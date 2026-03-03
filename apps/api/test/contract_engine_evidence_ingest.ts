@@ -460,7 +460,119 @@ async function main(): Promise<void> {
     assert.equal(tooLargeRes.json.rejected, 1);
     assert.equal(tooLargeRes.json.results[0]?.reason_code, "payload_too_large");
 
-    // T11: server_time is UTC with Z.
+    // T11: batch cap > 100 -> invalid_payload_combination.
+    const tooManyEvents = Array.from({ length: 101 }, () => makeEvent({ workspaceId: workspaceA }));
+    const tooManyRes = await requestJson<{ reason_code?: string }>(
+      baseUrl,
+      "POST",
+      "/v1/engines/evidence/ingest",
+      {
+        schema_version: SCHEMA_VERSION,
+        engine_id: engineA.engine_id,
+        engine_token: engineA.engine_token,
+        events: tooManyEvents,
+      },
+      { "x-workspace-id": workspaceA },
+    );
+    assert.equal(tooManyRes.status, httpStatusForReasonCode("invalid_payload_combination"));
+    assert.equal(tooManyRes.json.reason_code, "invalid_payload_combination");
+
+    // T12: allowlist + event_version guard and deterministic result index order.
+    const guardGood = makeEvent({ workspaceId: workspaceA });
+    const guardBadType = makeEvent({
+      workspaceId: workspaceA,
+      eventType: "engine.unknown_type",
+    });
+    const guardBadVersion = makeEvent({ workspaceId: workspaceA });
+    guardBadVersion.event_version = 99;
+    const guardsRes = await requestJson<{
+      accepted: number;
+      rejected: number;
+      results: Array<{ index: number; status: string; reason_code?: string }>;
+    }>(
+      baseUrl,
+      "POST",
+      "/v1/engines/evidence/ingest",
+      {
+        schema_version: SCHEMA_VERSION,
+        engine_id: engineA.engine_id,
+        engine_token: engineA.engine_token,
+        events: [guardGood, guardBadType, guardBadVersion],
+      },
+      { "x-workspace-id": workspaceA },
+    );
+    assert.equal(guardsRes.status, 200);
+    assert.equal(guardsRes.json.accepted, 1);
+    assert.equal(guardsRes.json.rejected, 2);
+    assert.deepEqual(
+      guardsRes.json.results.map((row) => row.index),
+      [0, 1, 2],
+    );
+    assert.equal(guardsRes.json.results[1]?.status, "rejected");
+    assert.equal(guardsRes.json.results[1]?.reason_code, "invalid_payload_combination");
+    assert.equal(guardsRes.json.results[2]?.status, "rejected");
+    assert.equal(guardsRes.json.results[2]?.reason_code, "invalid_payload_combination");
+
+    // T13: request-level rate limit returns contract 429 with retry_after_sec.
+    const prevGlobalPerMin = process.env.ENGINE_EVIDENCE_INGEST_GLOBAL_PER_MIN;
+    const prevWorkspacePerMin = process.env.ENGINE_EVIDENCE_INGEST_WORKSPACE_PER_MIN;
+    try {
+      process.env.ENGINE_EVIDENCE_INGEST_GLOBAL_PER_MIN = "1";
+      process.env.ENGINE_EVIDENCE_INGEST_WORKSPACE_PER_MIN = "1";
+      await db.query(
+        `DELETE FROM rate_limit_buckets
+         WHERE bucket_key = ANY($1::text[])`,
+        [["engine_ingest_global", `engine_ingest:${workspaceA}`]],
+      );
+
+      const rlFirst = await requestJson<{ accepted: number }>(
+        baseUrl,
+        "POST",
+        "/v1/engines/evidence/ingest",
+        {
+          schema_version: SCHEMA_VERSION,
+          engine_id: engineA.engine_id,
+          engine_token: engineA.engine_token,
+          events: [makeEvent({ workspaceId: workspaceA })],
+        },
+        { "x-workspace-id": workspaceA },
+      );
+      assert.equal(rlFirst.status, 200);
+      assert.equal(rlFirst.json.accepted, 1);
+
+      const rlSecond = await requestJson<{
+        reason_code?: string;
+        details?: { retry_after_sec?: unknown };
+      }>(
+        baseUrl,
+        "POST",
+        "/v1/engines/evidence/ingest",
+        {
+          schema_version: SCHEMA_VERSION,
+          engine_id: engineA.engine_id,
+          engine_token: engineA.engine_token,
+          events: [makeEvent({ workspaceId: workspaceA })],
+        },
+        { "x-workspace-id": workspaceA },
+      );
+      assert.equal(rlSecond.status, httpStatusForReasonCode("rate_limited"));
+      assert.equal(rlSecond.json.reason_code, "rate_limited");
+      const retryAfter = Number((rlSecond.json.details as { retry_after_sec?: unknown } | undefined)?.retry_after_sec);
+      assert.equal(Number.isFinite(retryAfter), true);
+      assert.equal(retryAfter >= 0, true);
+    } finally {
+      if (prevGlobalPerMin === undefined) delete process.env.ENGINE_EVIDENCE_INGEST_GLOBAL_PER_MIN;
+      else process.env.ENGINE_EVIDENCE_INGEST_GLOBAL_PER_MIN = prevGlobalPerMin;
+      if (prevWorkspacePerMin === undefined) delete process.env.ENGINE_EVIDENCE_INGEST_WORKSPACE_PER_MIN;
+      else process.env.ENGINE_EVIDENCE_INGEST_WORKSPACE_PER_MIN = prevWorkspacePerMin;
+      await db.query(
+        `DELETE FROM rate_limit_buckets
+         WHERE bucket_key = ANY($1::text[])`,
+        [["engine_ingest_global", `engine_ingest:${workspaceA}`]],
+      );
+    }
+
+    // T14: server_time is UTC with Z.
     assert.equal(typeof happy.json.server_time, "string");
     assert.equal(happy.json.server_time.endsWith("Z"), true);
   } finally {
