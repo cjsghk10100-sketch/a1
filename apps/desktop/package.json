@@ -6,8 +6,10 @@
   "main": "src/main.cjs",
   "scripts": {
     "dev": "electron src/main.cjs",
+    "dev:ops": "DESKTOP_WEB_APP=ops-dashboard electron src/main.cjs",
     "dist": "electron-builder --config electron-builder.yml --publish never",
     "dist:mac": "electron-builder --config electron-builder.yml --mac dmg zip --arm64 --publish never",
+    "dist:zip": "electron-builder --config electron-builder.yml --mac zip --arm64 --publish never",
     "smoke:embedded": "node scripts/smoke.mjs --mode=embedded",
     "smoke:external": "node scripts/smoke.mjs --mode=external",
     "typecheck": "node --check src/main.cjs && node --check src/preload.cjs && node --check scripts/smoke.mjs"
