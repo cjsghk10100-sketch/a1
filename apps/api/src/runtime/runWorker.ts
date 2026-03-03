@@ -759,6 +759,12 @@ async function appendRunFailed(
         : undefined,
     correlation_id: latest.correlation_id,
     actor: runActor(),
+    log: input.logger as unknown as {
+      warn?: (obj: Record<string, unknown>, msg?: string) => void;
+      error?: (obj: Record<string, unknown>, msg?: string) => void;
+      debug?: (obj: Record<string, unknown>, msg?: string) => void;
+      info?: (obj: Record<string, unknown>, msg?: string) => void;
+    },
   }).catch(() => {
     input.logger?.warn(
       `[run_worker] automation loop rejected after run.failed persistence for ${latest.run_id}`,

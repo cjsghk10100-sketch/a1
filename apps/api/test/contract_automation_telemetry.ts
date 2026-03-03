@@ -12,7 +12,7 @@ import {
 } from "../src/automation/promotionLoop.js";
 import { createPool } from "../src/db/pool.js";
 import { appendToStream } from "../src/eventStore/index.js";
-import { runWithTraceContext } from "../src/observability/traceContext.js";
+import { getTraceLogger, runWithTraceContext, setTraceLogger } from "../src/observability/traceContext.js";
 
 const { Client } = pg;
 
@@ -133,6 +133,7 @@ async function main(): Promise<void> {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalFail = process.env.AUTOMATION_FAIL_TEST;
   const originalEnabled = process.env.PROMOTION_LOOP_ENABLED;
+  const originalTraceLogger = getTraceLogger();
 
   process.env.NODE_ENV = "test";
   delete process.env.AUTOMATION_FAIL_TEST;
@@ -253,6 +254,29 @@ async function main(): Promise<void> {
     assert.equal(t4Telemetry.request_id, null);
     assert.equal(t4Telemetry.correlation_id, null);
 
+    // T4b no ctx.log still emits telemetry via trace logger fallback.
+    _clearAutomationFailTelemetry();
+    const t4bRecords: WarnRecord[] = [];
+    setTraceLogger({
+      info: () => {},
+      warn: (obj: WarnRecord) => {
+        t4bRecords.push(obj);
+      },
+      error: () => {},
+    });
+    const wsT4b = `ws_auto_telemetry_t4b_${randomUUID().slice(0, 8)}`;
+    const runT4b = `run_${randomUUID().slice(0, 10)}`;
+    await applyAutomation(pool, {
+      workspace_id: wsT4b,
+      entity_type: "run",
+      entity_id: runT4b,
+      run_id: runT4b,
+      trigger: "run.failed",
+    });
+    const t4bTelemetry = await waitForTelemetry();
+    assert.equal(t4bTelemetry.event, "automation.apply_failed");
+    await waitForWarnRecord(t4bRecords, "automation.apply_failed");
+
     // T5 kill switch: no telemetry emitted.
     _clearAutomationFailTelemetry();
     process.env.PROMOTION_LOOP_ENABLED = "0";
@@ -280,6 +304,15 @@ async function main(): Promise<void> {
     else process.env.AUTOMATION_FAIL_TEST = originalFail;
     if (originalEnabled === undefined) delete process.env.PROMOTION_LOOP_ENABLED;
     else process.env.PROMOTION_LOOP_ENABLED = originalEnabled;
+    if (originalTraceLogger) {
+      setTraceLogger({
+        info: originalTraceLogger.info ?? (() => {}),
+        warn: originalTraceLogger.warn ?? (() => {}),
+        error: originalTraceLogger.error ?? (() => {}),
+      });
+    } else {
+      setTraceLogger({ info: () => {}, warn: () => {}, error: () => {} });
+    }
   }
 
   console.log("ok");

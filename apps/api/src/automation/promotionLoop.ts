@@ -5,7 +5,7 @@ import { newIncidentId, type ActorType } from "@agentapp/shared";
 import { SCHEMA_VERSION } from "../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../db/pool.js";
 import { appendToStream } from "../eventStore/index.js";
-import { getTraceContext } from "../observability/traceContext.js";
+import { getTraceContext, getTraceLogger } from "../observability/traceContext.js";
 
 type Queryable = Pick<DbPool, "query"> | Pick<DbClient, "query">;
 
@@ -989,8 +989,9 @@ async function emitAutomationFailureTelemetry(
     lastAutomationFailTelemetry = payload;
   }
 
+  const telemetryLogger = ctx.log ?? getTraceLogger();
   try {
-    ctx.log?.warn?.(payload);
+    telemetryLogger?.warn?.(payload);
   } catch {
     // Telemetry must never alter automation control flow.
   }
@@ -1042,8 +1043,20 @@ export async function applyAutomation(pool: DbPool, ctx: AutomationContext): Pro
   } catch (err) {
     try {
       await emitFallbackIncident(pool, ctx, err);
-    } catch {
-      // Existing behavior keeps fallback failures non-fatal.
+    } catch (fallbackErr) {
+      const fallbackLogger = ctx.log ?? getTraceLogger();
+      try {
+        fallbackLogger?.error?.({
+          event: "automation.fallback_incident_failed",
+          workspace_id: ctx.workspace_id,
+          entity_type: ctx.entity_type,
+          entity_id: ctx.entity_id,
+          trigger: ctx.trigger,
+          reason_code: safeReasonCode(fallbackErr),
+        });
+      } catch {
+        // Keep fallback-failure logging non-fatal.
+      }
     }
 
     void emitAutomationFailureTelemetry(pool, ctx, err);
