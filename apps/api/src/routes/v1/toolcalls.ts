@@ -188,9 +188,9 @@ export async function registerToolCallRoutes(app: FastifyInstance, pool: DbPool)
           actor_type: "service",
           actor_id: "api",
         });
-      } catch (err) {
+      } catch {
         req.log.warn(
-          { err, agent_id, tool_name: req.body.tool_name },
+          { event: "toolcall.skill_ledger_attribution_failed", agent_id, tool_name: req.body.tool_name },
           "skill-ledger attribution failed; continuing without blocking toolcall",
         );
       }

@@ -14,8 +14,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  // Avoid logging env, but keep the message.
+  const err_name = err instanceof Error ? err.name : "Error";
   // eslint-disable-next-line no-console
-  console.error(err instanceof Error ? err.message : err);
+  console.error(`api_bootstrap_failed:${err_name}`);
   process.exitCode = 1;
 });

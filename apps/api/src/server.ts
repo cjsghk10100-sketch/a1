@@ -233,7 +233,18 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
         );
       }
     } catch (err) {
-      app.log.error({ err }, "embedded run worker cycle failed");
+      const err_code =
+        err && typeof err === "object" && "code" in err && typeof (err as { code?: unknown }).code === "string"
+          ? ((err as { code: string }).code ?? null)
+          : null;
+      app.log.error(
+        {
+          event: "embedded_run_worker_cycle_failed",
+          err_name: err instanceof Error ? err.name : "Error",
+          err_code,
+        },
+        "embedded run worker cycle failed",
+      );
     } finally {
       workerInFlight = false;
     }

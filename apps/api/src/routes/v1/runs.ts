@@ -110,13 +110,13 @@ async function finalizeRunEvidenceSafely(
       actor: { actor_type: "service", actor_id: "api" },
       correlation_id: input.correlation_id,
     });
-  } catch (err) {
+  } catch {
     app.log.warn(
       {
+        event: "run.evidence_finalize_failed",
         run_id: input.run_id,
         workspace_id: input.workspace_id,
         correlation_id: input.correlation_id,
-        err,
       },
       "run terminal persisted but evidence finalize failed",
     );
@@ -992,14 +992,14 @@ export async function registerRunRoutes(app: FastifyInstance, pool: DbPool): Pro
       correlation_id: existing.rows[0].correlation_id,
       actor: { actor_type: "service", actor_id: "api" },
       log: req.log,
-    }).catch((err) => {
+    }).catch(() => {
       req.log.warn(
         {
-          err,
+          event: "automation.apply_failed_unhandled",
           workspace_id,
           run_id: existing.rows[0].run_id,
         },
-        "automation loop failed after run.failed persistence",
+        "automation loop rejected after run.failed persistence",
       );
     });
 
