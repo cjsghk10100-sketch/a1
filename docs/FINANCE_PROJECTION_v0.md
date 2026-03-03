@@ -11,12 +11,17 @@
 ```json
 {
   "schema_version": "2.1",
-  "days_back": 30
+  "days_back": 30,
+  "include": ["top_models"]
 }
 ```
 
 - `schema_version` is required and validated by `assertSupportedSchemaVersion`.
 - `days_back` default `30`, clamped to `[1, 365]`.
+- `days_back` accepts integer number or numeric string; invalid/non-integer values are rejected.
+- `include` is optional and opt-in. Supported value is only `"top_models"`.
+  - Unknown include values are ignored.
+  - If `include` is absent or no known include is applied, baseline response shape is unchanged.
 - Requires `x-workspace-id` header.
 
 ## Data Source (Current v0)
@@ -34,6 +39,12 @@
 
 ## Response
 - `server_time` is always live DB UTC time (`(now() AT TIME ZONE 'UTC')::text || 'Z'`), never cached.
+- `top_models` is returned only when `include=["top_models"]` is applied.
+  - `top_models` is computed only from a model-granular projection source (`proj_finance_model_daily`).
+  - It is **not** derived from workspace/day aggregate rows in `proj_finance_daily`.
+  - If model-granular source is unsupported, response returns:
+    - `top_models: []`
+    - warning `top_models_unsupported`
 - Returns:
   - `range` (`days_back`, `from_day_utc`, `to_day_utc`)
   - `totals` (`estimated_cost_units` string) or `null`
@@ -57,4 +68,3 @@
 - Per-entry TTL:
   - success: 30s (0s in test)
   - error: 5s (0s in test)
-

@@ -17,6 +17,10 @@ import { getRequestAuth } from "../../security/requestAuth.js";
  * - B) public.sec_survival_ledger_daily
  * - C) none (table missing / incompatible)
  *
+ * Top-models extension source:
+ * - public.proj_finance_model_daily (model-granular projection only)
+ * - Never derive model ranking from workspace/day aggregate rows.
+ *
  * Safety:
  * - Every tenant query is workspace-scoped.
  * - Date range is bounded by DB UTC day window and days_back <= 365.
@@ -25,12 +29,18 @@ import { getRequestAuth } from "../../security/requestAuth.js";
  */
 const FINANCE_DAILY_SOURCE_A = "public.proj_finance_daily";
 const FINANCE_DAILY_SOURCE_B = "public.sec_survival_ledger_daily";
+const FINANCE_TOP_MODELS_SOURCE = "public.proj_finance_model_daily";
 const SUCCESS_HTTP_STATUS = httpStatusForReasonCode("duplicate_idempotent_replay");
 const DEFAULT_DAYS_BACK = 30;
 const MAX_DAYS_BACK = 365;
 const MIN_DAYS_BACK = 1;
+const MAX_INCLUDE_ITEMS = 10;
 const DEFAULT_FINANCE_CACHE_MAX_ENTRIES = 1000;
 const OPS_DASHBOARD_FINANCE_PER_WORKSPACE_PER_MIN = 300;
+const TOP_MODELS_LIMIT = 5;
+
+type FinanceInclude = "top_models";
+const FINANCE_INCLUDE_ALLOWLIST = new Set<FinanceInclude>(["top_models"]);
 
 type FinanceSource = "proj_finance_daily" | "sec_survival_ledger_daily" | "none";
 
@@ -49,15 +59,23 @@ type FinanceTotals = {
   total_tokens: string | null;
 };
 
+type FinanceTopModelRow = {
+  model: string;
+  estimated_cost_units: string;
+  total_tokens: string;
+};
+
 type FinanceMetricsPayload = {
   schema_version: typeof SCHEMA_VERSION;
   meta: {
     applied_days_back: number;
     source: FinanceSource;
+    include_applied?: FinanceInclude[];
   };
   totals: FinanceTotals | null;
   series_daily: FinanceSeriesRow[];
   warnings: string[];
+  top_models?: FinanceTopModelRow[];
 };
 
 type FinanceResponse = FinanceMetricsPayload & {
@@ -72,6 +90,11 @@ type FinanceCacheEntry = {
   payload: FinanceMetricsPayload;
   stored_at_monotonic_ms: number;
   ttl_ms: number;
+};
+
+type FinanceComputeResult = {
+  payload: FinanceMetricsPayload;
+  has_include_error: boolean;
 };
 
 type RateLimitWindow = {
@@ -153,16 +176,49 @@ function asIsoUtcFromDbText(raw: unknown): string {
 
 function parseDaysBack(raw: unknown): { ok: true; applied: number } | { ok: false } {
   if (raw === undefined) return { ok: true, applied: DEFAULT_DAYS_BACK };
-  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+  let numericRaw: number;
+  if (typeof raw === "number") {
+    numericRaw = raw;
+  } else if (typeof raw === "string") {
+    if (raw.trim().length === 0) return { ok: false };
+    numericRaw = Number(raw);
+  } else {
     return { ok: false };
   }
-  if (raw < MIN_DAYS_BACK) return { ok: true, applied: MIN_DAYS_BACK };
-  if (raw > MAX_DAYS_BACK) return { ok: true, applied: MAX_DAYS_BACK };
-  return { ok: true, applied: raw };
+  if (!Number.isFinite(numericRaw) || !Number.isInteger(numericRaw)) {
+    return { ok: false };
+  }
+  if (numericRaw < MIN_DAYS_BACK) return { ok: true, applied: MIN_DAYS_BACK };
+  if (numericRaw > MAX_DAYS_BACK) return { ok: true, applied: MAX_DAYS_BACK };
+  return { ok: true, applied: numericRaw };
 }
 
-function cacheKey(workspace_id: string, days_back: number): string {
-  return `finance:${workspace_id}:${days_back}`;
+function parseInclude(raw: unknown): { ok: true; applied: FinanceInclude[] } | { ok: false } {
+  if (raw === undefined) return { ok: true, applied: [] };
+  if (!Array.isArray(raw)) return { ok: false };
+  if (raw.length > MAX_INCLUDE_ITEMS) return { ok: false };
+
+  const includeSet = new Set<FinanceInclude>();
+  for (const entry of raw) {
+    if (typeof entry !== "string") return { ok: false };
+    const normalized = entry.trim();
+    if (normalized.length === 0) continue;
+    if (FINANCE_INCLUDE_ALLOWLIST.has(normalized as FinanceInclude)) {
+      includeSet.add(normalized as FinanceInclude);
+    }
+  }
+
+  return {
+    ok: true,
+    applied: Array.from(includeSet).sort((a, b) => a.localeCompare(b)),
+  };
+}
+
+function cacheKey(workspace_id: string, days_back: number, include_applied: readonly FinanceInclude[]): string {
+  if (include_applied.length === 0) {
+    return `finance:${workspace_id}:${days_back}`;
+  }
+  return `finance:${workspace_id}:${days_back}:inc=${include_applied.join(",")}`;
 }
 
 function isCacheEntryFresh(entry: FinanceCacheEntry | undefined): boolean {
@@ -444,11 +500,112 @@ async function queryFromSurvivalDaily(
   };
 }
 
+function appendUniqueWarning(existingWarnings: string[], warning: string): string[] {
+  return existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
+}
+
+async function queryTopModelsFromModelDaily(
+  client: DbClient,
+  workspace_id: string,
+  days_back: number,
+): Promise<FinanceTopModelRow[]> {
+  const topModelsRes = await client.query<{
+    model: string;
+    estimated_cost_units: string;
+    total_tokens: string;
+  }>(
+    `WITH grouped AS (
+       SELECT
+         COALESCE(
+           NULLIF(
+             left(regexp_replace(COALESCE(model, ''), '[^a-zA-Z0-9._:/-]', '', 'g'), 64),
+             ''
+           ),
+           'unknown'
+         ) AS model_sanitized,
+         SUM(cost_usd_micros) AS estimated_cost_units,
+         SUM(total_tokens) AS total_tokens
+       FROM ${FINANCE_TOP_MODELS_SOURCE}
+       WHERE workspace_id = $1
+         AND day_utc >= (now() AT TIME ZONE 'UTC')::date - ($2::int - 1)
+         AND day_utc <= (now() AT TIME ZONE 'UTC')::date
+       GROUP BY model_sanitized
+     )
+     SELECT
+       model_sanitized AS model,
+       COALESCE(estimated_cost_units, 0)::text AS estimated_cost_units,
+       COALESCE(total_tokens, 0)::text AS total_tokens
+     FROM grouped
+     ORDER BY estimated_cost_units::numeric DESC, model COLLATE "C" ASC
+     LIMIT ${TOP_MODELS_LIMIT}`,
+    [workspace_id, days_back],
+  );
+
+  return topModelsRes.rows.map((row) => ({
+    model: row.model,
+    estimated_cost_units: row.estimated_cost_units ?? "0",
+    total_tokens: row.total_tokens ?? "0",
+  }));
+}
+
+async function applyIncludeExtensions(
+  client: DbClient,
+  basePayload: FinanceMetricsPayload,
+  workspace_id: string,
+  days_back: number,
+  include_applied: readonly FinanceInclude[],
+): Promise<FinanceComputeResult> {
+  if (include_applied.length === 0) {
+    return { payload: basePayload, has_include_error: false };
+  }
+
+  let payload: FinanceMetricsPayload = {
+    ...basePayload,
+    meta: {
+      ...basePayload.meta,
+      include_applied: [...include_applied],
+    },
+  };
+
+  if (!include_applied.includes("top_models")) {
+    return { payload, has_include_error: false };
+  }
+
+  await client.query("SAVEPOINT sp_finance_top_models");
+  try {
+    const topModels = await queryTopModelsFromModelDaily(client, workspace_id, days_back);
+    await client.query("RELEASE SAVEPOINT sp_finance_top_models");
+    payload = {
+      ...payload,
+      top_models: topModels,
+    };
+    return { payload, has_include_error: false };
+  } catch (err) {
+    await client.query("ROLLBACK TO SAVEPOINT sp_finance_top_models").catch(() => {});
+    await client.query("RELEASE SAVEPOINT sp_finance_top_models").catch(() => {});
+    if (isUndefinedTableError(err) || isUndefinedColumnError(err)) {
+      payload = {
+        ...payload,
+        warnings: appendUniqueWarning(payload.warnings, "top_models_unsupported"),
+        top_models: [],
+      };
+      return { payload, has_include_error: false };
+    }
+    payload = {
+      ...payload,
+      warnings: appendUniqueWarning(payload.warnings, "top_models_error"),
+      top_models: [],
+    };
+    return { payload, has_include_error: true };
+  }
+}
+
 async function computeFinanceMetricsPayload(
   client: DbClient,
   workspace_id: string,
   days_back: number,
-): Promise<FinanceMetricsPayload> {
+  include_applied: readonly FinanceInclude[],
+): Promise<FinanceComputeResult> {
   let sourceAHasData = false;
   await client.query("SAVEPOINT sp_finance_source_a");
   try {
@@ -458,7 +615,7 @@ async function computeFinanceMetricsPayload(
     } else {
       const payload = await queryFromProjFinanceDaily(client, workspace_id, days_back);
       await client.query("RELEASE SAVEPOINT sp_finance_source_a");
-      return payload;
+      return applyIncludeExtensions(client, payload, workspace_id, days_back, include_applied);
     }
   } catch (err) {
     await client.query("ROLLBACK TO SAVEPOINT sp_finance_source_a").catch(() => {});
@@ -469,25 +626,33 @@ async function computeFinanceMetricsPayload(
     sourceAHasData = false;
   }
 
+  let fallbackPayload: FinanceMetricsPayload;
   try {
-    return await queryFromSurvivalDaily(client, workspace_id, days_back);
+    fallbackPayload = await queryFromSurvivalDaily(client, workspace_id, days_back);
   } catch (err) {
     if (!isUndefinedTableError(err) && !isUndefinedColumnError(err)) {
       throw err;
     }
-    return buildNonePayload(days_back, "finance_source_not_found");
+    fallbackPayload = buildNonePayload(days_back, "finance_source_not_found");
   }
+  return applyIncludeExtensions(client, fallbackPayload, workspace_id, days_back, include_applied);
 }
 
 async function computeFinanceMetricsInReadTx(
   pool: DbPool,
   workspace_id: string,
   days_back: number,
-): Promise<FinanceMetricsPayload> {
+  include_applied: readonly FinanceInclude[],
+): Promise<FinanceComputeResult> {
   const client = await pool.connect();
   try {
     await beginTimedReadTx(client);
-    const payload = await computeFinanceMetricsPayload(client, workspace_id, days_back);
+    const payload = await computeFinanceMetricsPayload(
+      client,
+      workspace_id,
+      days_back,
+      include_applied,
+    );
     await client.query("COMMIT");
     return payload;
   } catch (err) {
@@ -502,12 +667,17 @@ async function computeAndCacheMetricsEntry(
   pool: DbPool,
   workspace_id: string,
   days_back: number,
+  include_applied: readonly FinanceInclude[],
 ): Promise<FinanceCacheEntry> {
   let payload: FinanceMetricsPayload;
   let ttl_ms = financeCacheSuccessTtlMs();
 
   try {
-    payload = await computeFinanceMetricsInReadTx(pool, workspace_id, days_back);
+    const result = await computeFinanceMetricsInReadTx(pool, workspace_id, days_back, include_applied);
+    payload = result.payload;
+    if (result.has_include_error) {
+      ttl_ms = financeCacheErrorTtlMs();
+    }
   } catch {
     payload = buildNonePayload(days_back, "finance_db_error");
     ttl_ms = financeCacheErrorTtlMs();
@@ -518,7 +688,7 @@ async function computeAndCacheMetricsEntry(
     stored_at_monotonic_ms: monotonicNowMs(),
     ttl_ms,
   };
-  financeMetricsCache.set(cacheKey(workspace_id, days_back), entry);
+  financeMetricsCache.set(cacheKey(workspace_id, days_back, include_applied), entry);
   pruneFinanceCache();
   return entry;
 }
@@ -582,6 +752,15 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
     }
     const days_back = parsedDaysBack.applied;
 
+    const parsedInclude = parseInclude(bodyRecord.include);
+    if (!parsedInclude.ok) {
+      const reason_code = "invalid_payload_combination" as const;
+      return reply
+        .code(httpStatusForReasonCode(reason_code))
+        .send(buildContractError(reason_code, { field: "include" }));
+    }
+    const include_applied = parsedInclude.applied;
+
     // TODO(PR-12A): unify this in-memory limiter with shared Ops Dashboard limiter helper.
     if (!consumeOpsFinanceRateLimit(workspace_id)) {
       const reason_code = "rate_limited" as const;
@@ -607,7 +786,7 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
     }
     const server_time = livePing.server_time;
 
-    const key = cacheKey(workspace_id, days_back);
+    const key = cacheKey(workspace_id, days_back, include_applied);
     pruneFinanceCache();
 
     let entry: FinanceCacheEntry | undefined = financeMetricsCache.get(key);
@@ -625,7 +804,12 @@ export async function registerFinanceRoutes(app: FastifyInstance, pool: DbPool):
         cached = false;
         entry = await inFlight;
       } else {
-        const computePromise = computeAndCacheMetricsEntry(pool, workspace_id, days_back).finally(() => {
+        const computePromise = computeAndCacheMetricsEntry(
+          pool,
+          workspace_id,
+          days_back,
+          include_applied,
+        ).finally(() => {
           financeMetricsInFlight.delete(key);
         });
         financeMetricsInFlight.set(key, computePromise);
