@@ -103,6 +103,7 @@ export async function buildServer(ctx: BuildContext): Promise<FastifyInstance> {
   function isEngineTokenRoute(url: string): boolean {
     const path = requestPath(url);
     if (path === "/v1/runs/claim") return true;
+    if (path === "/v1/engines/evidence/ingest") return true;
     return /^\/v1\/runs\/[^/]+\/lease\/(heartbeat|release)$/.test(path);
   }
 
