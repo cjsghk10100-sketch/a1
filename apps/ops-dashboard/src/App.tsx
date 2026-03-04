@@ -2,10 +2,23 @@ import { BrowserRouter } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiClient } from "./api/apiClient";
+import type { FinanceResponse, HealthResponse, TopIssue } from "./api/types";
 import { ConfigProvider } from "./config/ConfigContext";
-import { DashboardProvider, type PanelStatusSnapshot } from "./config/DashboardContext";
+import {
+  DashboardProvider,
+  type DashboardIncident,
+  type DashboardSlaSnapshot,
+  type PanelStatusSnapshot,
+} from "./config/DashboardContext";
 import type { AppConfig } from "./config/loadConfig";
 import { useWorkspace } from "./hooks/useWorkspace";
+import {
+  activeIncidentCount,
+  appendSlaSnapshot,
+  syncTopIssues,
+  tickIncidentSla,
+  totalViolationSec,
+} from "./incidents/store";
 import { PANEL_REGISTRY } from "./panels/registry";
 import { DashboardRouter } from "./router";
 import type { PollingDotState } from "./shared/PollingDot";
@@ -50,10 +63,20 @@ function shouldShowGlobalError(
 export function App({ config }: { config: AppConfig }): JSX.Element {
   const { workspaceId, setWorkspace } = useWorkspace(config);
   const [panelStatuses, setPanelStatuses] = useState<Record<string, PanelStatusSnapshot>>({});
+  const [panelData, setPanelData] = useState<{
+    health: HealthResponse | null;
+    finance: FinanceResponse | null;
+  }>({
+    health: null,
+    finance: null,
+  });
+  const [incidents, setIncidents] = useState<DashboardIncident[]>([]);
+  const [slaSnapshots, setSlaSnapshots] = useState<DashboardSlaSnapshot[]>([]);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [hidden, setHidden] = useState(document.hidden);
 
   const refreshHandlersRef = useRef<Map<string, () => void>>(new Map());
+  const lastSlaTickMsRef = useRef<number | null>(null);
 
   useEffect(() => {
     const onVisibility = () => setHidden(document.hidden);
@@ -99,12 +122,48 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
     });
   }, []);
 
+  const reportPanelData = useCallback((panelId: "health" | "finance", data: HealthResponse | FinanceResponse) => {
+    setPanelData((prev) => ({
+      ...prev,
+      [panelId]: data,
+    }));
+
+    if (panelId !== "health") return;
+
+    const health = data as HealthResponse;
+    const topIssues: TopIssue[] = health.top_issues ?? health.summary?.top_issues ?? [];
+    const nowIso = health.server_time ?? new Date().toISOString();
+    const nowMs = Date.parse(nowIso);
+    const lastTickMs = lastSlaTickMsRef.current ?? nowMs;
+    lastSlaTickMsRef.current = nowMs;
+    const elapsedSec = Math.max(0, Math.floor((nowMs - lastTickMs) / 1000));
+
+    setIncidents((prev) => {
+      const ticked = tickIncidentSla(prev, elapsedSec);
+      const next = syncTopIssues(ticked, topIssues, nowIso);
+      const summaryStatus = health.summary?.status ?? health.summary?.health_summary ?? "OK";
+      setSlaSnapshots((snapshots) =>
+        appendSlaSnapshot(snapshots, {
+          at: nowIso,
+          totalViolationSec: totalViolationSec(next),
+          openCount: activeIncidentCount(next),
+          systemStatus: summaryStatus,
+        }),
+      );
+      return next;
+    });
+  }, []);
+
   const onWorkspaceChange = useCallback(
     (nextWorkspaceId: string) => {
       const normalized = nextWorkspaceId.trim();
       if (!normalized || normalized === workspaceId) return;
       setWorkspace(normalized);
       setPanelStatuses({});
+      setPanelData({ health: null, finance: null });
+      setIncidents([]);
+      setSlaSnapshots([]);
+      lastSlaTickMsRef.current = null;
       refreshHandlersRef.current.clear();
       setRefreshNonce((prev) => prev + 1);
     },
@@ -138,9 +197,24 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
       refreshNonce,
       registerRefresh,
       reportPanelStatus,
+      reportPanelData,
       panelStatuses,
+      panelData,
+      incidents,
+      slaSnapshots,
     }),
-    [client, workspaceId, refreshNonce, registerRefresh, reportPanelStatus, panelStatuses],
+    [
+      client,
+      workspaceId,
+      refreshNonce,
+      registerRefresh,
+      reportPanelStatus,
+      reportPanelData,
+      panelStatuses,
+      panelData,
+      incidents,
+      slaSnapshots,
+    ],
   );
 
   return (

@@ -1,6 +1,13 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import type { PanelStatusSnapshot } from "./config/DashboardContext";
+import { ActionStats } from "./decision/ActionStats";
+import { CauseDistribution } from "./decision/CauseDistribution";
+import { DecisionOverview } from "./decision/DecisionOverview";
+import { DecisionPage } from "./decision/DecisionPage";
+import { FinanceTrends } from "./decision/FinanceTrends";
+import { IncidentTimeline } from "./decision/IncidentTimeline";
+import { SLATrends } from "./decision/SLATrends";
 import { OpsLayout } from "./layout/OpsLayout";
 import type { PanelDefinition } from "./panels/registry";
 import { OpsOverview } from "./pages/OpsOverview";
@@ -13,7 +20,12 @@ export function buildPanelRoutes(panels: PanelDefinition[]): string[] {
 
 function DefaultRedirect(): JSX.Element {
   const location = useLocation();
-  return <Navigate to={`/health${location.search}`} replace />;
+  return <Navigate to={`/overview${location.search}`} replace />;
+}
+
+function CoreDefaultRedirect(): JSX.Element {
+  const location = useLocation();
+  return <Navigate to={`/overview${location.search}`} replace />;
 }
 
 export function DashboardRouter({
@@ -60,6 +72,28 @@ export function DashboardRouter({
       >
         <Route index element={<DefaultRedirect />} />
         <Route path="overview" element={<OpsOverview panels={panels} />} />
+        <Route path="core">
+          <Route index element={<CoreDefaultRedirect />} />
+          <Route path="overview" element={<OpsOverview panels={panels} />} />
+          {panels.map((panel) => (
+            <Route key={`core:${panel.id}`} path={panel.route.slice(1)} element={<PanelPage panel={panel} />} />
+          ))}
+        </Route>
+        <Route path="decision" element={<DecisionPage />}>
+          <Route index element={<DecisionOverview />} />
+          <Route path="timeline" element={<IncidentTimeline />} />
+          <Route path="causes" element={<CauseDistribution />} />
+          <Route
+            path="trends"
+            element={
+              <div className="space-y-3">
+                <SLATrends />
+                <ActionStats />
+              </div>
+            }
+          />
+          <Route path="finance" element={<FinanceTrends />} />
+        </Route>
         {panels.map((panel) => (
           <Route key={panel.id} path={panel.route.slice(1)} element={<PanelPage panel={panel} />} />
         ))}

@@ -3,6 +3,28 @@ import type { ReactNode } from "react";
 
 import type { ApiClient } from "../api/apiClient";
 import type { ApiErrorInfo } from "../api/types";
+import type { FinanceResponse, HealthResponse } from "../api/types";
+
+export type DashboardIncident = {
+  id: string;
+  kind: string;
+  severity: "DOWN" | "DEGRADED";
+  status: "open" | "ack" | "resolved";
+  openedAt: string;
+  acknowledgedAt: string | null;
+  resolvedAt: string | null;
+  lastSeenAt: string;
+  reopenCount: number;
+  slaViolationSec: number;
+  entityId: string | null;
+};
+
+export type DashboardSlaSnapshot = {
+  at: string;
+  totalViolationSec: number;
+  openCount: number;
+  systemStatus: "OK" | "DEGRADED" | "DOWN";
+};
 
 export type PanelStatusSnapshot = {
   panelId: string;
@@ -17,7 +39,14 @@ export type DashboardContextValue = {
   refreshNonce: number;
   registerRefresh: (panelId: string, cb: () => void) => () => void;
   reportPanelStatus: (snapshot: PanelStatusSnapshot) => void;
+  reportPanelData: (panelId: "health" | "finance", data: HealthResponse | FinanceResponse) => void;
   panelStatuses: Record<string, PanelStatusSnapshot>;
+  panelData: {
+    health: HealthResponse | null;
+    finance: FinanceResponse | null;
+  };
+  incidents: DashboardIncident[];
+  slaSnapshots: DashboardSlaSnapshot[];
 };
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);

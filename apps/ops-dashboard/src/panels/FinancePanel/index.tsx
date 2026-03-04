@@ -24,7 +24,7 @@ function normalizeWarnings(input: FinanceResponse["warnings"] | undefined): Fina
 
 export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.Element {
   const { config } = useConfig();
-  const { client, workspaceId, refreshNonce, registerRefresh, reportPanelStatus } = useDashboardContext();
+  const { client, workspaceId, refreshNonce, registerRefresh, reportPanelStatus, reportPanelData } = useDashboardContext();
   const financeFetcher = useCallback(
     (signal: AbortSignal) =>
       fetchFinance(client, config.schemaVersion, config.financeDaysBack, true, signal),
@@ -76,6 +76,11 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
       error: polling.error,
     });
   }, [panelStatus, polling.lastUpdatedAt, polling.error, reportPanelStatus]);
+
+  useEffect(() => {
+    if (!polling.data) return;
+    reportPanelData("finance", polling.data);
+  }, [polling.data, reportPanelData]);
 
   if (!polling.data && !polling.error) {
     return <LoadingSkele lines={mode === "summary" ? 6 : 9} />;

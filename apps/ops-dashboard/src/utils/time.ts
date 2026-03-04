@@ -18,3 +18,16 @@ export function toLocalDate(isoUtcString: string): string {
   const weekday = date.toLocaleDateString(undefined, { weekday: "short" });
   return `${y}-${m}-${d} (${weekday})`;
 }
+
+export function toLocalDateTime(isoUtcString: string): string {
+  const date = new Date(isoUtcString);
+  if (!Number.isFinite(date.getTime())) return "—";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
