@@ -14,6 +14,7 @@ import type {
   EngineRevokeTokenRequestV1,
   EngineTokenListResponseV1,
   EngineTokenRecordV1,
+  FinanceEventV1,
 } from "@agentapp/shared";
 
 import {
@@ -24,6 +25,7 @@ import {
 import { SCHEMA_VERSION, assertSupportedSchemaVersion } from "../../contracts/schemaVersion.js";
 import type { DbClient, DbPool } from "../../db/pool.js";
 import { appendToStream } from "../../eventStore/index.js";
+import { applyFinanceEvent } from "../../projectors/financeProjector.js";
 import {
   defaultEngineCapabilityScopes,
   getEngineTokenSecret,
@@ -337,6 +339,10 @@ function isClientPayloadDbError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const code = (err as { code?: unknown }).code;
   return code === "22007" || code === "22008" || code === "22P02";
+}
+
+function isFinanceUsageRecordedEvent(envelope: IngestEnvelope): envelope is FinanceEventV1 {
+  return envelope.event_type === "finance.usage_recorded";
 }
 
 function ingestWorkspaceIdFromRawHeader(req: {
@@ -1163,6 +1169,7 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
         const tx = await pool.connect();
         let server_time = "1970-01-01T00:00:00Z";
         let fatalError: unknown = null;
+        const acceptedFinanceEvents: FinanceEventV1[] = [];
         try {
           await tx.query("BEGIN");
           await tx.query("SELECT set_config('statement_timeout', $1, true)", [ENGINE_EVIDENCE_INGEST_STATEMENT_TIMEOUT]);
@@ -1192,6 +1199,9 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
 
               await appendToStream(pool, candidate.envelope as EventEnvelopeV1, tx);
               results[candidate.index] = { index: candidate.index, status: "accepted" };
+              if (isFinanceUsageRecordedEvent(candidate.envelope)) {
+                acceptedFinanceEvents.push(candidate.envelope);
+              }
               await tx.query(`RELEASE SAVEPOINT ${savepointName}`);
             } catch (err) {
               if (isUniqueViolation(err)) {
@@ -1254,6 +1264,23 @@ export async function registerEngineRoutes(app: FastifyInstance, pool: DbPool): 
             kind: "missing_idempotency_key",
             details: { count: missingIdempotencyAcceptedCount },
           });
+        }
+
+        for (const financeEvent of acceptedFinanceEvents) {
+          try {
+            await applyFinanceEvent(pool, financeEvent);
+          } catch (err) {
+            req.log.warn(
+              {
+                event: "engine_evidence_finance_projector_failed",
+                workspace_id,
+                event_id: financeEvent.event_id,
+                correlation_id: financeEvent.correlation_id ?? null,
+                err_name: err instanceof Error ? err.name : "Error",
+              },
+              "engine evidence finance projector apply failed",
+            );
+          }
         }
 
         return reply.code(200).send({
