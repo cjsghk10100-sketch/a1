@@ -19,6 +19,12 @@ import { toLocalTime } from "../utils/time";
 import { SignalsList } from "../panels/HealthPanel/SignalsList";
 import { DrilldownPanel } from "../panels/HealthPanel/DrilldownPanel";
 import { PANEL_REGISTRY } from "../panels/registry";
+import {
+  appendSlaSnapshot,
+  buildTimelineEvents,
+  syncTopIssues,
+  tickIncidentSla,
+} from "../incidents/store";
 
 const DEFAULT_CONFIG = {
   baseUrl: "http://api.test",
@@ -438,7 +444,104 @@ describe("ops dashboard contracts", () => {
     );
 
     expect(screen.getByText("패널")).toBeInTheDocument();
-    expect(screen.getByText("개요")).toBeInTheDocument();
+    expect(screen.getAllByText("개요").length).toBeGreaterThan(0);
     expect(screen.getByText("시스템 상태")).toBeInTheDocument();
+  });
+
+  it("T25 syncTopIssues opens and resolves incidents by kind", () => {
+    const now = "2026-03-04T00:00:00Z";
+    const opened = syncTopIssues(
+      [],
+      [{ kind: "cron_stale", severity: "DOWN" }],
+      now,
+    );
+    expect(opened.length).toBe(1);
+    expect(opened[0]?.status).toBe("open");
+
+    const resolved = syncTopIssues(opened, [], "2026-03-04T00:10:00Z");
+    expect(resolved[0]?.status).toBe("resolved");
+    expect(resolved[0]?.resolvedAt).toBe("2026-03-04T00:10:00Z");
+  });
+
+  it("T26 syncTopIssues reopens incident within 5 minutes", () => {
+    const initial = syncTopIssues([], [{ kind: "dlq_backlog", severity: "DEGRADED" }], "2026-03-04T00:00:00Z");
+    const resolved = syncTopIssues(initial, [], "2026-03-04T00:03:00Z");
+    const reopened = syncTopIssues(
+      resolved,
+      [{ kind: "dlq_backlog", severity: "DEGRADED" }],
+      "2026-03-04T00:06:00Z",
+    );
+    expect(reopened.length).toBe(1);
+    expect(reopened[0]?.status).toBe("open");
+    expect(reopened[0]?.reopenCount).toBe(1);
+  });
+
+  it("T27 tickIncidentSla increments only open incidents", () => {
+    const base = [
+      {
+        id: "inc_1",
+        kind: "cron_stale",
+        severity: "DOWN" as const,
+        status: "open" as const,
+        openedAt: "2026-03-04T00:00:00Z",
+        acknowledgedAt: null,
+        resolvedAt: null,
+        lastSeenAt: "2026-03-04T00:00:00Z",
+        reopenCount: 0,
+        slaViolationSec: 1,
+        entityId: null,
+      },
+      {
+        id: "inc_2",
+        kind: "dlq_backlog",
+        severity: "DEGRADED" as const,
+        status: "resolved" as const,
+        openedAt: "2026-03-04T00:00:00Z",
+        acknowledgedAt: null,
+        resolvedAt: "2026-03-04T00:01:00Z",
+        lastSeenAt: "2026-03-04T00:01:00Z",
+        reopenCount: 0,
+        slaViolationSec: 10,
+        entityId: null,
+      },
+    ];
+    const next = tickIncidentSla(base, 5);
+    expect(next[0]?.slaViolationSec).toBe(6);
+    expect(next[1]?.slaViolationSec).toBe(10);
+  });
+
+  it("T28 buildTimelineEvents flattens opened and resolved timestamps", () => {
+    const events = buildTimelineEvents([
+      {
+        id: "inc_x",
+        kind: "cron_stale",
+        severity: "DOWN",
+        status: "resolved",
+        openedAt: "2026-03-04T00:00:00Z",
+        acknowledgedAt: "2026-03-04T00:01:00Z",
+        resolvedAt: "2026-03-04T00:02:00Z",
+        lastSeenAt: "2026-03-04T00:02:00Z",
+        reopenCount: 0,
+        slaViolationSec: 0,
+        entityId: null,
+      },
+    ]);
+    expect(events.length).toBe(3);
+    expect(events[0]?.label).toBe("resolved");
+    expect(events[2]?.label).toBe("opened");
+  });
+
+  it("T29 appendSlaSnapshot keeps max 200 entries", () => {
+    let snapshots: Array<{ at: string; totalViolationSec: number; openCount: number; systemStatus: "OK" | "DEGRADED" | "DOWN" }> = [];
+    for (let i = 0; i < 205; i += 1) {
+      snapshots = appendSlaSnapshot(snapshots, {
+        at: `2026-03-04T00:${String(i).padStart(2, "0")}:00Z`,
+        totalViolationSec: i,
+        openCount: i,
+        systemStatus: "OK",
+      });
+    }
+    expect(snapshots.length).toBe(200);
+    expect(snapshots[0]?.totalViolationSec).toBe(5);
   });
 });

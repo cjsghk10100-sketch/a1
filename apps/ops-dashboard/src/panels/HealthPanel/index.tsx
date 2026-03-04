@@ -26,6 +26,12 @@ type Thresholds = {
   dlq_degraded_count: number | null;
 };
 
+const DEFAULT_THRESHOLDS: Thresholds = {
+  cron_down_sec: 600,
+  projection_down_sec: 300,
+  dlq_degraded_count: 10,
+};
+
 type NormalizedHealth = {
   status: "OK" | "DEGRADED" | "DOWN" | null;
   reasons: string[];
@@ -87,6 +93,18 @@ function readNumber(
   return null;
 }
 
+function readBoolean(
+  obj: Record<string, number | boolean> | undefined,
+  keys: string[],
+): boolean | null {
+  if (!obj) return null;
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
 function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
   if (!response) {
     return {
@@ -111,29 +129,43 @@ function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
   const summary = response.summary ?? {};
   const topIssues = response.top_issues ?? summary.top_issues ?? [];
   const reasons = summary.reasons ?? topIssues.map((issue) => issue.kind);
-
-  const signals = response.signals ?? {
-    cron_freshness_sec: summary.cron_freshness_sec ?? null,
-    projection_lag_sec: summary.projection_lag_sec ?? null,
-    dlq_backlog_count: summary.dlq_backlog_count ?? 0,
-    active_incidents_count: summary.active_incidents_count ?? 0,
-    rate_limit_flood_detected: summary.rate_limit_flood_detected ?? false,
-  };
-
   const cronDetails = response.checks?.optional?.cron_watchdog?.details;
   const projectionDetails = response.checks?.optional?.projection_lag?.details;
   const dlqDetails = response.checks?.optional?.dlq_backlog?.details;
 
+  const signals = response.signals ?? {
+    cron_freshness_sec:
+      summary.cron_freshness_sec ??
+      readNumber(cronDetails, ["cron_freshness_sec", "age_sec"]),
+    projection_lag_sec:
+      summary.projection_lag_sec ??
+      readNumber(projectionDetails, ["projection_lag_sec", "cursor_age_sec", "lag_sec"]),
+    dlq_backlog_count:
+      summary.dlq_backlog_count ??
+      readNumber(dlqDetails, ["dlq_backlog_count", "pending_count"]) ??
+      0,
+    active_incidents_count: summary.active_incidents_count ?? 0,
+    rate_limit_flood_detected:
+      summary.rate_limit_flood_detected ??
+      readBoolean(response.checks?.optional?.rate_limit_flood?.details, [
+        "rate_limit_flood_detected",
+      ]) ??
+      false,
+  };
+
   const thresholds: Thresholds = {
     cron_down_sec:
       pickNumber(summary.thresholds?.cron_down_sec) ??
-      readNumber(cronDetails, ["down_threshold_sec", "cron_down_sec", "threshold_sec"]),
+      readNumber(cronDetails, ["down_threshold_sec", "cron_down_sec", "threshold_sec"]) ??
+      DEFAULT_THRESHOLDS.cron_down_sec,
     projection_down_sec:
       pickNumber(summary.thresholds?.projection_down_sec) ??
-      readNumber(projectionDetails, ["down_threshold_sec", "projection_down_sec", "threshold_sec"]),
+      readNumber(projectionDetails, ["down_threshold_sec", "projection_down_sec", "threshold_sec"]) ??
+      DEFAULT_THRESHOLDS.projection_down_sec,
     dlq_degraded_count:
       pickNumber(summary.thresholds?.dlq_degraded_count) ??
-      readNumber(dlqDetails, ["degraded_threshold", "dlq_degraded_count", "threshold_count"]),
+      readNumber(dlqDetails, ["degraded_threshold", "dlq_degraded_count", "threshold_count"]) ??
+      DEFAULT_THRESHOLDS.dlq_degraded_count,
   };
 
   const status =
@@ -167,7 +199,7 @@ function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
 
 export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.Element {
   const { config } = useConfig();
-  const { client, workspaceId, registerRefresh, reportPanelStatus, refreshNonce } = useDashboardContext();
+  const { client, workspaceId, registerRefresh, reportPanelStatus, reportPanelData, refreshNonce } = useDashboardContext();
   const healthFetcher = useCallback(
     (signal: AbortSignal) => fetchHealth(client, config.schemaVersion, signal),
     [client, config.schemaVersion],
@@ -237,6 +269,11 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
       error: polling.error,
     });
   }, [reportedPanelStatus, polling.error, polling.lastUpdatedAt, reportPanelStatus]);
+
+  useEffect(() => {
+    if (!polling.data) return;
+    reportPanelData("health", polling.data);
+  }, [polling.data, reportPanelData]);
 
   if (!polling.data && !polling.error) {
     return <LoadingSkele lines={mode === "summary" ? 6 : 10} />;

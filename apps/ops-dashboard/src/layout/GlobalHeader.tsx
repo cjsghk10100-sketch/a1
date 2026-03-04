@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 
 import { useI18n } from "../i18n/useI18n";
 import { StatusBadge } from "../shared/StatusBadge";
@@ -21,7 +22,10 @@ export function GlobalHeader({
   onRefreshAll: () => void;
 }): JSX.Element {
   const { t } = useI18n();
+  const location = useLocation();
   const [input, setInput] = useState(workspaceId);
+  const search = location.search;
+  const isDecisionMode = location.pathname.startsWith("/decision");
 
   useEffect(() => {
     setInput(workspaceId);
@@ -46,6 +50,20 @@ export function GlobalHeader({
           className="rounded border px-2 py-1 text-sm"
         />
         <StatusBadge status={globalStatus} />
+        <div className="ml-2 hidden items-center gap-1 rounded border bg-slate-50 p-1 md:inline-flex">
+          <Link
+            to={`/core${search}`}
+            className={`rounded px-2 py-1 text-xs ${!isDecisionMode ? "bg-slate-200 font-medium text-slate-800" : "text-slate-600 hover:bg-slate-100"}`}
+          >
+            {t("header.mode.core")}
+          </Link>
+          <Link
+            to={`/decision${search}`}
+            className={`rounded px-2 py-1 text-xs ${isDecisionMode ? "bg-slate-200 font-medium text-slate-800" : "text-slate-600 hover:bg-slate-100"}`}
+          >
+            {t("header.mode.decision")}
+          </Link>
+        </div>
       </div>
       <div className="flex items-center gap-3 text-sm text-slate-600">
         <span className="inline-flex items-center gap-1">
