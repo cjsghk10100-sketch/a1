@@ -199,7 +199,8 @@ function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
 
 export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.Element {
   const { config } = useConfig();
-  const { client, workspaceId, registerRefresh, reportPanelStatus, reportPanelData, refreshNonce } = useDashboardContext();
+  const { client, workspaceId, registerRefresh, reportPanelStatus, reportPanelData, panelData, refreshNonce } =
+    useDashboardContext();
   const healthFetcher = useCallback(
     (signal: AbortSignal) => fetchHealth(client, config.schemaVersion, signal),
     [client, config.schemaVersion],
@@ -222,7 +223,8 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
 
   const drilldown = useDrilldown(drilldownFetcher);
 
-  const normalized = useMemo(() => normalizeHealth(polling.data), [polling.data]);
+  const effectiveData = polling.data ?? panelData.health;
+  const normalized = useMemo(() => normalizeHealth(effectiveData), [effectiveData]);
   const { history, requestPermission } = useStatusAlerts(normalized.status, normalized.reasons);
   const reportedPanelStatus = useMemo(() => {
     if (normalized.status) return normalized.status;
@@ -235,7 +237,7 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
 
   const previousServerTimeRef = useRef<string | null>(null);
   useEffect(() => {
-    const currentServerTime = polling.data?.server_time ?? null;
+    const currentServerTime = effectiveData?.server_time ?? null;
     if (!currentServerTime || previousServerTimeRef.current === currentServerTime) {
       return;
     }
@@ -249,7 +251,7 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
     } else {
       drilldown.close();
     }
-  }, [polling.data?.server_time, normalized.topIssues, drilldown.kind, drilldown.refresh, drilldown.close]);
+  }, [effectiveData?.server_time, normalized.topIssues, drilldown.kind, drilldown.refresh, drilldown.close]);
 
   useEffect(() => {
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
@@ -275,7 +277,7 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
     reportPanelData("health", polling.data);
   }, [polling.data, reportPanelData]);
 
-  if (!polling.data && !polling.error) {
+  if (!effectiveData && !polling.error) {
     return <LoadingSkele lines={mode === "summary" ? 6 : 10} />;
   }
 
@@ -286,7 +288,7 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
       ) : null}
 
       <div className="flex justify-end">
-        <DataExport panelId="health" workspaceId={workspaceId} data={polling.data ?? {}} />
+        <DataExport panelId="health" workspaceId={workspaceId} data={effectiveData ?? {}} />
       </div>
 
       <StatusHero status={normalized.status} reasons={normalized.reasons} />

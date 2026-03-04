@@ -24,7 +24,8 @@ function normalizeWarnings(input: FinanceResponse["warnings"] | undefined): Fina
 
 export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.Element {
   const { config } = useConfig();
-  const { client, workspaceId, refreshNonce, registerRefresh, reportPanelStatus, reportPanelData } = useDashboardContext();
+  const { client, workspaceId, refreshNonce, registerRefresh, reportPanelStatus, reportPanelData, panelData } =
+    useDashboardContext();
   const financeFetcher = useCallback(
     (signal: AbortSignal) =>
       fetchFinance(client, config.schemaVersion, config.financeDaysBack, true, signal),
@@ -45,14 +46,15 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
     return registerRefresh("finance", polling.forceRefresh);
   }, [registerRefresh, polling.forceRefresh]);
 
-  const warnings = useMemo(() => normalizeWarnings(polling.data?.warnings), [polling.data?.warnings]);
+  const effectiveData = polling.data ?? panelData.finance;
+  const warnings = useMemo(() => normalizeWarnings(effectiveData?.warnings), [effectiveData?.warnings]);
   const nonBlockingWarningsOnly = useMemo(() => {
     if (warnings.length === 0) return false;
     return warnings.every((warning) => warningKind(warning) === "top_models_unsupported");
   }, [warnings]);
 
   const panelStatus = useMemo(() => {
-    if (!polling.data && polling.error) {
+    if (!effectiveData && polling.error) {
       if (polling.error.category === "timeout" || polling.error.category === "network") {
         return "DEGRADED" as const;
       }
@@ -61,12 +63,12 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
     if (polling.error) {
       const isTransient = polling.error.category === "timeout" || polling.error.category === "network";
       // Keep panel status stable when stale data exists and only transient poll failure happened.
-      if (!polling.data || !isTransient) return "DEGRADED" as const;
+      if (!effectiveData || !isTransient) return "DEGRADED" as const;
     }
     if (warnings.length > 0 && !nonBlockingWarningsOnly) return "DEGRADED" as const;
-    if (polling.data) return "OK" as const;
+    if (effectiveData) return "OK" as const;
     return null;
-  }, [polling.data, polling.error, warnings.length, nonBlockingWarningsOnly]);
+  }, [effectiveData, polling.error, warnings.length, nonBlockingWarningsOnly]);
 
   useEffect(() => {
     reportPanelStatus({
@@ -82,7 +84,7 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
     reportPanelData("finance", polling.data);
   }, [polling.data, reportPanelData]);
 
-  if (!polling.data && !polling.error) {
+  if (!effectiveData && !polling.error) {
     return <LoadingSkele lines={mode === "summary" ? 6 : 9} />;
   }
 
@@ -93,14 +95,14 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
       ) : null}
 
       <div className="flex justify-end">
-        <DataExport panelId="finance" workspaceId={workspaceId} data={polling.data ?? {}} />
+        <DataExport panelId="finance" workspaceId={workspaceId} data={effectiveData ?? {}} />
       </div>
 
       <WarningsBanner warnings={warnings} />
-      <TotalsSummary totals={polling.data?.totals ?? null} />
-      <CostChart series={polling.data?.series_daily ?? []} />
+      <TotalsSummary totals={effectiveData?.totals ?? null} />
+      <CostChart series={effectiveData?.series_daily ?? []} />
 
-      {mode === "full" ? <TopModelsList models={polling.data?.top_models ?? []} /> : null}
+      {mode === "full" ? <TopModelsList models={effectiveData?.top_models ?? []} /> : null}
     </div>
   );
 }
