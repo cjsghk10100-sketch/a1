@@ -513,7 +513,76 @@ async function main(): Promise<void> {
     assert.equal(guardsRes.json.results[2]?.status, "rejected");
     assert.equal(guardsRes.json.results[2]?.reason_code, "invalid_payload_combination");
 
-    // T13: request-level rate limit returns contract 429 with retry_after_sec.
+    // T13: finance usage event applies projection row in proj_finance_daily.
+    const financeEventId = randomUUID();
+    const financeUsageId = `usage_${suffix}`;
+    const financeOccurredAt = new Date().toISOString();
+    const financeIngest = await requestJson<{
+      accepted: number;
+      deduped: number;
+      rejected: number;
+      results: Array<{ status: string; reason_code?: string }>;
+    }>(
+      baseUrl,
+      "POST",
+      "/v1/engines/evidence/ingest",
+      {
+        schema_version: SCHEMA_VERSION,
+        engine_id: engineA.engine_id,
+        engine_token: engineA.engine_token,
+        events: [
+          {
+            event_id: financeEventId,
+            event_type: "finance.usage_recorded",
+            event_version: 1,
+            occurred_at: financeOccurredAt,
+            correlation_id: `corr_${financeEventId}`,
+            entity_type: "finance",
+            entity_id: financeUsageId,
+            idempotency_key: `idem_fin_${workspaceA}_${financeUsageId}`,
+            data: {
+              usage_id: financeUsageId,
+              cost_usd_micros: 1234,
+              prompt_tokens: 111,
+              completion_tokens: 222,
+            },
+          },
+        ],
+      },
+      { "x-workspace-id": workspaceA },
+    );
+    assert.equal(financeIngest.status, 200);
+    assert.equal(financeIngest.json.accepted, 1);
+    assert.equal(financeIngest.json.deduped, 0);
+    assert.equal(financeIngest.json.rejected, 0);
+    assert.equal(financeIngest.json.results[0]?.status, "accepted");
+
+    const financeProjected = await db.query<{
+      cost_usd_micros: string;
+      prompt_tokens: string;
+      completion_tokens: string;
+      total_tokens: string;
+      event_count: string;
+    }>(
+      `SELECT
+         cost_usd_micros::text AS cost_usd_micros,
+         prompt_tokens::text AS prompt_tokens,
+         completion_tokens::text AS completion_tokens,
+         total_tokens::text AS total_tokens,
+         event_count::text AS event_count
+       FROM proj_finance_daily
+       WHERE workspace_id = $1
+         AND day_utc = (($2::timestamptz AT TIME ZONE 'UTC')::date)`,
+      [workspaceA, financeOccurredAt],
+    );
+    assert.equal(financeProjected.rowCount, 1);
+    assert.equal(financeProjected.rows[0]?.cost_usd_micros, "1234");
+    assert.equal(financeProjected.rows[0]?.prompt_tokens, "111");
+    assert.equal(financeProjected.rows[0]?.completion_tokens, "222");
+    assert.equal(financeProjected.rows[0]?.total_tokens, "333");
+    assert.equal(financeProjected.rows[0]?.event_count, "1");
+
+    // T14: request-level rate limit returns contract 429 with retry_after_sec.
     const prevGlobalPerMin = process.env.ENGINE_EVIDENCE_INGEST_GLOBAL_PER_MIN;
     const prevWorkspacePerMin = process.env.ENGINE_EVIDENCE_INGEST_WORKSPACE_PER_MIN;
     try {
@@ -554,9 +623,9 @@ async function main(): Promise<void> {
           events: [makeEvent({ workspaceId: workspaceA })],
         },
         { "x-workspace-id": workspaceA },
-      );
-      assert.equal(rlSecond.status, httpStatusForReasonCode("rate_limited"));
-      assert.equal(rlSecond.json.reason_code, "rate_limited");
+    );
+    assert.equal(rlSecond.status, httpStatusForReasonCode("rate_limited"));
+    assert.equal(rlSecond.json.reason_code, "rate_limited");
       const retryAfter = Number((rlSecond.json.details as { retry_after_sec?: unknown } | undefined)?.retry_after_sec);
       assert.equal(Number.isFinite(retryAfter), true);
       assert.equal(retryAfter >= 0, true);
@@ -572,7 +641,7 @@ async function main(): Promise<void> {
       );
     }
 
-    // T14: server_time is UTC with Z.
+    // T15: server_time is UTC with Z.
     assert.equal(typeof happy.json.server_time, "string");
     assert.equal(happy.json.server_time.endsWith("Z"), true);
   } finally {
