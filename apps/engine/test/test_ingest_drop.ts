@@ -20,6 +20,7 @@ type MockState = {
   acceptedAccessToken: string;
   currentRefreshToken: string;
   refreshCalls: number;
+  forcedMessageResponses: Array<{ status: number; reason_code?: string }>;
 };
 
 type AuthHandle = {
@@ -128,6 +129,20 @@ async function startMockServer(state: MockState): Promise<{ baseUrl: string; clo
       const body = await readBodyJson(req);
       state.messageBodies.push(body);
       const idempotencyKey = typeof body.idempotency_key === "string" ? body.idempotency_key : "";
+
+      const forced = state.forcedMessageResponses.shift();
+      if (forced) {
+        res.writeHead(forced.status, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: true,
+            reason_code: forced.reason_code ?? "internal_error",
+            reason: forced.reason_code ?? "internal_error",
+            details: {},
+          }),
+        );
+        return;
+      }
 
       if (state.permanent400) {
         res.writeHead(400, { "content-type": "application/json" });
@@ -295,6 +310,7 @@ async function main(): Promise<void> {
     acceptedAccessToken: "token_fresh_0",
     currentRefreshToken: "refresh_0",
     refreshCalls: 0,
+    forcedMessageResponses: [],
   };
 
   const mock = await startMockServer(state);
@@ -398,6 +414,25 @@ async function main(): Promise<void> {
     };
     assert.equal(errorManifest.http_status, 400);
     assert.equal(errorManifest.reason_code, "missing_field");
+
+    state.permanent400 = false;
+    state.forcedMessageResponses.push({ status: 400, reason_code: "internal_error" });
+    await writeValidItem(dropRoot, "item-g.ingest.json", ["artifact-g.txt"]);
+    await runIngestOnce(cfg);
+    assert.equal(await existsAt(path.join(dropRoot, "_ingested"), "item-g.ingest.json"), true);
+    assert.equal(await existsAt(path.join(dropRoot, "_quarantine"), "item-g.ingest.json"), false);
+
+    state.forcedMessageResponses.push({ status: 503, reason_code: "missing_field" });
+    await writeValidItem(dropRoot, "item-h.ingest.json", ["artifact-h.txt"]);
+    await runIngestOnce(cfg);
+    assert.equal(await existsAt(path.join(dropRoot, "_quarantine"), "item-h.ingest.json"), true);
+    const itemHManifestPath = path.join(dropRoot, "_quarantine", "item-h.ingest.json.error.json");
+    const itemHManifest = JSON.parse(await readFile(itemHManifestPath, "utf8")) as {
+      reason_code?: string;
+      http_status?: number;
+    };
+    assert.equal(itemHManifest.reason_code, "missing_field");
+    assert.equal(itemHManifest.http_status, 503);
 
     const ingestedFiles = await readdir(path.join(dropRoot, "_ingested"));
     assert.ok(ingestedFiles.includes("item-a.ingest.json"));

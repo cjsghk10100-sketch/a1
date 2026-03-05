@@ -2,12 +2,12 @@
 
 As of 2026-03-05, use this compatibility baseline for local and staging integration.
 
-## Baseline Pair
+## Baseline Pair (2026-03-05)
 
 | Component | Repo | Reference |
 | --- | --- | --- |
-| App/API | `a1` | `origin/main@1a9f6d5` |
-| External engine | `eg1` | `origin/main@bd21610` |
+| App/API | `a1` | `origin/main@3a60217` |
+| External engine | `eg1` | `origin/main@6179c21` |
 
 ## Required Interface Contract
 
@@ -18,15 +18,16 @@ As of 2026-03-05, use this compatibility baseline for local and staging integrat
 
 ## Local Smoke Checklist
 
-1. App health reachable: `GET /health` returns 200.
-2. Engine ingest path reachable: `POST /v1/engines/evidence/ingest` contract test green.
-3. Engine bridge tests green:
-   - evidence accepted/deduped
-   - evidence non-200 + legacy fallback
-   - messages non-2xx propagation
+1. Run unified smoke script:
+   - `bash ./scripts/e2e_engine_app_smoke.sh`
+2. Expected:
+   - engine ingest tests pass
+   - app evidence-ingest contract passes
+   - ops-dashboard typecheck/tests pass
 
 ## Rollback Guidance
 
 - Immediate rollback switch:
   - `ENGINE_INGEST_TRANSPORT=messages`
 - Keep app endpoint unchanged; only transport routing is switched in engine.
+- If dashboard bootstrap behavior regresses, rollback app side only by reverting the `ops-dashboard` commit and keep API/engine as-is.
