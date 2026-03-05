@@ -31,3 +31,5 @@ Evidence:
 ## Result
 - Stage B cutover and rollback path both pass in one continuous session.
 - No API contract, schema, or reason code change introduced.
+- Applied baseline commit for actual cutover:
+  - `eg1 origin/main@4b8a429` (default `ENGINE_INGEST_LEGACY_FALLBACK=0`)

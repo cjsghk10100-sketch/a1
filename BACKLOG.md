@@ -28,6 +28,12 @@
 - [x] RLS-006 Stage B cutover rehearsal (fallback off + rollback) — 2026-03-06 PASS
   - `docs/STAGE_B_CUTOVER_REHEARSAL_2026-03-06.md`
   - gate bundle: `/tmp/stageb_cutover_20260306_010744`
+- [x] RLS-007 Stage B actual apply (fallback default off) — 2026-03-06 PASS
+  - engine baseline: `eg1 origin/main@4b8a429`
+  - rollback switch: `ENGINE_INGEST_LEGACY_FALLBACK=1`
+- [x] RLS-008 24h observation thresholds fixed — 2026-03-06 PASS
+  - `401/403`, `cron_stale`, `projection_watermark_missing`
+  - `docs/ENGINE_APP_VERSION_MATRIX.md`, `docs/SYSTEM_HEALTH_v0_2.md`
 
 ---
 
