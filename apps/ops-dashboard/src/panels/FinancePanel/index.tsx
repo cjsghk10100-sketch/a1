@@ -84,8 +84,15 @@ export default function FinancePanel({ mode = "full" }: FinancePanelProps): JSX.
     reportPanelData("finance", polling.data);
   }, [polling.data, reportPanelData]);
 
-  if (!effectiveData && !polling.error) {
-    return <LoadingSkele lines={mode === "summary" ? 6 : 9} />;
+  if (!effectiveData) {
+    return (
+      <div className="space-y-3">
+        {polling.error ? (
+          <ErrorBanner error={polling.error} stale={polling.stale} lastUpdatedAt={polling.lastUpdatedAt} />
+        ) : null}
+        <LoadingSkele lines={mode === "summary" ? 6 : 9} />
+      </div>
+    );
   }
 
   return (
