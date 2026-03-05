@@ -40,10 +40,11 @@ pnpm -C apps/api db:migrate
 pnpm -C apps/api db:status
 ```
 
-## Desktop MVP (Electron)
+## Desktop Runtime (Electron)
 
-Desktop mode is a local runtime wrapper (source + pnpm required).  
-It does **not** build a DMG/installer in this stage.
+Desktop now supports two launch modes:
+- Dev mode (`pnpm desktop:dev`): source tree + pnpm required.
+- Packaged mode (`AgentOS.app`): runs bundled API/web assets without repository path or pnpm at runtime.
 
 1. Start Postgres:
 
@@ -130,7 +131,8 @@ Packaging notes:
 
 - Artifacts are produced in `apps/desktop/dist` (`.dmg`, `.zip`).
 - Current package is unsigned/not notarized (local/internal distribution target).
-- Desktop launcher still depends on local workspace source + pnpm runtime.
+- Packaged app launches bundled API/web runtime in `app.isPackaged` mode.
+- Dev launcher (`pnpm desktop:dev*`) still depends on local workspace source + pnpm runtime.
 
 ## Run Execution (Queued Runs)
 

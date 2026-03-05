@@ -8,6 +8,22 @@
 
 ---
 
+## Now Work (Post-PR18G Release Stabilization)
+- [ ] RLS-001 a2 bridge E2E baseline lock (eg1)
+  - `bash /Users/min/Downloads/a2/mvp/scripts/quality_gate.sh`
+  - `bash /Users/min/Downloads/a2/mvp/scripts/e2e_evidence_ingest.sh` (with live auth/register env)
+  - `bash /Users/min/Downloads/a2/mvp/scripts/e2e_agentapp_bridge_worker.sh`
+- [ ] RLS-002 a1 release docs/runbook alignment
+  - target: `README.md`, `docs/KERNEL_CHANGE_PROTOCOL.md`, `docs/ENGINE_APP_VERSION_MATRIX.md`
+  - rule: no API/schema/event/reason_code changes
+- [ ] RLS-003 a1 release gate rerun
+  - `bash ./scripts/e2e_engine_app_smoke.sh`
+  - `bash ./scripts/e2e_engine_app_live_probe.sh`
+- [ ] RLS-004 baseline SHA sync + push (a1/a2)
+  - update `docs/ENGINE_APP_VERSION_MATRIX.md` with validated pair
+
+---
+
 ## MVP-0: Repo + Dev Environment
 - [x] TASK-001 Repo bootstrap (monorepo layout + pnpm + basic CI)
 - [x] TASK-002 Infra: postgres docker-compose + env example

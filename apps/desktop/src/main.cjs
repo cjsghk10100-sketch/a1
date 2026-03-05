@@ -1,6 +1,6 @@
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
-const { mkdir, writeFile } = require("node:fs/promises");
+const { mkdir, readFile, writeFile } = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
@@ -78,7 +78,7 @@ const webPort = parsePort(process.env.DESKTOP_WEB_PORT, 5173);
 const apiTimeoutMs = parseTimeout(process.env.DESKTOP_API_START_TIMEOUT_MS, 45_000);
 const webTimeoutMs = parseTimeout(process.env.DESKTOP_WEB_START_TIMEOUT_MS, 45_000);
 const runnerMode = parseRunnerMode(process.env.DESKTOP_RUNNER_MODE);
-const webApp = parseWebApp(process.env.DESKTOP_WEB_APP);
+const requestedWebApp = parseWebApp(process.env.DESKTOP_WEB_APP);
 const engineWorkspaceId = process.env.DESKTOP_ENGINE_WORKSPACE_ID?.trim() || "ws_dev";
 const engineRoomId = process.env.DESKTOP_ENGINE_ROOM_ID?.trim() || "";
 const engineActorId = process.env.DESKTOP_ENGINE_ACTOR_ID?.trim() || "desktop_engine";
@@ -99,13 +99,16 @@ const restartBaseDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_BASE_DEL
 const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY_MS, 30_000);
 const noWindow = parseBoolean(process.env.DESKTOP_NO_WINDOW, false);
 const exitAfterReady = parseBoolean(process.env.DESKTOP_EXIT_AFTER_READY, false);
+const forcePackaged = parseBoolean(process.env.DESKTOP_FORCE_PACKAGED, false);
+const isPackagedDesktop = app.isPackaged || forcePackaged;
+const webApp = isPackagedDesktop ? "ops-dashboard" : requestedWebApp;
 const isOpsDashboard = webApp === "ops-dashboard";
 
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
 const bootstrapUrl = isOpsDashboard
   ? `${webBaseUrl}/overview?workspace=${encodeURIComponent(engineWorkspaceId)}`
   : `${webBaseUrl}/desktop-bootstrap`;
-const opsDashboardConfigPath = path.join(REPO_ROOT, "apps/ops-dashboard/public/config.json");
+const configuredOpsBearerToken = process.env.DESKTOP_OPS_BEARER_TOKEN?.trim() || "";
 
 if (desktopUserDataDir) {
   try {
@@ -117,6 +120,18 @@ if (desktopUserDataDir) {
     );
   }
 }
+
+const packagedUnpackedRoot = path.join(process.resourcesPath, "app.asar.unpacked");
+const packagedWebServerScript = path.join(packagedUnpackedRoot, "src", "runtime-web-server.cjs");
+const packagedOpsDashboardRoot = path.join(packagedUnpackedRoot, "runtime", "ops-dashboard");
+const opsDashboardConfigPath = isPackagedDesktop
+  ? path.join(app.getPath("userData"), "ops-dashboard-config.json")
+  : path.join(REPO_ROOT, "apps/ops-dashboard/public/config.json");
+const opsDashboardSessionPath = path.join(app.getPath("userData"), "ops-dashboard-session.json");
+const opsDashboardOwnerSecretPath = path.join(
+  app.getPath("userData"),
+  "ops-dashboard-owner-secret.json",
+);
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -142,6 +157,8 @@ function createManagedComponent(name, options) {
     name,
     enabled: Boolean(options.enabled),
     required: Boolean(options.required),
+    command: options.command ?? PNPM_BIN,
+    cwd: options.cwd ?? REPO_ROOT,
     args: options.args,
     env: options.env,
     ready_url: options.ready_url ?? null,
@@ -164,8 +181,8 @@ function createManagedComponent(name, options) {
 
 const components = {
   api: createManagedComponent("api", {
-    enabled: true,
-    required: true,
+    enabled: !isPackagedDesktop,
+    required: !isPackagedDesktop,
     args: ["-C", "apps/api", "start"],
     env: {
       PORT: String(apiPort),
@@ -181,32 +198,44 @@ const components = {
   web: createManagedComponent("web", {
     enabled: true,
     required: true,
-    args: isOpsDashboard
-      ? ["-C", "apps/ops-dashboard", "dev", "--host", "127.0.0.1", "--port", String(webPort)]
-      : ["-C", "apps/web", "dev", "--host", "127.0.0.1", "--port", String(webPort)],
-    env: isOpsDashboard
+    command: isPackagedDesktop ? process.execPath : PNPM_BIN,
+    cwd: isPackagedDesktop ? path.dirname(packagedWebServerScript) : REPO_ROOT,
+    args: isPackagedDesktop
+      ? [packagedWebServerScript]
+      : isOpsDashboard
+        ? ["-C", "apps/ops-dashboard", "dev", "--host", "127.0.0.1", "--port", String(webPort)]
+        : ["-C", "apps/web", "dev", "--host", "127.0.0.1", "--port", String(webPort)],
+    env: isPackagedDesktop
       ? {
-          VITE_OPS_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+          ELECTRON_RUN_AS_NODE: "1",
+          DESKTOP_WEB_PORT: String(webPort),
+          DESKTOP_WEB_STATIC_ROOT: packagedOpsDashboardRoot,
+          DESKTOP_API_ORIGIN: `http://127.0.0.1:${apiPort}`,
+          DESKTOP_CONFIG_PATH: opsDashboardConfigPath,
         }
-      : {
-          VITE_DEV_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
-          VITE_DESKTOP_RUNNER_MODE: runnerMode,
-          VITE_DESKTOP_API_PORT: String(apiPort),
-          VITE_DESKTOP_WEB_PORT: String(webPort),
-          VITE_DESKTOP_ENGINE_WORKSPACE_ID: engineWorkspaceId,
-          VITE_DESKTOP_ENGINE_ROOM_ID: engineRoomId,
-          VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
-          VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
-          VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
-          ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
-          VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
-        },
+      : isOpsDashboard
+        ? {
+            VITE_OPS_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+          }
+        : {
+            VITE_DEV_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+            VITE_DESKTOP_RUNNER_MODE: runnerMode,
+            VITE_DESKTOP_API_PORT: String(apiPort),
+            VITE_DESKTOP_WEB_PORT: String(webPort),
+            VITE_DESKTOP_ENGINE_WORKSPACE_ID: engineWorkspaceId,
+            VITE_DESKTOP_ENGINE_ROOM_ID: engineRoomId,
+            VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
+            VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
+            VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
+            ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
+            VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
+          },
     ready_url: webBaseUrl,
     ready_timeout_ms: webTimeoutMs,
   }),
   engine: createManagedComponent("engine", {
-    enabled: runnerMode === "external",
-    required: runnerMode === "external",
+    enabled: !isPackagedDesktop && runnerMode === "external",
+    required: !isPackagedDesktop && runnerMode === "external",
     args: ["-C", "apps/engine", "start"],
     env: {
       ENGINE_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
@@ -288,11 +317,30 @@ function readAccessToken(payload) {
   return typeof accessToken === "string" ? accessToken : "";
 }
 
-async function issueOpsDashboardAccessToken() {
-  if (!ownerPassphrase) {
-    throw new Error("missing_owner_passphrase:DESKTOP_OWNER_PASSPHRASE is required for ops-dashboard mode");
-  }
+function readRefreshToken(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const session = payload.session;
+  if (!session || typeof session !== "object") return "";
+  const refreshToken = session.refresh_token;
+  return typeof refreshToken === "string" ? refreshToken : "";
+}
 
+function makeSessionTokens(accessToken, refreshToken) {
+  const access = typeof accessToken === "string" ? accessToken.trim() : "";
+  const refresh = typeof refreshToken === "string" ? refreshToken.trim() : "";
+  if (!access) return null;
+  return {
+    access_token: access,
+    refresh_token: refresh,
+  };
+}
+
+function normalizePassphrase(value) {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+async function bootstrapOwnerSession(passphrase) {
   const bootstrapResponse = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/bootstrap-owner`, {
     method: "POST",
     headers: {
@@ -302,20 +350,24 @@ async function issueOpsDashboardAccessToken() {
     body: JSON.stringify({
       workspace_id: engineWorkspaceId,
       display_name: "Desktop Ops Owner",
-      passphrase: ownerPassphrase,
+      passphrase,
     }),
   });
 
   if (bootstrapResponse.status === 201) {
-    const accessToken = readAccessToken(bootstrapResponse.json);
-    if (accessToken) return accessToken;
+    const tokens = makeSessionTokens(
+      readAccessToken(bootstrapResponse.json),
+      readRefreshToken(bootstrapResponse.json),
+    );
+    if (tokens) return tokens;
     throw new Error("desktop_ops_token_missing:bootstrap_owner");
   }
 
-  if (bootstrapResponse.status !== 409) {
-    throw new Error(`desktop_ops_bootstrap_failed:${bootstrapResponse.status}`);
-  }
+  if (bootstrapResponse.status === 409) return null;
+  throw new Error(`desktop_ops_bootstrap_failed:${bootstrapResponse.status}`);
+}
 
+async function loginOwnerSession(passphrase) {
   const loginResponse = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/login`, {
     method: "POST",
     headers: {
@@ -323,7 +375,7 @@ async function issueOpsDashboardAccessToken() {
     },
     body: JSON.stringify({
       workspace_id: engineWorkspaceId,
-      passphrase: ownerPassphrase,
+      passphrase,
     }),
   });
 
@@ -331,20 +383,157 @@ async function issueOpsDashboardAccessToken() {
     throw new Error(`desktop_ops_login_failed:${loginResponse.status}`);
   }
 
-  const accessToken = readAccessToken(loginResponse.json);
-  if (!accessToken) {
+  const tokens = makeSessionTokens(
+    readAccessToken(loginResponse.json),
+    readRefreshToken(loginResponse.json),
+  );
+  if (!tokens) {
     throw new Error("desktop_ops_token_missing:login");
   }
-  return accessToken;
+  return tokens;
+}
+
+async function issueOpsDashboardSessionWithPassphrase(passphrase) {
+  const normalizedPassphrase = normalizePassphrase(passphrase);
+  const bootstrapTokens = await bootstrapOwnerSession(normalizedPassphrase);
+  const tokens = bootstrapTokens || (await loginOwnerSession(normalizedPassphrase));
+  await writePersistedOwnerPassphrase(normalizedPassphrase);
+  return tokens;
+}
+
+async function readPersistedOpsSession() {
+  try {
+    const raw = await readFile(opsDashboardSessionPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return makeSessionTokens(parsed?.access_token, parsed?.refresh_token);
+  } catch {
+    return null;
+  }
+}
+
+async function writePersistedOpsSession(tokens) {
+  await mkdir(path.dirname(opsDashboardSessionPath), { recursive: true });
+  await writeFile(opsDashboardSessionPath, `${JSON.stringify(tokens, null, 2)}\n`, "utf8");
+}
+
+async function readPersistedOwnerPassphrase() {
+  try {
+    const raw = await readFile(opsDashboardOwnerSecretPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return normalizePassphrase(parsed?.passphrase);
+  } catch {
+    return "";
+  }
+}
+
+async function writePersistedOwnerPassphrase(passphrase) {
+  const normalizedPassphrase = normalizePassphrase(passphrase);
+  if (!normalizedPassphrase) return;
+  await mkdir(path.dirname(opsDashboardOwnerSecretPath), { recursive: true });
+  await writeFile(
+    opsDashboardOwnerSecretPath,
+    `${JSON.stringify({ passphrase: normalizedPassphrase }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+async function refreshSessionWithRefreshToken(refreshToken) {
+  const response = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/refresh`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!response.ok) return null;
+  return makeSessionTokens(readAccessToken(response.json), readRefreshToken(response.json));
+}
+
+async function validateAccessToken(accessToken) {
+  const response = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/session`, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+    },
+  });
+  return response.ok;
+}
+
+async function resolveOpsDashboardSession() {
+  if (ownerPassphrase) {
+    return issueOpsDashboardSessionWithPassphrase(ownerPassphrase);
+  }
+
+  const persisted = await readPersistedOpsSession();
+  if (persisted?.access_token) {
+    const valid = await validateAccessToken(persisted.access_token);
+    if (valid) return persisted;
+  }
+  if (persisted?.refresh_token) {
+    const refreshed = await refreshSessionWithRefreshToken(persisted.refresh_token);
+    if (refreshed) return refreshed;
+  }
+
+  if (isPackagedDesktop) {
+    const persistedPassphrase = await readPersistedOwnerPassphrase();
+    const bootstrapPassphrase =
+      normalizePassphrase(ownerPassphrase) ||
+      normalizePassphrase(persistedPassphrase) ||
+      `desktop_packaged_${randomBytes(18).toString("hex")}`;
+    const bootstrapTokens = await bootstrapOwnerSession(bootstrapPassphrase);
+    if (bootstrapTokens) {
+      await writePersistedOwnerPassphrase(bootstrapPassphrase);
+      return bootstrapTokens;
+    }
+    if (!ownerPassphrase && !persistedPassphrase) {
+      throw new Error("desktop_ops_owner_passphrase_required");
+    }
+    const loginTokens = await loginOwnerSession(bootstrapPassphrase);
+    await writePersistedOwnerPassphrase(bootstrapPassphrase);
+    return loginTokens;
+  }
+
+  throw new Error("desktop_ops_auth_unavailable");
 }
 
 async function prepareOpsDashboardConfig() {
-  const bearerToken = await issueOpsDashboardAccessToken();
+  let sessionTokens = null;
+  try {
+    sessionTokens = await resolveOpsDashboardSession();
+  } catch (err) {
+    const message = String(err instanceof Error ? err.message : err);
+    if (!isPackagedDesktop) {
+      throw err;
+    }
+    const fallbackAccess = configuredOpsBearerToken;
+    if (!fallbackAccess) {
+      throw new Error(`desktop_ops_auth_unavailable:${message}`);
+    }
+    const fallbackValid = await validateAccessToken(fallbackAccess);
+    if (!fallbackValid) {
+      throw new Error(`desktop_ops_auth_unavailable:${message}`);
+    }
+    sessionTokens = {
+      access_token: fallbackAccess,
+      refresh_token: "",
+    };
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[desktop] ops session bootstrap failed in packaged mode; using configured fallback access token (${message})`,
+    );
+  }
+
+  if (sessionTokens?.refresh_token) {
+    await writePersistedOpsSession(sessionTokens);
+  }
+
   const payload = {
     // Route dashboard API calls through the web origin so Vite proxy handles /v1 -> API.
     apiBaseUrl: webBaseUrl,
     defaultWorkspaceId: engineWorkspaceId,
-    bearerToken,
+    bearerToken: sessionTokens.access_token,
     schemaVersion: "2.1",
     healthPollSec: 15,
     financePollSec: 30,
@@ -454,8 +643,8 @@ function updateComponent(component, patch) {
 }
 
 function spawnManagedProcess(component) {
-  const child = spawn(PNPM_BIN, component.args, {
-    cwd: REPO_ROOT,
+  const child = spawn(component.command, component.args, {
+    cwd: component.cwd,
     env: {
       ...process.env,
       ...component.env,
@@ -629,7 +818,7 @@ async function waitForRuntimeReady(timeoutMs) {
         `runtime_fatal:${snapshot.fatal_component ?? "unknown"}:${snapshot.last_error_code ?? "unknown"}`,
       );
     }
-    const apiReady = components.api.state === COMPONENT_STATE.Healthy;
+    const apiReady = !components.api.required || components.api.state === COMPONENT_STATE.Healthy;
     const webReady = components.web.state === COMPONENT_STATE.Healthy;
     const engineReady = !components.engine.required || components.engine.state === COMPONENT_STATE.Healthy;
     if (apiReady && webReady && engineReady) return;
@@ -691,8 +880,9 @@ function createWindow(startUrl) {
 function createFailureWindow(error) {
   const message = String(error instanceof Error ? error.message : error).replaceAll("<", "&lt;");
   const webAppPrefix = isOpsDashboard ? "DESKTOP_WEB_APP=ops-dashboard " : "";
-  const runnerModeHelp =
-    runnerMode === "external"
+  const runnerModeHelp = isPackagedDesktop
+    ? "1) Start API on 127.0.0.1:3000\n2) Reopen desktop app"
+    : runnerMode === "external"
       ? `${webAppPrefix}DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:external`
       : `${webAppPrefix}DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:embedded`;
   const html = `<!doctype html>
@@ -714,12 +904,12 @@ function createFailureWindow(error) {
       <p>Could not start local runtime. Check DB/API logs in the terminal.</p>
       <pre>${message}</pre>
       <p>Recovery:</p>
-      <pre>docker compose -f infra/docker-compose.yml up -d
+      <pre>${isPackagedDesktop ? runnerModeHelp : `docker compose -f infra/docker-compose.yml up -d
 pnpm -C apps/api db:migrate
 pnpm desktop:dev:env
 
 # if port conflict is reported:
-${runnerModeHelp}</pre>
+${runnerModeHelp}`}</pre>
     </div>
   </body>
 </html>`;
@@ -728,7 +918,10 @@ ${runnerModeHelp}</pre>
 }
 
 async function startRuntime() {
-  await Promise.all([ensurePortAvailable(apiPort, "api"), ensurePortAvailable(webPort, "web")]);
+  const portChecks = [];
+  if (components.api.enabled) portChecks.push(ensurePortAvailable(apiPort, "api"));
+  if (components.web.enabled) portChecks.push(ensurePortAvailable(webPort, "web"));
+  await Promise.all(portChecks);
   await startComponent(components.api, "initial");
   if (isOpsDashboard) {
     await prepareOpsDashboardConfig();
@@ -744,7 +937,7 @@ async function boot() {
   try {
     // eslint-disable-next-line no-console
     console.log(
-      `[desktop] booting runtime (mode:${runnerMode}, web_app:${webApp}, api:${apiPort}, web:${webPort}, api_timeout:${apiTimeoutMs}ms, web_timeout:${webTimeoutMs}ms, max_restarts:${restartMaxAttempts})`,
+      `[desktop] booting runtime (mode:${runnerMode}, packaged:${isPackagedDesktop ? "1" : "0"}, web_app:${webApp}, api:${apiPort}, web:${webPort}, api_timeout:${apiTimeoutMs}ms, web_timeout:${webTimeoutMs}ms, max_restarts:${restartMaxAttempts})`,
     );
     await startRuntime();
     if (!noWindow) createWindow(bootstrapUrl);

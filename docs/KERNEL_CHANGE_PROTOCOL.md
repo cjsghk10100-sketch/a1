@@ -58,12 +58,12 @@ git revert <merge_commit_sha>
 |------|------|------|------|----|
 | 2026-02-27 | MINOR | initial kernel version table | 2.1 | #N/A |
 | 2026-02-27 | MINOR | work-item lease v0.1 claim/heartbeat/release | 2.1 | #69 |
-| 2026-02-27 | MINOR | cron v0 heart with lock fencing and watchdog health | 2.1 | #TBD |
-| 2026-02-27 | MINOR | lease-write enforcement and terminal auto-release in messages API | 2.1 | #TBD |
-| 2026-02-27 | MINOR | add rate_limited(429) + rate_limit/DLQ tables for PR-4 | 2.1 | #TBD |
-| 2026-02-28 | MINOR | evidence gate v0.1 projection resolver + composite cursor + envelope metadata | 2.1 | #TBD |
-| 2026-02-28 | MINOR | runtime hardening: projector occurred_at guards, rate-limit SRE tuning, ingest safety | 2.1 | #TBD |
-| 2026-03-02 | MINOR | system health summary v0.2, workspace-scoped ops metrics cache, projector watermark table | 2.1 | #TBD |
-| 2026-03-02 | MINOR | system health drilldown v0.1 endpoint + ops drilldown pagination indexes | 2.1 | #TBD |
-| 2026-03-02 | MINOR | finance.usage_recorded event + proj_finance_daily projector/read integration | 2.1 | #TBD |
+| 2026-02-27 | MINOR | cron v0 heart with lock fencing and watchdog health | 2.1 | #71 |
+| 2026-02-27 | MINOR | lease-write enforcement and terminal auto-release in messages API | 2.1 | #70 |
+| 2026-02-27 | MINOR | add rate_limited(429) + rate_limit/DLQ tables for PR-4 | 2.1 | #72 |
+| 2026-02-28 | MINOR | evidence gate v0.1 projection resolver + composite cursor + envelope metadata | 2.1 | #76 |
+| 2026-02-28 | MINOR | runtime hardening: projector occurred_at guards, rate-limit SRE tuning, ingest safety | 2.1 | #76 |
+| 2026-03-02 | MINOR | system health summary v0.2, workspace-scoped ops metrics cache, projector watermark table | 2.1 | #87/#88 |
+| 2026-03-02 | MINOR | system health drilldown v0.1 endpoint + ops drilldown pagination indexes | 2.1 | #89 |
+| 2026-03-02 | MINOR | finance.usage_recorded event + proj_finance_daily projector/read integration | 2.1 | #91/#92 |
 ---

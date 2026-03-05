@@ -7,12 +7,16 @@
   "scripts": {
     "dev": "electron src/main.cjs",
     "dev:ops": "DESKTOP_WEB_APP=ops-dashboard electron src/main.cjs",
+    "prepare:runtime": "pnpm -C ../ops-dashboard build && node scripts/prepare-runtime.mjs",
+    "predist": "pnpm prepare:runtime",
+    "predist:mac": "pnpm prepare:runtime",
+    "predist:zip": "pnpm prepare:runtime",
     "dist": "electron-builder --config electron-builder.yml --publish never",
     "dist:mac": "electron-builder --config electron-builder.yml --mac dmg zip --arm64 --publish never",
     "dist:zip": "electron-builder --config electron-builder.yml --mac zip --arm64 --publish never",
     "smoke:embedded": "node scripts/smoke.mjs --mode=embedded",
     "smoke:external": "node scripts/smoke.mjs --mode=external",
-    "typecheck": "node --check src/main.cjs && node --check src/preload.cjs && node --check scripts/smoke.mjs"
+    "typecheck": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/runtime-web-server.cjs && node --check scripts/smoke.mjs && node --check scripts/prepare-runtime.mjs"
   },
   "devDependencies": {
     "electron": "^30.5.1",
