@@ -11,6 +11,21 @@ import { pipeline } from "node:stream/promises";
 const DEFAULT_SCHEMA_VERSION = "2.1";
 const DEFAULT_POLL_MS = 1200;
 
+export const INGEST_REJECT_PERMANENT_REASON_CODES = new Set([
+  "missing_field",
+  "missing_required_field",
+  "invalid_payload_combination",
+  "payload_too_large",
+  "unauthorized_workspace",
+  "unknown_agent",
+  "missing_workspace_header",
+]);
+
+export const INGEST_REJECT_TRANSIENT_REASON_CODES = new Set([
+  "rate_limited",
+  "internal_error",
+]);
+
 export type IngestConfig = {
   apiBaseUrl: string;
   workspaceId: string;
@@ -607,6 +622,12 @@ function guessContentType(filePath: string): string {
 }
 
 function classifyHttpError(status: number, reasonCode: string | undefined): { transient: boolean; permanent: boolean } {
+  if (reasonCode && INGEST_REJECT_TRANSIENT_REASON_CODES.has(reasonCode)) {
+    return { transient: true, permanent: false };
+  }
+  if (reasonCode && INGEST_REJECT_PERMANENT_REASON_CODES.has(reasonCode)) {
+    return { transient: false, permanent: true };
+  }
   if (status === 429 || status === 502 || status === 503 || status === 504) {
     return { transient: true, permanent: false };
   }
@@ -1221,6 +1242,14 @@ async function processClaimedItem(
       const permanentByRule = isPermanentError(err) || isLocalPermanentError(err);
       const transient = isTransientError(err) || (!http && !permanentByRule);
       const permanent = permanentByRule || Boolean(http && !transient);
+      if (http) {
+        logEvent(cfg, "http_rejected_classified", itemName, resolvedCorrelationId, {
+          reason_code: reasonCode,
+          http_status: http.status,
+          transient,
+          permanent,
+        });
+      }
 
       state.last_error = {
         message: reason,
@@ -1261,6 +1290,7 @@ async function processClaimedItem(
         retry_after_sec: retryAfterSec,
         backoff_ms: waitMs,
         reason_code: reasonCode,
+        http_status: http?.status,
       });
       await sleep(waitMs);
     }

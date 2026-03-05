@@ -54,3 +54,12 @@
 
 - For current app/API ↔ external engine compatibility pair, see:
   - `docs/ENGINE_APP_VERSION_MATRIX.md`
+
+## Local verification shortcut
+
+- Run once:
+  - `bash ./scripts/e2e_engine_app_smoke.sh`
+- This script validates:
+  - `apps/engine` ingest tests
+  - API `contract_engine_evidence_ingest`
+  - `apps/ops-dashboard` typecheck/tests

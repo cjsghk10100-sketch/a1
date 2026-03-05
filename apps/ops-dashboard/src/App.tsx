@@ -96,6 +96,50 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
     [config.apiBaseUrl, config.bearerToken, config.schemaVersion, workspaceId],
   );
 
+  useEffect(() => {
+    if (panelData.health && panelData.finance) return;
+
+    const healthAbort = new AbortController();
+    const financeAbort = new AbortController();
+    let cancelled = false;
+
+    const preload = async () => {
+      const [healthResult, financeResult] = await Promise.all([
+        panelData.health
+          ? Promise.resolve({ ok: false as const })
+          : client.post<HealthResponse>(
+              "/v1/system/health",
+              { schema_version: config.schemaVersion },
+              healthAbort.signal,
+            ),
+        panelData.finance
+          ? Promise.resolve({ ok: false as const })
+          : client.post<FinanceResponse>(
+              "/v1/finance/projection",
+              {
+                schema_version: config.schemaVersion,
+                days_back: config.financeDaysBack,
+                include: ["top_models"],
+              },
+              financeAbort.signal,
+            ),
+      ]);
+
+      if (cancelled) return;
+      setPanelData((prev) => ({
+        health: healthResult.ok ? healthResult.data : prev.health,
+        finance: financeResult.ok ? financeResult.data : prev.finance,
+      }));
+    };
+
+    void preload();
+    return () => {
+      cancelled = true;
+      healthAbort.abort();
+      financeAbort.abort();
+    };
+  }, [client, config.financeDaysBack, config.schemaVersion, panelData.finance, panelData.health]);
+
   const registerRefresh = useCallback((panelId: string, cb: () => void) => {
     refreshHandlersRef.current.set(panelId, cb);
     return () => {
