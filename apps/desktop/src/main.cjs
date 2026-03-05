@@ -78,7 +78,7 @@ const webPort = parsePort(process.env.DESKTOP_WEB_PORT, 5173);
 const apiTimeoutMs = parseTimeout(process.env.DESKTOP_API_START_TIMEOUT_MS, 45_000);
 const webTimeoutMs = parseTimeout(process.env.DESKTOP_WEB_START_TIMEOUT_MS, 45_000);
 const runnerMode = parseRunnerMode(process.env.DESKTOP_RUNNER_MODE);
-const webApp = parseWebApp(process.env.DESKTOP_WEB_APP);
+const requestedWebApp = parseWebApp(process.env.DESKTOP_WEB_APP);
 const engineWorkspaceId = process.env.DESKTOP_ENGINE_WORKSPACE_ID?.trim() || "ws_dev";
 const engineRoomId = process.env.DESKTOP_ENGINE_ROOM_ID?.trim() || "";
 const engineActorId = process.env.DESKTOP_ENGINE_ACTOR_ID?.trim() || "desktop_engine";
@@ -99,9 +99,10 @@ const restartBaseDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_BASE_DEL
 const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY_MS, 30_000);
 const noWindow = parseBoolean(process.env.DESKTOP_NO_WINDOW, false);
 const exitAfterReady = parseBoolean(process.env.DESKTOP_EXIT_AFTER_READY, false);
-const isOpsDashboard = webApp === "ops-dashboard";
 const forcePackaged = parseBoolean(process.env.DESKTOP_FORCE_PACKAGED, false);
 const isPackagedDesktop = app.isPackaged || forcePackaged;
+const webApp = isPackagedDesktop ? "ops-dashboard" : requestedWebApp;
+const isOpsDashboard = webApp === "ops-dashboard";
 
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
 const bootstrapUrl = isOpsDashboard
@@ -674,7 +675,7 @@ async function waitForRuntimeReady(timeoutMs) {
         `runtime_fatal:${snapshot.fatal_component ?? "unknown"}:${snapshot.last_error_code ?? "unknown"}`,
       );
     }
-    const apiReady = components.api.state === COMPONENT_STATE.Healthy;
+    const apiReady = !components.api.required || components.api.state === COMPONENT_STATE.Healthy;
     const webReady = components.web.state === COMPONENT_STATE.Healthy;
     const engineReady = !components.engine.required || components.engine.state === COMPONENT_STATE.Healthy;
     if (apiReady && webReady && engineReady) return;
@@ -774,9 +775,6 @@ ${runnerModeHelp}`}</pre>
 }
 
 async function startRuntime() {
-  if (isPackagedDesktop && !isOpsDashboard) {
-    throw new Error("packaged_mode_requires_ops_dashboard");
-  }
   const portChecks = [];
   if (components.api.enabled) portChecks.push(ensurePortAvailable(apiPort, "api"));
   if (components.web.enabled) portChecks.push(ensurePortAvailable(webPort, "web"));
