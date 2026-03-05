@@ -49,3 +49,8 @@
 - `500` response: retry full batch safely (dedupe handles replay).
 - `200` mixed response: retry only rejected events after fixing payload.
 - Accepted and deduped events are replay-safe.
+
+## Version compatibility
+
+- For current app/API ↔ external engine compatibility pair, see:
+  - `docs/ENGINE_APP_VERSION_MATRIX.md`

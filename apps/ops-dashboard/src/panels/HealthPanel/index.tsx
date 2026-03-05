@@ -46,6 +46,15 @@ type NormalizedHealth = {
   topIssues: TopIssue[];
 };
 
+function normalizeSummaryStatus(value: unknown): "OK" | "DEGRADED" | "DOWN" | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "OK") return "OK";
+  if (normalized === "DEGRADED") return "DEGRADED";
+  if (normalized === "DOWN") return "DOWN";
+  return null;
+}
+
 function deriveHealthStatusFromSignals(
   input: {
     cron_freshness_sec: number | null;
@@ -169,8 +178,8 @@ function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
   };
 
   const status =
-    summary.status ??
-    summary.health_summary ??
+    normalizeSummaryStatus(summary.status) ??
+    normalizeSummaryStatus(summary.health_summary) ??
     deriveHealthStatusFromSignals(
       {
         cron_freshness_sec: signals.cron_freshness_sec,
