@@ -25,6 +25,9 @@
 - [x] RLS-005 release closeout note fixed — 2026-03-06 PASS
   - `docs/RELEASE_CLOSEOUT_2026-03-06.md`
   - gate bundle: `/tmp/release_closeout_20260306_005617`
+- [x] RLS-006 Stage B cutover rehearsal (fallback off + rollback) — 2026-03-06 PASS
+  - `docs/STAGE_B_CUTOVER_REHEARSAL_2026-03-06.md`
+  - gate bundle: `/tmp/stageb_cutover_20260306_010744`
 
 ---
 

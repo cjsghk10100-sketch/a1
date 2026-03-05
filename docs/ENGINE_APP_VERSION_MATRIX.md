@@ -7,10 +7,11 @@ As of 2026-03-06, use this compatibility baseline for local and staging integrat
 | Component | Repo | Reference |
 | --- | --- | --- |
 | App/API | `a1` | `origin/main@10030bd` |
-| External engine | `eg1` | `origin/main@fb203a2` |
+| External engine | `eg1` | `origin/main@37d7c85` |
 
 Note:
 - `a1` tip `fb94271` is docs-only closeout; runtime validation baseline remains `10030bd`.
+- `eg1` tip `37d7c85` adds Stage B rehearsal evidence only (no runtime contract change).
 
 ## Required Interface Contract
 
@@ -43,6 +44,22 @@ Note:
    - unified smoke green (`scripts/e2e_engine_app_smoke.sh`)
    - no sustained ingest non-2xx/retry spikes in logs
    - no operator regression on `/v1/system/health` + `/v1/finance/projection`
+
+## Stage B Rehearsal Evidence (2026-03-06)
+
+- Log bundle: `/tmp/stageb_cutover_20260306_010744`
+- Fallback OFF (`ENGINE_INGEST_LEGACY_FALLBACK=0`): PASS
+  - `scripts/e2e_engine_app_smoke.sh`
+  - `scripts/e2e_engine_app_live_probe.sh`
+  - `/Users/min/Downloads/a2/mvp/scripts/quality_gate.sh`
+  - `/Users/min/Downloads/a2/mvp/scripts/e2e_evidence_ingest.sh`
+  - `/Users/min/Downloads/a2/mvp/scripts/e2e_agentapp_bridge_worker.sh`
+- Rollback ON (`ENGINE_INGEST_LEGACY_FALLBACK=1`): PASS
+  - `/Users/min/Downloads/a2/mvp/scripts/e2e_evidence_ingest.sh`
+  - `/Users/min/Downloads/a2/mvp/scripts/e2e_agentapp_bridge_worker.sh`
+- Evidence files:
+  - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260306_010755.md`
+  - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260306_010756.md`
 
 ## Rollback Guidance
 

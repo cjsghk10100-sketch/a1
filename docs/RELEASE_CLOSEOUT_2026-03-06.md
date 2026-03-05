@@ -10,7 +10,7 @@
 ## Pinned Commits
 - a1 runtime merge baseline: `10030bd9e25f709ed5a158eab32f2f2910bc93ad` (PR #114 merge commit)
 - a1 docs closeout baseline: `fb942710e24fbb7702769dc9769e7cdf789d98ac` (PR #115 merge commit)
-- a2 evidence baseline: `fb203a2b6025046ce778c13c9d3725c6673f82f5` (`origin/main`)
+- a2 evidence baseline (Stage B rehearsal update): `37d7c85d42bac322368518d3e01ccf7702764d81` (`origin/main`)
 
 ## Merged PRs
 - PR #114: `https://github.com/cjsghk10100-sketch/a1/pull/114`
@@ -33,8 +33,19 @@
 ## Evidence Artifacts
 - a2 full E2E evidence (tracked):
   - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260306_005620.md`
+- a2 Stage B rehearsal evidence (tracked):
+  - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260306_010755.md`
+  - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260306_010756.md`
 - a2 previous evidence (tracked):
   - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260305_164445.md`
+
+## Stage B Follow-up (2026-03-06, KST)
+- fallback OFF rehearsal (`ENGINE_INGEST_LEGACY_FALLBACK=0`) PASS
+- rollback ON rehearsal (`ENGINE_INGEST_LEGACY_FALLBACK=1`) PASS
+- run bundle:
+  - `/tmp/stageb_cutover_20260306_010744`
+- detail:
+  - `docs/STAGE_B_CUTOVER_REHEARSAL_2026-03-06.md`
 
 ## Operational Triage Order (Fixed)
 When dashboard status is `DOWN`, triage order is fixed:
