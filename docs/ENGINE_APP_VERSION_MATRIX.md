@@ -20,10 +20,13 @@ As of 2026-03-05, use this compatibility baseline for local and staging integrat
 
 1. Run unified smoke script:
    - `bash ./scripts/e2e_engine_app_smoke.sh`
-2. Expected:
+2. With local runtime up (`pnpm desktop:dev:env`), run live probe:
+   - `bash ./scripts/e2e_engine_app_live_probe.sh`
+3. Expected:
    - engine ingest tests pass
    - app evidence-ingest contract passes
    - ops-dashboard typecheck/tests pass
+   - live auth + `/v1/system/health` + `/v1/finance/projection` return contract-shape 200
 
 ## Cutover Sequence (evidence -> fallback-off)
 
