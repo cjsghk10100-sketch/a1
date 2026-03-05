@@ -6,8 +6,8 @@ As of 2026-03-05, use this compatibility baseline for local and staging integrat
 
 | Component | Repo | Reference |
 | --- | --- | --- |
-| App/API | `a1` | `origin/main@6987ca6` |
-| External engine | `eg1` | `origin/main@70c10d2` |
+| App/API | `a1` | `origin/codex/pr18g-quasi-standalone-desktop@4aeb38f` |
+| External engine | `eg1` | `origin/main@1dea213` |
 
 ## Required Interface Contract
 
