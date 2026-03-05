@@ -9,17 +9,18 @@
 ---
 
 ## Now Work (Post-PR18G Release Stabilization)
-- [ ] RLS-001 a2 bridge E2E baseline lock (eg1)
+- [x] RLS-001 a2 bridge E2E baseline lock (eg1) — 2026-03-05 PASS
   - `bash /Users/min/Downloads/a2/mvp/scripts/quality_gate.sh`
-  - `bash /Users/min/Downloads/a2/mvp/scripts/e2e_evidence_ingest.sh` (with live auth/register env)
+  - `bash /Users/min/Downloads/a2/mvp/scripts/e2e_evidence_ingest.sh` (`APP_DATABASE_URL` = `/Users/min/Downloads/agent/.env.desktop` `DATABASE_URL`)
   - `bash /Users/min/Downloads/a2/mvp/scripts/e2e_agentapp_bridge_worker.sh`
-- [ ] RLS-002 a1 release docs/runbook alignment
-  - target: `README.md`, `docs/KERNEL_CHANGE_PROTOCOL.md`, `docs/ENGINE_APP_VERSION_MATRIX.md`
+  - evidence: `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260305_164445.md`
+- [x] RLS-002 a1 release docs/runbook alignment — 2026-03-05 PASS
+  - target: `README.md`, `docs/SYSTEM_HEALTH_v0_2.md`, `docs/KERNEL_CHANGE_PROTOCOL.md`, `docs/ENGINE_APP_VERSION_MATRIX.md`
   - rule: no API/schema/event/reason_code changes
-- [ ] RLS-003 a1 release gate rerun
-  - `bash ./scripts/e2e_engine_app_smoke.sh`
-  - `bash ./scripts/e2e_engine_app_live_probe.sh`
-- [ ] RLS-004 baseline SHA sync + push (a1/a2)
+- [x] RLS-003 a1 release gate rerun — 2026-03-05 PASS
+  - `bash /Users/min/Downloads/agent/scripts/e2e_engine_app_smoke.sh`
+  - `bash /Users/min/Downloads/agent/scripts/e2e_engine_app_live_probe.sh`
+- [x] RLS-004 baseline SHA sync + push (a1/a2) — 2026-03-05 PASS
   - update `docs/ENGINE_APP_VERSION_MATRIX.md` with validated pair
 
 ---

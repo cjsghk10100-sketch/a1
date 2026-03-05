@@ -134,6 +134,20 @@ Packaging notes:
 - Packaged app launches bundled API/web runtime in `app.isPackaged` mode.
 - Dev launcher (`pnpm desktop:dev*`) still depends on local workspace source + pnpm runtime.
 
+## Ops Dashboard DOWN Triage Order
+
+Use this fixed order when dashboard status is `DOWN`:
+
+1. `401/403` auth or workspace mismatch first.
+   - Confirm `/health` is `200`.
+   - Re-login and verify token/session is valid.
+   - Verify workspace header/runtime value matches `DESKTOP_ENGINE_WORKSPACE_ID` (fallback: `DESKTOP_WORKSPACE_ID`).
+2. `cron_stale`.
+   - Probe `POST /v1/system/health` and check `summary.top_issues` for `cron_stale`.
+3. `projection_watermark_missing`.
+   - Probe `POST /v1/system/health` and check `summary.top_issues` for `projection_watermark_missing`.
+   - Treat this after auth and cron checks, not before.
+
 ## Run Execution (Queued Runs)
 
 Queued runs need a worker loop. Choose one mode:
