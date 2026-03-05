@@ -10,7 +10,7 @@
 ## Pinned Commits
 - a1 runtime merge baseline: `10030bd9e25f709ed5a158eab32f2f2910bc93ad` (PR #114 merge commit)
 - a1 docs closeout baseline: `fb942710e24fbb7702769dc9769e7cdf789d98ac` (PR #115 merge commit)
-- a2 evidence baseline: `fb203a2f6eb4a353735c3ff6004cfc4bad357bd9` (`origin/main`)
+- a2 evidence baseline: `fb203a2b6025046ce778c13c9d3725c6673f82f5` (`origin/main`)
 
 ## Merged PRs
 - PR #114: `https://github.com/cjsghk10100-sketch/a1/pull/114`
