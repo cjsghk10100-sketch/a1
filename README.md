@@ -113,6 +113,39 @@ cp .env.desktop.example .env.desktop
 pnpm desktop:dev:env
 ```
 
+### Ops Auto-Recovery Start Order (Fixed)
+
+Use this order for local desktop operations:
+
+```bash
+# 0) runtime path policy
+# real runtime root: /Users/min/agentapp
+# compatibility path: /Users/min/Downloads/agent -> /Users/min/agentapp (symlink)
+
+# 1) install/reload API LaunchAgent (CRON_HEART_ENABLED=1 pinned)
+bash /Users/min/agentapp/scripts/install_api_launchagent.sh
+
+# 2) verify LaunchAgent + API health
+launchctl print gui/$(id -u)/com.agentapp.api | sed -n '1,60p'
+curl -sS http://127.0.0.1:3000/health
+
+# 3) bootstrap workspace projection watermark (idempotent)
+bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev
+
+# 4) final live gate
+bash /Users/min/agentapp/scripts/e2e_engine_app_live_probe.sh
+```
+
+Optional:
+
+```bash
+# remove LaunchAgent registration (keep plist)
+bash /Users/min/agentapp/scripts/uninstall_api_launchagent.sh
+
+# remove LaunchAgent registration + plist file
+bash /Users/min/agentapp/scripts/uninstall_api_launchagent.sh --remove-file
+```
+
 Desktop smoke checks (headless launcher verification):
 
 ```bash
@@ -147,6 +180,9 @@ Use this fixed order when dashboard status is `DOWN`:
 3. `projection_watermark_missing`.
    - Probe `POST /v1/system/health` and check `summary.top_issues` for `projection_watermark_missing`.
    - Treat this after auth and cron checks, not before.
+   - Immediate recovery:
+     - `bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev`
+     - re-run `bash /Users/min/agentapp/scripts/e2e_engine_app_live_probe.sh`
 
 ## Run Execution (Queued Runs)
 
