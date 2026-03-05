@@ -53,13 +53,14 @@ if [[ "$health_code" != "200" ]]; then
 fi
 
 echo "[live-probe] 2/4 login"
-login_code="$(http_json_post "${API_BASE}/v1/auth/login" "" "" "{\"workspace_id\":\"${WORKSPACE_ID}\",\"passphrase\":\"${OWNER_PASSPHRASE}\"}")"
+login_payload="$(jq -n --arg workspace_id "$WORKSPACE_ID" --arg passphrase "$OWNER_PASSPHRASE" '{workspace_id: $workspace_id, passphrase: $passphrase}')"
+login_code="$(http_json_post "${API_BASE}/v1/auth/login" "" "" "$login_payload")"
 if [[ "$login_code" != "200" ]]; then
   echo "[live-probe] login failed: ${login_code}" >&2
   cat "$tmp_body" >&2
   exit 1
 fi
-ACCESS_TOKEN="$(jq -r '.access_token // empty' "$tmp_body")"
+ACCESS_TOKEN="$(jq -r '.session.access_token // .access_token // empty' "$tmp_body")"
 if [[ -z "$ACCESS_TOKEN" ]]; then
   echo "[live-probe] login returned empty access_token" >&2
   cat "$tmp_body" >&2
