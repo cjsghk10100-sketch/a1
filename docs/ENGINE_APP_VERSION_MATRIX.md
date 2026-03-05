@@ -1,13 +1,16 @@
 # Engine-App Version Matrix (a1 ↔ eg1)
 
-As of 2026-03-05, use this compatibility baseline for local and staging integration.
+As of 2026-03-06, use this compatibility baseline for local and staging integration.
 
-## Baseline Pair (2026-03-05)
+## Baseline Pair (2026-03-06)
 
 | Component | Repo | Reference |
 | --- | --- | --- |
 | App/API | `a1` | `origin/main@10030bd` |
-| External engine | `eg1` | `origin/main@b9fb61f` |
+| External engine | `eg1` | `origin/main@fb203a2` |
+
+Note:
+- `a1` tip `fb94271` is docs-only closeout; runtime validation baseline remains `10030bd`.
 
 ## Required Interface Contract
 
