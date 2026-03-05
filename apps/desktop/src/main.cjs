@@ -127,6 +127,7 @@ const packagedOpsDashboardRoot = path.join(packagedUnpackedRoot, "runtime", "ops
 const opsDashboardConfigPath = isPackagedDesktop
   ? path.join(app.getPath("userData"), "ops-dashboard-config.json")
   : path.join(REPO_ROOT, "apps/ops-dashboard/public/config.json");
+const opsDashboardSessionPath = path.join(app.getPath("userData"), "ops-dashboard-session.json");
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -312,11 +313,25 @@ function readAccessToken(payload) {
   return typeof accessToken === "string" ? accessToken : "";
 }
 
-async function issueOpsDashboardAccessToken() {
-  if (!ownerPassphrase) {
-    throw new Error("missing_owner_passphrase:DESKTOP_OWNER_PASSPHRASE is required for ops-dashboard mode");
-  }
+function readRefreshToken(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const session = payload.session;
+  if (!session || typeof session !== "object") return "";
+  const refreshToken = session.refresh_token;
+  return typeof refreshToken === "string" ? refreshToken : "";
+}
 
+function makeSessionTokens(accessToken, refreshToken) {
+  const access = typeof accessToken === "string" ? accessToken.trim() : "";
+  const refresh = typeof refreshToken === "string" ? refreshToken.trim() : "";
+  if (!access) return null;
+  return {
+    access_token: access,
+    refresh_token: refresh,
+  };
+}
+
+async function bootstrapOwnerSession(passphrase) {
   const bootstrapResponse = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/bootstrap-owner`, {
     method: "POST",
     headers: {
@@ -326,20 +341,24 @@ async function issueOpsDashboardAccessToken() {
     body: JSON.stringify({
       workspace_id: engineWorkspaceId,
       display_name: "Desktop Ops Owner",
-      passphrase: ownerPassphrase,
+      passphrase,
     }),
   });
 
   if (bootstrapResponse.status === 201) {
-    const accessToken = readAccessToken(bootstrapResponse.json);
-    if (accessToken) return accessToken;
+    const tokens = makeSessionTokens(
+      readAccessToken(bootstrapResponse.json),
+      readRefreshToken(bootstrapResponse.json),
+    );
+    if (tokens) return tokens;
     throw new Error("desktop_ops_token_missing:bootstrap_owner");
   }
 
-  if (bootstrapResponse.status !== 409) {
-    throw new Error(`desktop_ops_bootstrap_failed:${bootstrapResponse.status}`);
-  }
+  if (bootstrapResponse.status === 409) return null;
+  throw new Error(`desktop_ops_bootstrap_failed:${bootstrapResponse.status}`);
+}
 
+async function loginOwnerSession(passphrase) {
   const loginResponse = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/login`, {
     method: "POST",
     headers: {
@@ -347,7 +366,7 @@ async function issueOpsDashboardAccessToken() {
     },
     body: JSON.stringify({
       workspace_id: engineWorkspaceId,
-      passphrase: ownerPassphrase,
+      passphrase,
     }),
   });
 
@@ -355,11 +374,87 @@ async function issueOpsDashboardAccessToken() {
     throw new Error(`desktop_ops_login_failed:${loginResponse.status}`);
   }
 
-  const accessToken = readAccessToken(loginResponse.json);
-  if (!accessToken) {
+  const tokens = makeSessionTokens(
+    readAccessToken(loginResponse.json),
+    readRefreshToken(loginResponse.json),
+  );
+  if (!tokens) {
     throw new Error("desktop_ops_token_missing:login");
   }
-  return accessToken;
+  return tokens;
+}
+
+async function issueOpsDashboardSessionWithPassphrase(passphrase) {
+  const bootstrapTokens = await bootstrapOwnerSession(passphrase);
+  if (bootstrapTokens) return bootstrapTokens;
+  return loginOwnerSession(passphrase);
+}
+
+async function issueOpsDashboardSessionBootstrapOnly() {
+  const ephemeralPassphrase = `desktop_packaged_${randomBytes(18).toString("hex")}`;
+  return bootstrapOwnerSession(ephemeralPassphrase);
+}
+
+async function readPersistedOpsSession() {
+  try {
+    const raw = await readFile(opsDashboardSessionPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return makeSessionTokens(parsed?.access_token, parsed?.refresh_token);
+  } catch {
+    return null;
+  }
+}
+
+async function writePersistedOpsSession(tokens) {
+  await mkdir(path.dirname(opsDashboardSessionPath), { recursive: true });
+  await writeFile(opsDashboardSessionPath, `${JSON.stringify(tokens, null, 2)}\n`, "utf8");
+}
+
+async function refreshSessionWithRefreshToken(refreshToken) {
+  const response = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/refresh`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!response.ok) return null;
+  return makeSessionTokens(readAccessToken(response.json), readRefreshToken(response.json));
+}
+
+async function validateAccessToken(accessToken) {
+  const response = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/session`, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+    },
+  });
+  return response.ok;
+}
+
+async function resolveOpsDashboardSession() {
+  if (ownerPassphrase) {
+    return issueOpsDashboardSessionWithPassphrase(ownerPassphrase);
+  }
+
+  const persisted = await readPersistedOpsSession();
+  if (persisted?.access_token) {
+    const valid = await validateAccessToken(persisted.access_token);
+    if (valid) return persisted;
+  }
+  if (persisted?.refresh_token) {
+    const refreshed = await refreshSessionWithRefreshToken(persisted.refresh_token);
+    if (refreshed) return refreshed;
+  }
+
+  if (isPackagedDesktop) {
+    const bootstrapOnly = await issueOpsDashboardSessionBootstrapOnly();
+    if (bootstrapOnly) return bootstrapOnly;
+  }
+
+  throw new Error("desktop_ops_auth_unavailable");
 }
 
 async function readPersistedOpsBearerToken() {
@@ -374,23 +469,39 @@ async function readPersistedOpsBearerToken() {
 }
 
 async function prepareOpsDashboardConfig() {
-  let bearerToken = "";
+  let sessionTokens = null;
   try {
-    bearerToken = await issueOpsDashboardAccessToken();
+    sessionTokens = await resolveOpsDashboardSession();
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err);
     if (!isPackagedDesktop) {
       throw err;
     }
-    bearerToken = configuredOpsBearerToken || (await readPersistedOpsBearerToken()) || "desktop_offline_token";
+    const persisted = await readPersistedOpsSession();
+    const fallbackAccess =
+      configuredOpsBearerToken ||
+      (persisted && typeof persisted.access_token === "string" ? persisted.access_token : "") ||
+      (await readPersistedOpsBearerToken());
+    if (!fallbackAccess) {
+      throw new Error(`desktop_ops_auth_unavailable:${message}`);
+    }
+    sessionTokens = {
+      access_token: fallbackAccess,
+      refresh_token: persisted?.refresh_token ?? "",
+    };
     // eslint-disable-next-line no-console
-    console.warn(`[desktop] ops token bootstrap failed in packaged mode; fallback token applied (${message})`);
+    console.warn(`[desktop] ops session bootstrap failed in packaged mode; using fallback access token (${message})`);
   }
+
+  if (sessionTokens?.refresh_token) {
+    await writePersistedOpsSession(sessionTokens);
+  }
+
   const payload = {
     // Route dashboard API calls through the web origin so Vite proxy handles /v1 -> API.
     apiBaseUrl: webBaseUrl,
     defaultWorkspaceId: engineWorkspaceId,
-    bearerToken,
+    bearerToken: sessionTokens.access_token,
     schemaVersion: "2.1",
     healthPollSec: 15,
     financePollSec: 30,
