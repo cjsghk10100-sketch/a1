@@ -51,6 +51,19 @@ When dashboard/runtime reports `DOWN`, triage in this order:
    - Check `summary.top_issues` and drilldown kind `projection_watermark_missing`.
    - Handle this only after auth and `cron_stale` are ruled out.
 
+## Stage B Observation Thresholds (24h Window)
+After applying Stage B (`ENGINE_INGEST_LEGACY_FALLBACK=0`), use this fixed threshold policy:
+
+1. `401/403`
+   - tolerated count: `0` on authenticated probes.
+   - if repeated across two consecutive checks (5-minute interval), trigger rollback (`fallback=1`).
+2. `cron_stale`
+   - alert trigger: `summary.top_issues` includes `cron_stale` for `2` consecutive checks.
+   - rollback after trigger, then investigate cron freshness source.
+3. `projection_watermark_missing`
+   - alert trigger: `summary.top_issues` includes `projection_watermark_missing` for `2` consecutive checks.
+   - rollback after trigger, then investigate projector/watermark pipeline.
+
 ## Caching Semantics
 - Per-workspace cache entry stores `{ payload, stored_at_ms, ttl_ms }`.
 - TTL defaults:

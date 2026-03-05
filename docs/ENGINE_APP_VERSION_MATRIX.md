@@ -7,11 +7,11 @@ As of 2026-03-06, use this compatibility baseline for local and staging integrat
 | Component | Repo | Reference |
 | --- | --- | --- |
 | App/API | `a1` | `origin/main@10030bd` |
-| External engine | `eg1` | `origin/main@37d7c85` |
+| External engine | `eg1` | `origin/main@4b8a429` |
 
 Note:
 - `a1` tip `fb94271` is docs-only closeout; runtime validation baseline remains `10030bd`.
-- `eg1` tip `37d7c85` adds Stage B rehearsal evidence only (no runtime contract change).
+- `eg1` tip `4b8a429` applies Stage B cutover default (`ENGINE_INGEST_LEGACY_FALLBACK=0`).
 
 ## Required Interface Contract
 
@@ -45,6 +45,11 @@ Note:
    - no sustained ingest non-2xx/retry spikes in logs
    - no operator regression on `/v1/system/health` + `/v1/finance/projection`
 
+Current operation mode (Stage B active):
+- `ENGINE_INGEST_TRANSPORT=evidence`
+- `ENGINE_INGEST_LEGACY_FALLBACK=0`
+- rollback switch: `ENGINE_INGEST_LEGACY_FALLBACK=1`
+
 ## Stage B Rehearsal Evidence (2026-03-06)
 
 - Log bundle: `/tmp/stageb_cutover_20260306_010744`
@@ -60,6 +65,19 @@ Note:
 - Evidence files:
   - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260306_010755.md`
   - `/Users/min/Downloads/a2/mvp/evidence/e2e_agentapp_bridge_worker_20260306_010756.md`
+
+## 24h Observation Thresholds (After Stage B Apply)
+
+- Check cadence: every `5m` for `24h`.
+- `401/403`:
+  - threshold: `0` tolerated on authenticated probes.
+  - action: immediate auth/workspace triage; if repeated on next check, rollback (`fallback=1`).
+- `cron_stale`:
+  - threshold: `2` consecutive checks where `summary.top_issues` includes `cron_stale`.
+  - action: rollback (`fallback=1`) and investigate cron freshness path.
+- `projection_watermark_missing`:
+  - threshold: `2` consecutive checks where `summary.top_issues` includes `projection_watermark_missing`.
+  - action: rollback (`fallback=1`) and investigate projector/watermark pipeline.
 
 ## Rollback Guidance
 

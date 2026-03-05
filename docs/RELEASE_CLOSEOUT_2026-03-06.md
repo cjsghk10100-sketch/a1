@@ -10,7 +10,7 @@
 ## Pinned Commits
 - a1 runtime merge baseline: `10030bd9e25f709ed5a158eab32f2f2910bc93ad` (PR #114 merge commit)
 - a1 docs closeout baseline: `fb942710e24fbb7702769dc9769e7cdf789d98ac` (PR #115 merge commit)
-- a2 evidence baseline (Stage B rehearsal update): `37d7c85d42bac322368518d3e01ccf7702764d81` (`origin/main`)
+- a2 cutover baseline (Stage B applied): `4b8a429e8ac09d7aedbd96d474415e7764a78530` (`origin/main`)
 
 ## Merged PRs
 - PR #114: `https://github.com/cjsghk10100-sketch/a1/pull/114`
@@ -42,6 +42,7 @@
 ## Stage B Follow-up (2026-03-06, KST)
 - fallback OFF rehearsal (`ENGINE_INGEST_LEGACY_FALLBACK=0`) PASS
 - rollback ON rehearsal (`ENGINE_INGEST_LEGACY_FALLBACK=1`) PASS
+- fallback default apply commit pushed (`ENGINE_INGEST_LEGACY_FALLBACK` default `0`)
 - run bundle:
   - `/tmp/stageb_cutover_20260306_010744`
 - detail:
