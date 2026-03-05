@@ -1,7 +1,8 @@
-import { lazy } from "react";
-import type { ComponentType, LazyExoticComponent } from "react";
+import type { ComponentType } from "react";
 
 import type { I18nKey } from "../i18n/messages";
+import HealthPanel from "./HealthPanel";
+import FinancePanel from "./FinancePanel";
 
 export type PanelMode = "summary" | "full";
 
@@ -14,7 +15,7 @@ export type PanelDefinition = {
   labelKey: I18nKey;
   icon?: ComponentType;
   route: `/${string}`;
-  component: LazyExoticComponent<ComponentType<PanelComponentProps>>;
+  component: ComponentType<PanelComponentProps>;
   pollIntervalMs?: number;
   gridSpan?: 1 | 2;
 };
@@ -24,7 +25,7 @@ export const PANEL_REGISTRY: PanelDefinition[] = [
     id: "health",
     labelKey: "panel.health.label",
     route: "/health",
-    component: lazy(() => import("./HealthPanel")),
+    component: HealthPanel,
     pollIntervalMs: 15_000,
     gridSpan: 1,
   },
@@ -32,7 +33,7 @@ export const PANEL_REGISTRY: PanelDefinition[] = [
     id: "finance",
     labelKey: "panel.finance.label",
     route: "/finance",
-    component: lazy(() => import("./FinancePanel")),
+    component: FinancePanel,
     pollIntervalMs: 30_000,
     gridSpan: 1,
   },
