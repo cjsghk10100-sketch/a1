@@ -48,6 +48,31 @@
 - detail:
   - `docs/STAGE_B_CUTOVER_REHEARSAL_2026-03-06.md`
 
+## Ops Auto-Recovery Hardening (2026-03-06, KST)
+- objective: prevent recurring desktop `DOWN` due to local API runtime startup drift.
+- applied:
+  1. LaunchAgent install/uninstall automation added.
+     - `bash /Users/min/agentapp/scripts/install_api_launchagent.sh`
+     - `bash /Users/min/agentapp/scripts/uninstall_api_launchagent.sh`
+  2. workspace projection bootstrap added.
+     - `bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev`
+- runtime path policy:
+  - real root: `/Users/min/agentapp`
+  - compatibility symlink: `/Users/min/Downloads/agent -> /Users/min/agentapp`
+- verification chain (executed):
+  1. `launchctl print gui/$(id -u)/com.agentapp.api` -> running
+  2. `curl -sS http://127.0.0.1:3000/health` -> `200`
+  3. `bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev` -> idempotent PASS
+  4. `bash /Users/min/agentapp/scripts/e2e_engine_app_live_probe.sh` -> PASS (`ws_dev`)
+- scenario checks:
+  1. API restart recovery (`launchctl kill TERM ...`) -> auto-restart PASS (`/health=200`)
+  2. cron freshness check (`heart_cron age_sec`) -> PASS (`<=600`)
+  3. watermark missing recovery (`delete watermark -> bootstrap -> health`) -> PASS
+  4. live probe regression (2x rerun) -> PASS/PASS
+- status result:
+  - `/v1/system/health` summary `health_summary=OK`
+  - `top_issues=[]`
+
 ## Operational Triage Order (Fixed)
 When dashboard status is `DOWN`, triage order is fixed:
 1. `401/403` auth/workspace mismatch

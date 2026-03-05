@@ -34,6 +34,17 @@
 - [x] RLS-008 24h observation thresholds fixed — 2026-03-06 PASS
   - `401/403`, `cron_stale`, `projection_watermark_missing`
   - `docs/ENGINE_APP_VERSION_MATRIX.md`, `docs/SYSTEM_HEALTH_v0_2.md`
+- [x] RLS-009 API LaunchAgent auto-recovery hardening — 2026-03-06 PASS
+  - scripts: `scripts/install_api_launchagent.sh`, `scripts/uninstall_api_launchagent.sh`
+  - defaults fixed: `WorkingDirectory=/Users/min/agentapp`, `CRON_HEART_ENABLED=1`, absolute `pnpm`
+- [x] RLS-010 workspace health bootstrap hardening — 2026-03-06 PASS
+  - script: `scripts/bootstrap_workspace_health.sh`
+  - policy: seed `projector_watermarks` from `evt_events.max(occurred_at)` only when workspace row is missing
+- [x] RLS-011 operations validation chain rerun — 2026-03-06 PASS
+  - `launchctl print gui/$(id -u)/com.agentapp.api`
+  - `curl -sS http://127.0.0.1:3000/health`
+  - `bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev`
+  - `bash /Users/min/agentapp/scripts/e2e_engine_app_live_probe.sh`
 
 ---
 

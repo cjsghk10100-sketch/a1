@@ -50,6 +50,23 @@ When dashboard/runtime reports `DOWN`, triage in this order:
 3. `projection_watermark_missing`.
    - Check `summary.top_issues` and drilldown kind `projection_watermark_missing`.
    - Handle this only after auth and `cron_stale` are ruled out.
+   - Immediate recovery command:
+     - `bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev`
+   - Then re-validate:
+     - `bash /Users/min/agentapp/scripts/e2e_engine_app_live_probe.sh`
+
+## Immediate Recovery: `projection_watermark_missing`
+Use this runbook step when `summary.top_issues` contains `projection_watermark_missing`:
+
+1. Optional dry-run preview:
+   - `bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev --dry-run`
+2. Apply bootstrap:
+   - `bash /Users/min/agentapp/scripts/bootstrap_workspace_health.sh --workspace ws_dev`
+3. Confirm health gate:
+   - `bash /Users/min/agentapp/scripts/e2e_engine_app_live_probe.sh`
+4. Success condition:
+   - `/v1/system/health` summary reports `health_summary=OK`
+   - `top_issues` does not include `projection_watermark_missing`
 
 ## Stage B Observation Thresholds (24h Window)
 After applying Stage B (`ENGINE_INGEST_LEGACY_FALLBACK=0`), use this fixed threshold policy:
