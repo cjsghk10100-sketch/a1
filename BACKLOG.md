@@ -22,6 +22,9 @@
   - `bash /Users/min/Downloads/agent/scripts/e2e_engine_app_live_probe.sh`
 - [x] RLS-004 baseline SHA sync + push (a1/a2) — 2026-03-05 PASS
   - update `docs/ENGINE_APP_VERSION_MATRIX.md` with validated pair
+- [x] RLS-005 release closeout note fixed — 2026-03-06 PASS
+  - `docs/RELEASE_CLOSEOUT_2026-03-06.md`
+  - gate bundle: `/tmp/release_closeout_20260306_005617`
 
 ---
 
