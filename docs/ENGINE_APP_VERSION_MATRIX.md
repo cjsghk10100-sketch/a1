@@ -6,8 +6,8 @@ As of 2026-03-05, use this compatibility baseline for local and staging integrat
 
 | Component | Repo | Reference |
 | --- | --- | --- |
-| App/API | `a1` | `origin/main@3a60217` |
-| External engine | `eg1` | `origin/main@6179c21` |
+| App/API | `a1` | `origin/main@6987ca6` |
+| External engine | `eg1` | `origin/main@70c10d2` |
 
 ## Required Interface Contract
 
@@ -25,9 +25,25 @@ As of 2026-03-05, use this compatibility baseline for local and staging integrat
    - app evidence-ingest contract passes
    - ops-dashboard typecheck/tests pass
 
+## Cutover Sequence (evidence -> fallback-off)
+
+1. Stage A (safe default):
+   - `ENGINE_INGEST_TRANSPORT=evidence`
+   - `ENGINE_INGEST_LEGACY_FALLBACK=1`
+2. Stage B (after stability window):
+   - keep transport `evidence`
+   - switch fallback to `ENGINE_INGEST_LEGACY_FALLBACK=0`
+3. Stability gate before Stage B:
+   - unified smoke green (`scripts/e2e_engine_app_smoke.sh`)
+   - no sustained ingest non-2xx/retry spikes in logs
+   - no operator regression on `/v1/system/health` + `/v1/finance/projection`
+
 ## Rollback Guidance
 
 - Immediate rollback switch:
   - `ENGINE_INGEST_TRANSPORT=messages`
-- Keep app endpoint unchanged; only transport routing is switched in engine.
+- Secondary rollback (keep evidence transport but re-enable fallback):
+  - `ENGINE_INGEST_TRANSPORT=evidence`
+  - `ENGINE_INGEST_LEGACY_FALLBACK=1`
+- Keep app endpoint unchanged; transport routing is switched in engine only.
 - If dashboard bootstrap behavior regresses, rollback app side only by reverting the `ops-dashboard` commit and keep API/engine as-is.
