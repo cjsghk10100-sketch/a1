@@ -208,7 +208,16 @@ function normalizeHealth(response: HealthResponse | null): NormalizedHealth {
 
 export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.Element {
   const { config } = useConfig();
-  const { client, workspaceId, registerRefresh, reportPanelStatus, reportPanelData, panelData, refreshNonce } =
+  const {
+    client,
+    workspaceId,
+    registerRefresh,
+    reportPanelStatus,
+    reportPanelData,
+    panelData,
+    panelStatuses,
+    refreshNonce,
+  } =
     useDashboardContext();
   const healthFetcher = useCallback(
     (signal: AbortSignal) => fetchHealth(client, config.schemaVersion, signal),
@@ -243,6 +252,7 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
     }
     return "DOWN" as const;
   }, [normalized.status, polling.error]);
+  const displayStatus = normalized.status ?? panelStatuses.health?.status ?? reportedPanelStatus ?? null;
 
   const previousServerTimeRef = useRef<string | null>(null);
   useEffect(() => {
@@ -286,8 +296,15 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
     reportPanelData("health", polling.data);
   }, [polling.data, reportPanelData]);
 
-  if (!effectiveData && !polling.error) {
-    return <LoadingSkele lines={mode === "summary" ? 6 : 10} />;
+  if (!effectiveData) {
+    return (
+      <div className="space-y-3">
+        {polling.error ? (
+          <ErrorBanner error={polling.error} stale={polling.stale} lastUpdatedAt={polling.lastUpdatedAt} />
+        ) : null}
+        <LoadingSkele lines={mode === "summary" ? 6 : 10} />
+      </div>
+    );
   }
 
   return (
@@ -300,7 +317,7 @@ export default function HealthPanel({ mode = "full" }: HealthPanelProps): JSX.El
         <DataExport panelId="health" workspaceId={workspaceId} data={effectiveData ?? {}} />
       </div>
 
-      <StatusHero status={normalized.status} reasons={normalized.reasons} />
+      <StatusHero status={displayStatus} reasons={normalized.reasons} />
 
       <SignalsList
         cronFreshnessSec={normalized.signals.cron_freshness_sec}
