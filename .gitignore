@@ -12,6 +12,7 @@ dist/
 build/
 .out/
 coverage/
+apps/desktop/runtime/
 
 # Logs
 *.log

@@ -7,9 +7,14 @@ directories:
 files:
   - src/main.cjs
   - src/preload.cjs
+  - src/runtime-web-server.cjs
+  - runtime/**
   - package.json
 
 asar: true
+asarUnpack:
+  - src/runtime-web-server.cjs
+  - runtime/**
 npmRebuild: false
 
 mac:

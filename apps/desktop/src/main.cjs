@@ -1,6 +1,6 @@
 const { spawn } = require("node:child_process");
 const { randomBytes } = require("node:crypto");
-const { mkdir, writeFile } = require("node:fs/promises");
+const { mkdir, readFile, writeFile } = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
@@ -100,12 +100,14 @@ const restartMaxDelayMs = parsePositiveInt(process.env.DESKTOP_RESTART_MAX_DELAY
 const noWindow = parseBoolean(process.env.DESKTOP_NO_WINDOW, false);
 const exitAfterReady = parseBoolean(process.env.DESKTOP_EXIT_AFTER_READY, false);
 const isOpsDashboard = webApp === "ops-dashboard";
+const forcePackaged = parseBoolean(process.env.DESKTOP_FORCE_PACKAGED, false);
+const isPackagedDesktop = app.isPackaged || forcePackaged;
 
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
 const bootstrapUrl = isOpsDashboard
   ? `${webBaseUrl}/overview?workspace=${encodeURIComponent(engineWorkspaceId)}`
   : `${webBaseUrl}/desktop-bootstrap`;
-const opsDashboardConfigPath = path.join(REPO_ROOT, "apps/ops-dashboard/public/config.json");
+const configuredOpsBearerToken = process.env.DESKTOP_OPS_BEARER_TOKEN?.trim() || "";
 
 if (desktopUserDataDir) {
   try {
@@ -117,6 +119,13 @@ if (desktopUserDataDir) {
     );
   }
 }
+
+const packagedUnpackedRoot = path.join(process.resourcesPath, "app.asar.unpacked");
+const packagedWebServerScript = path.join(packagedUnpackedRoot, "src", "runtime-web-server.cjs");
+const packagedOpsDashboardRoot = path.join(packagedUnpackedRoot, "runtime", "ops-dashboard");
+const opsDashboardConfigPath = isPackagedDesktop
+  ? path.join(app.getPath("userData"), "ops-dashboard-config.json")
+  : path.join(REPO_ROOT, "apps/ops-dashboard/public/config.json");
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -142,6 +151,8 @@ function createManagedComponent(name, options) {
     name,
     enabled: Boolean(options.enabled),
     required: Boolean(options.required),
+    command: options.command ?? PNPM_BIN,
+    cwd: options.cwd ?? REPO_ROOT,
     args: options.args,
     env: options.env,
     ready_url: options.ready_url ?? null,
@@ -164,8 +175,8 @@ function createManagedComponent(name, options) {
 
 const components = {
   api: createManagedComponent("api", {
-    enabled: true,
-    required: true,
+    enabled: !isPackagedDesktop,
+    required: !isPackagedDesktop,
     args: ["-C", "apps/api", "start"],
     env: {
       PORT: String(apiPort),
@@ -181,32 +192,44 @@ const components = {
   web: createManagedComponent("web", {
     enabled: true,
     required: true,
-    args: isOpsDashboard
-      ? ["-C", "apps/ops-dashboard", "dev", "--host", "127.0.0.1", "--port", String(webPort)]
-      : ["-C", "apps/web", "dev", "--host", "127.0.0.1", "--port", String(webPort)],
-    env: isOpsDashboard
+    command: isPackagedDesktop ? process.execPath : PNPM_BIN,
+    cwd: isPackagedDesktop ? path.dirname(packagedWebServerScript) : REPO_ROOT,
+    args: isPackagedDesktop
+      ? [packagedWebServerScript]
+      : isOpsDashboard
+        ? ["-C", "apps/ops-dashboard", "dev", "--host", "127.0.0.1", "--port", String(webPort)]
+        : ["-C", "apps/web", "dev", "--host", "127.0.0.1", "--port", String(webPort)],
+    env: isPackagedDesktop
       ? {
-          VITE_OPS_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+          ELECTRON_RUN_AS_NODE: "1",
+          DESKTOP_WEB_PORT: String(webPort),
+          DESKTOP_WEB_STATIC_ROOT: packagedOpsDashboardRoot,
+          DESKTOP_API_ORIGIN: `http://127.0.0.1:${apiPort}`,
+          DESKTOP_CONFIG_PATH: opsDashboardConfigPath,
         }
-      : {
-          VITE_DEV_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
-          VITE_DESKTOP_RUNNER_MODE: runnerMode,
-          VITE_DESKTOP_API_PORT: String(apiPort),
-          VITE_DESKTOP_WEB_PORT: String(webPort),
-          VITE_DESKTOP_ENGINE_WORKSPACE_ID: engineWorkspaceId,
-          VITE_DESKTOP_ENGINE_ROOM_ID: engineRoomId,
-          VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
-          VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
-          VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
-          ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
-          VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
-        },
+      : isOpsDashboard
+        ? {
+            VITE_OPS_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+          }
+        : {
+            VITE_DEV_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
+            VITE_DESKTOP_RUNNER_MODE: runnerMode,
+            VITE_DESKTOP_API_PORT: String(apiPort),
+            VITE_DESKTOP_WEB_PORT: String(webPort),
+            VITE_DESKTOP_ENGINE_WORKSPACE_ID: engineWorkspaceId,
+            VITE_DESKTOP_ENGINE_ROOM_ID: engineRoomId,
+            VITE_DESKTOP_ENGINE_ACTOR_ID: engineActorId,
+            VITE_DESKTOP_ENGINE_POLL_MS: String(enginePollMs),
+            VITE_DESKTOP_ENGINE_MAX_CLAIMS_PER_CYCLE: String(engineMaxClaimsPerCycle),
+            ...(ownerPassphrase ? { VITE_AUTH_OWNER_PASSPHRASE: ownerPassphrase } : {}),
+            VITE_AUTH_BOOTSTRAP_TOKEN: bootstrapToken,
+          },
     ready_url: webBaseUrl,
     ready_timeout_ms: webTimeoutMs,
   }),
   engine: createManagedComponent("engine", {
-    enabled: runnerMode === "external",
-    required: runnerMode === "external",
+    enabled: !isPackagedDesktop && runnerMode === "external",
+    required: !isPackagedDesktop && runnerMode === "external",
     args: ["-C", "apps/engine", "start"],
     env: {
       ENGINE_API_BASE_URL: `http://127.0.0.1:${apiPort}`,
@@ -338,8 +361,30 @@ async function issueOpsDashboardAccessToken() {
   return accessToken;
 }
 
+async function readPersistedOpsBearerToken() {
+  try {
+    const raw = await readFile(opsDashboardConfigPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const token = typeof parsed?.bearerToken === "string" ? parsed.bearerToken.trim() : "";
+    return token || "";
+  } catch {
+    return "";
+  }
+}
+
 async function prepareOpsDashboardConfig() {
-  const bearerToken = await issueOpsDashboardAccessToken();
+  let bearerToken = "";
+  try {
+    bearerToken = await issueOpsDashboardAccessToken();
+  } catch (err) {
+    const message = String(err instanceof Error ? err.message : err);
+    if (!isPackagedDesktop) {
+      throw err;
+    }
+    bearerToken = configuredOpsBearerToken || (await readPersistedOpsBearerToken()) || "desktop_offline_token";
+    // eslint-disable-next-line no-console
+    console.warn(`[desktop] ops token bootstrap failed in packaged mode; fallback token applied (${message})`);
+  }
   const payload = {
     // Route dashboard API calls through the web origin so Vite proxy handles /v1 -> API.
     apiBaseUrl: webBaseUrl,
@@ -454,8 +499,8 @@ function updateComponent(component, patch) {
 }
 
 function spawnManagedProcess(component) {
-  const child = spawn(PNPM_BIN, component.args, {
-    cwd: REPO_ROOT,
+  const child = spawn(component.command, component.args, {
+    cwd: component.cwd,
     env: {
       ...process.env,
       ...component.env,
@@ -691,8 +736,9 @@ function createWindow(startUrl) {
 function createFailureWindow(error) {
   const message = String(error instanceof Error ? error.message : error).replaceAll("<", "&lt;");
   const webAppPrefix = isOpsDashboard ? "DESKTOP_WEB_APP=ops-dashboard " : "";
-  const runnerModeHelp =
-    runnerMode === "external"
+  const runnerModeHelp = isPackagedDesktop
+    ? "1) Start API on 127.0.0.1:3000\n2) Reopen desktop app"
+    : runnerMode === "external"
       ? `${webAppPrefix}DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:external`
       : `${webAppPrefix}DESKTOP_API_PORT=3301 DESKTOP_WEB_PORT=5174 pnpm desktop:dev:embedded`;
   const html = `<!doctype html>
@@ -714,12 +760,12 @@ function createFailureWindow(error) {
       <p>Could not start local runtime. Check DB/API logs in the terminal.</p>
       <pre>${message}</pre>
       <p>Recovery:</p>
-      <pre>docker compose -f infra/docker-compose.yml up -d
+      <pre>${isPackagedDesktop ? runnerModeHelp : `docker compose -f infra/docker-compose.yml up -d
 pnpm -C apps/api db:migrate
 pnpm desktop:dev:env
 
 # if port conflict is reported:
-${runnerModeHelp}</pre>
+${runnerModeHelp}`}</pre>
     </div>
   </body>
 </html>`;
@@ -728,7 +774,13 @@ ${runnerModeHelp}</pre>
 }
 
 async function startRuntime() {
-  await Promise.all([ensurePortAvailable(apiPort, "api"), ensurePortAvailable(webPort, "web")]);
+  if (isPackagedDesktop && !isOpsDashboard) {
+    throw new Error("packaged_mode_requires_ops_dashboard");
+  }
+  const portChecks = [];
+  if (components.api.enabled) portChecks.push(ensurePortAvailable(apiPort, "api"));
+  if (components.web.enabled) portChecks.push(ensurePortAvailable(webPort, "web"));
+  await Promise.all(portChecks);
   await startComponent(components.api, "initial");
   if (isOpsDashboard) {
     await prepareOpsDashboardConfig();
@@ -744,7 +796,7 @@ async function boot() {
   try {
     // eslint-disable-next-line no-console
     console.log(
-      `[desktop] booting runtime (mode:${runnerMode}, web_app:${webApp}, api:${apiPort}, web:${webPort}, api_timeout:${apiTimeoutMs}ms, web_timeout:${webTimeoutMs}ms, max_restarts:${restartMaxAttempts})`,
+      `[desktop] booting runtime (mode:${runnerMode}, packaged:${isPackagedDesktop ? "1" : "0"}, web_app:${webApp}, api:${apiPort}, web:${webPort}, api_timeout:${apiTimeoutMs}ms, web_timeout:${webTimeoutMs}ms, max_restarts:${restartMaxAttempts})`,
     );
     await startRuntime();
     if (!noWindow) createWindow(bootstrapUrl);
