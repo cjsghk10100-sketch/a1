@@ -128,6 +128,10 @@ const opsDashboardConfigPath = isPackagedDesktop
   ? path.join(app.getPath("userData"), "ops-dashboard-config.json")
   : path.join(REPO_ROOT, "apps/ops-dashboard/public/config.json");
 const opsDashboardSessionPath = path.join(app.getPath("userData"), "ops-dashboard-session.json");
+const opsDashboardOwnerSecretPath = path.join(
+  app.getPath("userData"),
+  "ops-dashboard-owner-secret.json",
+);
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -331,6 +335,11 @@ function makeSessionTokens(accessToken, refreshToken) {
   };
 }
 
+function normalizePassphrase(value) {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
 async function bootstrapOwnerSession(passphrase) {
   const bootstrapResponse = await requestJson(`http://127.0.0.1:${apiPort}/v1/auth/bootstrap-owner`, {
     method: "POST",
@@ -385,14 +394,11 @@ async function loginOwnerSession(passphrase) {
 }
 
 async function issueOpsDashboardSessionWithPassphrase(passphrase) {
-  const bootstrapTokens = await bootstrapOwnerSession(passphrase);
-  if (bootstrapTokens) return bootstrapTokens;
-  return loginOwnerSession(passphrase);
-}
-
-async function issueOpsDashboardSessionBootstrapOnly() {
-  const ephemeralPassphrase = `desktop_packaged_${randomBytes(18).toString("hex")}`;
-  return bootstrapOwnerSession(ephemeralPassphrase);
+  const normalizedPassphrase = normalizePassphrase(passphrase);
+  const bootstrapTokens = await bootstrapOwnerSession(normalizedPassphrase);
+  const tokens = bootstrapTokens || (await loginOwnerSession(normalizedPassphrase));
+  await writePersistedOwnerPassphrase(normalizedPassphrase);
+  return tokens;
 }
 
 async function readPersistedOpsSession() {
@@ -408,6 +414,27 @@ async function readPersistedOpsSession() {
 async function writePersistedOpsSession(tokens) {
   await mkdir(path.dirname(opsDashboardSessionPath), { recursive: true });
   await writeFile(opsDashboardSessionPath, `${JSON.stringify(tokens, null, 2)}\n`, "utf8");
+}
+
+async function readPersistedOwnerPassphrase() {
+  try {
+    const raw = await readFile(opsDashboardOwnerSecretPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return normalizePassphrase(parsed?.passphrase);
+  } catch {
+    return "";
+  }
+}
+
+async function writePersistedOwnerPassphrase(passphrase) {
+  const normalizedPassphrase = normalizePassphrase(passphrase);
+  if (!normalizedPassphrase) return;
+  await mkdir(path.dirname(opsDashboardOwnerSecretPath), { recursive: true });
+  await writeFile(
+    opsDashboardOwnerSecretPath,
+    `${JSON.stringify({ passphrase: normalizedPassphrase }, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 async function refreshSessionWithRefreshToken(refreshToken) {
@@ -450,22 +477,25 @@ async function resolveOpsDashboardSession() {
   }
 
   if (isPackagedDesktop) {
-    const bootstrapOnly = await issueOpsDashboardSessionBootstrapOnly();
-    if (bootstrapOnly) return bootstrapOnly;
+    const persistedPassphrase = await readPersistedOwnerPassphrase();
+    const bootstrapPassphrase =
+      normalizePassphrase(ownerPassphrase) ||
+      normalizePassphrase(persistedPassphrase) ||
+      `desktop_packaged_${randomBytes(18).toString("hex")}`;
+    const bootstrapTokens = await bootstrapOwnerSession(bootstrapPassphrase);
+    if (bootstrapTokens) {
+      await writePersistedOwnerPassphrase(bootstrapPassphrase);
+      return bootstrapTokens;
+    }
+    if (!ownerPassphrase && !persistedPassphrase) {
+      throw new Error("desktop_ops_owner_passphrase_required");
+    }
+    const loginTokens = await loginOwnerSession(bootstrapPassphrase);
+    await writePersistedOwnerPassphrase(bootstrapPassphrase);
+    return loginTokens;
   }
 
   throw new Error("desktop_ops_auth_unavailable");
-}
-
-async function readPersistedOpsBearerToken() {
-  try {
-    const raw = await readFile(opsDashboardConfigPath, "utf8");
-    const parsed = JSON.parse(raw);
-    const token = typeof parsed?.bearerToken === "string" ? parsed.bearerToken.trim() : "";
-    return token || "";
-  } catch {
-    return "";
-  }
 }
 
 async function prepareOpsDashboardConfig() {
@@ -477,20 +507,22 @@ async function prepareOpsDashboardConfig() {
     if (!isPackagedDesktop) {
       throw err;
     }
-    const persisted = await readPersistedOpsSession();
-    const fallbackAccess =
-      configuredOpsBearerToken ||
-      (persisted && typeof persisted.access_token === "string" ? persisted.access_token : "") ||
-      (await readPersistedOpsBearerToken());
+    const fallbackAccess = configuredOpsBearerToken;
     if (!fallbackAccess) {
+      throw new Error(`desktop_ops_auth_unavailable:${message}`);
+    }
+    const fallbackValid = await validateAccessToken(fallbackAccess);
+    if (!fallbackValid) {
       throw new Error(`desktop_ops_auth_unavailable:${message}`);
     }
     sessionTokens = {
       access_token: fallbackAccess,
-      refresh_token: persisted?.refresh_token ?? "",
+      refresh_token: "",
     };
     // eslint-disable-next-line no-console
-    console.warn(`[desktop] ops session bootstrap failed in packaged mode; using fallback access token (${message})`);
+    console.warn(
+      `[desktop] ops session bootstrap failed in packaged mode; using configured fallback access token (${message})`,
+    );
   }
 
   if (sessionTokens?.refresh_token) {
