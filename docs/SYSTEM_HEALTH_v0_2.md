@@ -40,6 +40,17 @@ Hard constants (PR-14):
 Env overrides:
 - `HEALTH_DB_STATEMENT_TIMEOUT_MS` (default `2000`)
 
+## Operator Triage Order (`DOWN`)
+When dashboard/runtime reports `DOWN`, triage in this order:
+
+1. Auth/workspace mismatch (`401/403`) first.
+   - If `/v1/system/health` returns `401` or `403`, treat as auth/workspace issue and stop health triage.
+2. `cron_stale`.
+   - Check `summary.top_issues` and drilldown kind `cron_stale`.
+3. `projection_watermark_missing`.
+   - Check `summary.top_issues` and drilldown kind `projection_watermark_missing`.
+   - Handle this only after auth and `cron_stale` are ruled out.
+
 ## Caching Semantics
 - Per-workspace cache entry stores `{ payload, stored_at_ms, ttl_ms }`.
 - TTL defaults:
