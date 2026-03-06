@@ -1,8 +1,9 @@
-import { fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
+import { App } from "../App";
 import { ApiClient } from "../api/apiClient";
 import type { ApiResult, DrilldownResponse } from "../api/types";
 import { useDrilldown } from "../hooks/useDrilldown";
@@ -10,10 +11,12 @@ import { usePolling } from "../hooks/usePolling";
 import { useStatusAlerts } from "../hooks/useStatusAlerts";
 import { useWorkspace } from "../hooks/useWorkspace";
 import { buildPanelRoutes } from "../router";
+import { GlobalHeader } from "../layout/GlobalHeader";
 import { Sidebar } from "../layout/Sidebar";
 import { DataExport } from "../shared/DataExport";
 import { ErrorBanner } from "../shared/ErrorBanner";
 import { StatusBadge } from "../shared/StatusBadge";
+import { maskToken, redactSecretText, redactSecrets } from "../security/redact";
 import { formatCost, formatDuration, formatTokens } from "../utils/format";
 import { toLocalTime } from "../utils/time";
 import { SignalsList } from "../panels/HealthPanel/SignalsList";
@@ -63,6 +66,7 @@ describe("ops dashboard contracts", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -543,5 +547,235 @@ describe("ops dashboard contracts", () => {
     }
     expect(snapshots.length).toBe(200);
     expect(snapshots[0]?.totalViolationSec).toBe(5);
+  });
+
+  it("T30 GlobalHeader exposes engine connect/disconnect actions", () => {
+    const onConnectEngine = vi.fn();
+    const onDisconnectEngine = vi.fn();
+    const onCopyEngineSnippet = vi.fn();
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <GlobalHeader
+          workspaceId="ws_test"
+          onWorkspaceChange={() => {}}
+          globalStatus="OK"
+          pollingState="idle"
+          lastUpdatedAt={new Date("2026-03-06T00:00:00Z")}
+          onRefreshAll={() => {}}
+          engineConnectionStatus="disconnected"
+          engineLastCheckedAt={new Date("2026-03-06T00:00:00Z")}
+          managedEngineActorId="a2_bridge_ws_test"
+          engineBusyAction={null}
+          engineErrorReason={null}
+          lastIssuedEngineId={null}
+          maskedTokenPreview={null}
+          engineSnippetCopyReady={false}
+          engineSnippetCopyState="idle"
+          engineSnippetLastCopiedAt={null}
+          snippetErrorReason={null}
+          onConnectEngine={onConnectEngine}
+          onDisconnectEngine={onDisconnectEngine}
+          onCopyEngineSnippet={onCopyEngineSnippet}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Connect Engine" }));
+    expect(onConnectEngine).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MemoryRouter>
+        <GlobalHeader
+          workspaceId="ws_test"
+          onWorkspaceChange={() => {}}
+          globalStatus="OK"
+          pollingState="idle"
+          lastUpdatedAt={new Date("2026-03-06T00:00:00Z")}
+          onRefreshAll={() => {}}
+          engineConnectionStatus="connected"
+          engineLastCheckedAt={new Date("2026-03-06T00:00:00Z")}
+          managedEngineActorId="a2_bridge_ws_test"
+          engineBusyAction={null}
+          engineErrorReason={null}
+          lastIssuedEngineId={null}
+          maskedTokenPreview={null}
+          engineSnippetCopyReady={false}
+          engineSnippetCopyState="idle"
+          engineSnippetLastCopiedAt={null}
+          snippetErrorReason={null}
+          onConnectEngine={onConnectEngine}
+          onDisconnectEngine={onDisconnectEngine}
+          onCopyEngineSnippet={onCopyEngineSnippet}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Engine" }));
+    expect(onDisconnectEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it("T31 GlobalHeader copy snippet is one-shot gated by copyReady", () => {
+    const onCopyEngineSnippet = vi.fn();
+    render(
+      <MemoryRouter>
+        <GlobalHeader
+          workspaceId="ws_test"
+          onWorkspaceChange={() => {}}
+          globalStatus="OK"
+          pollingState="idle"
+          lastUpdatedAt={new Date("2026-03-06T00:00:00Z")}
+          onRefreshAll={() => {}}
+          engineConnectionStatus="connected"
+          engineLastCheckedAt={new Date("2026-03-06T00:00:00Z")}
+          managedEngineActorId="a2_bridge_ws_test"
+          engineBusyAction={null}
+          engineErrorReason={null}
+          lastIssuedEngineId="eng_test"
+          maskedTokenPreview="tok_...1234"
+          engineSnippetCopyReady
+          engineSnippetCopyState="idle"
+          engineSnippetLastCopiedAt={null}
+          snippetErrorReason={null}
+          onConnectEngine={() => {}}
+          onDisconnectEngine={() => {}}
+          onCopyEngineSnippet={onCopyEngineSnippet}
+        />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy Snippet" }));
+    expect(onCopyEngineSnippet).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/tok_test_plain/i)).not.toBeInTheDocument();
+  });
+
+  it("T32 redact utility masks token-like values", () => {
+    expect(maskToken("tok_test_1234567890")).toBe("tok_...7890");
+    expect(redactSecretText("engine_token=tok_test_1234567890")).toContain("tok_...7890");
+
+    const payload = redactSecrets(
+      {
+        engine_token: "tok_test_1234567890",
+        nested: { authorization: "Bearer tok_test_abcdef" },
+      },
+      { removeSensitiveKeys: false },
+    ) as Record<string, unknown>;
+
+    expect(payload.engine_token).toBe("[REDACTED]");
+    expect(payload.nested).toEqual({ authorization: "[REDACTED]" });
+  });
+
+  it("T33 disconnect clears snippet state after one-time copy", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    const healthPayload = {
+      schema_version: "2.1",
+      server_time: "2026-03-06T00:00:00Z",
+      workspace_id: "ws_dev",
+      summary: { health_summary: "OK", top_issues: [] },
+      top_issues: [],
+      signals: {
+        cron_freshness_sec: 0,
+        projection_lag_sec: 0,
+        dlq_backlog_count: 0,
+        active_incidents_count: 0,
+        rate_limit_flood_detected: false,
+      },
+    };
+    const financePayload = {
+      schema_version: "2.1",
+      server_time: "2026-03-06T00:00:00Z",
+      workspace_id: "ws_dev",
+      range: { days_back: 14, from_day_utc: "2026-02-21", to_day_utc: "2026-03-06" },
+      totals: { estimated_cost_units: "0", prompt_tokens: "0", completion_tokens: "0", total_tokens: "0" },
+      series_daily: [],
+      meta: { cached: false },
+    };
+
+    let engineConnected = false;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/v1/system/health") && method === "POST") {
+        return Promise.resolve(mockJsonResponse(200, healthPayload));
+      }
+      if (url.endsWith("/v1/finance/projection") && method === "POST") {
+        return Promise.resolve(mockJsonResponse(200, financePayload));
+      }
+      if (url.endsWith("/v1/engines") && method === "GET") {
+        return Promise.resolve(
+          mockJsonResponse(200, {
+            engines: engineConnected
+              ? [
+                  {
+                    engine_id: "eng_test_1",
+                    workspace_id: "ws_dev",
+                    engine_name: "A2 Bridge (ws_dev)",
+                    actor_id: "a2_bridge_ws_dev",
+                    status: "active",
+                    updated_at: "2026-03-06T00:00:00Z",
+                  },
+                ]
+              : [],
+          }),
+        );
+      }
+      if (url.endsWith("/v1/engines/register") && method === "POST") {
+        engineConnected = true;
+        return Promise.resolve(
+          mockJsonResponse(201, {
+            engine: {
+              engine_id: "eng_test_1",
+              workspace_id: "ws_dev",
+              engine_name: "A2 Bridge (ws_dev)",
+              actor_id: "a2_bridge_ws_dev",
+              status: "active",
+              updated_at: "2026-03-06T00:00:00Z",
+            },
+            token: {
+              token_id: "tok_1",
+              engine_id: "eng_test_1",
+              engine_token: "tok_test_plain_123456",
+              issued_at: "2026-03-06T00:00:00Z",
+            },
+          }),
+        );
+      }
+      if (url.endsWith("/v1/engines/eng_test_1/deactivate") && method === "POST") {
+        engineConnected = false;
+        return Promise.resolve(mockJsonResponse(200, { ok: true }));
+      }
+      return Promise.resolve(mockJsonResponse(200, {}));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <App
+        config={{
+          apiBaseUrl: "http://api.test",
+          defaultWorkspaceId: "ws_dev",
+          bearerToken: "bearer_test",
+          schemaVersion: "2.1",
+          healthPollSec: 15,
+          financePollSec: 30,
+          financeDaysBack: 14,
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Connect Engine" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Connect Engine" }));
+    await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+
+    const copyButton = screen.getByRole("button", { name: "Copy Snippet" });
+    expect(copyButton).not.toBeDisabled();
+    fireEvent.click(copyButton);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(String(writeText.mock.calls[0][0])).toContain("ENGINE_AUTH_TOKEN=tok_test_plain_123456");
+
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Engine" }));
+    await waitFor(() => expect(screen.getByText("Disconnected")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copy Snippet" })).toBeDisabled());
+    expect(screen.queryByText("snippet preview")).not.toBeInTheDocument();
   });
 });

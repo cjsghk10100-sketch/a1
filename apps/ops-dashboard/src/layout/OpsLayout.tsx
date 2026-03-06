@@ -16,6 +16,20 @@ export function OpsLayout({
   pollingState,
   lastUpdatedAt,
   onRefreshAll,
+  engineConnectionStatus,
+  engineLastCheckedAt,
+  managedEngineActorId,
+  engineBusyAction,
+  engineErrorReason,
+  lastIssuedEngineId,
+  maskedTokenPreview,
+  engineSnippetCopyReady,
+  engineSnippetCopyState,
+  engineSnippetLastCopiedAt,
+  snippetErrorReason,
+  onConnectEngine,
+  onDisconnectEngine,
+  onCopyEngineSnippet,
   showGlobalError,
   apiBaseUrl,
 }: {
@@ -27,6 +41,20 @@ export function OpsLayout({
   pollingState: PollingDotState;
   lastUpdatedAt: Date | null;
   onRefreshAll: () => void;
+  engineConnectionStatus: "connected" | "disconnected" | "checking";
+  engineLastCheckedAt: Date | null;
+  managedEngineActorId: string;
+  engineBusyAction: "connect" | "disconnect" | null;
+  engineErrorReason: string | null;
+  lastIssuedEngineId: string | null;
+  maskedTokenPreview: string | null;
+  engineSnippetCopyReady: boolean;
+  engineSnippetCopyState: "idle" | "copied" | "failed" | "reconnect_required";
+  engineSnippetLastCopiedAt: Date | null;
+  snippetErrorReason: string | null;
+  onConnectEngine: () => void;
+  onDisconnectEngine: () => void;
+  onCopyEngineSnippet: () => void;
   showGlobalError: boolean;
   apiBaseUrl: string;
 }): JSX.Element {
@@ -40,6 +68,20 @@ export function OpsLayout({
         pollingState={pollingState}
         lastUpdatedAt={lastUpdatedAt}
         onRefreshAll={onRefreshAll}
+        engineConnectionStatus={engineConnectionStatus}
+        engineLastCheckedAt={engineLastCheckedAt}
+        managedEngineActorId={managedEngineActorId}
+        engineBusyAction={engineBusyAction}
+        engineErrorReason={engineErrorReason}
+        lastIssuedEngineId={lastIssuedEngineId}
+        maskedTokenPreview={maskedTokenPreview}
+        engineSnippetCopyReady={engineSnippetCopyReady}
+        engineSnippetCopyState={engineSnippetCopyState}
+        engineSnippetLastCopiedAt={engineSnippetLastCopiedAt}
+        snippetErrorReason={snippetErrorReason}
+        onConnectEngine={onConnectEngine}
+        onDisconnectEngine={onDisconnectEngine}
+        onCopyEngineSnippet={onCopyEngineSnippet}
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar panels={panels} statuses={panelStatuses} />

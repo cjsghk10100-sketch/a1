@@ -1,4 +1,5 @@
 import type { ApiErrorCategory, ApiErrorInfo, ApiResult } from "./types";
+import { redactSecretText } from "../security/redact";
 
 export interface ApiClientConfig {
   baseUrl: string;
@@ -106,7 +107,8 @@ export class ApiClient {
       const payload = parseJsonSafe(await response.text());
 
       if (!response.ok) {
-        const reason = typeof payload?.reason_code === "string" ? payload.reason_code : `http_${response.status}`;
+        const rawReason = typeof payload?.reason_code === "string" ? payload.reason_code : `http_${response.status}`;
+        const reason = redactSecretText(rawReason);
         return {
           ok: false,
           error: {
@@ -122,7 +124,7 @@ export class ApiClient {
           ok: false,
           error: {
             status: response.status,
-            reason: "invalid_response",
+            reason: redactSecretText("invalid_response"),
             category: "server",
           },
         };
@@ -140,7 +142,7 @@ export class ApiClient {
           ok: false,
           error: {
             status: 0,
-            reason: "timeout",
+            reason: redactSecretText("timeout"),
             category: "timeout",
           },
         };
@@ -150,7 +152,7 @@ export class ApiClient {
         ok: false,
         error: {
           status: 0,
-          reason: "network_error",
+          reason: redactSecretText("network_error"),
           category: "network",
         },
       };

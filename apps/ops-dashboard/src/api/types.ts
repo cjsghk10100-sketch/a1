@@ -131,3 +131,26 @@ export type FinanceResponse = {
     applied_days_back?: number;
   };
 };
+
+export type EngineRecord = {
+  engine_id: string;
+  workspace_id: string;
+  engine_name: string;
+  actor_id: string;
+  status: "active" | "inactive";
+  updated_at: string;
+};
+
+export type EngineListResponse = {
+  engines: EngineRecord[];
+};
+
+export type EngineRegisterResponse = {
+  engine: EngineRecord;
+  token: {
+    token_id: string;
+    engine_id: string;
+    engine_token: string;
+    issued_at: string;
+  };
+};

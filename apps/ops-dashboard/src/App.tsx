@@ -2,7 +2,7 @@ import { BrowserRouter } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiClient } from "./api/apiClient";
-import type { FinanceResponse, HealthResponse, TopIssue } from "./api/types";
+import type { EngineListResponse, EngineRegisterResponse, FinanceResponse, HealthResponse, TopIssue } from "./api/types";
 import { ConfigProvider } from "./config/ConfigContext";
 import {
   DashboardProvider,
@@ -21,7 +21,36 @@ import {
 } from "./incidents/store";
 import { PANEL_REGISTRY } from "./panels/registry";
 import { DashboardRouter } from "./router";
+import { maskToken, redactSecretText } from "./security/redact";
 import type { PollingDotState } from "./shared/PollingDot";
+
+const ENGINE_STATUS_POLL_MS = 15_000;
+
+type EngineConnectionStatus = "connected" | "disconnected" | "checking";
+type EngineSnippetCopyState = "idle" | "copied" | "failed" | "reconnect_required";
+
+function buildEngineSnippet({
+  apiBaseUrl,
+  workspaceId,
+  actorId,
+  engineId,
+  engineToken,
+}: {
+  apiBaseUrl: string;
+  workspaceId: string;
+  actorId: string;
+  engineId: string;
+  engineToken: string;
+}): string {
+  return [
+    `ENGINE_API_BASE_URL=${apiBaseUrl}`,
+    `ENGINE_WORKSPACE_ID=${workspaceId}`,
+    `ENGINE_ACTOR_ID=${actorId}`,
+    `ENGINE_ID=${engineId}`,
+    `ENGINE_AUTH_TOKEN=${engineToken}`,
+    "pnpm -C apps/engine start",
+  ].join("\n");
+}
 
 function reduceGlobalStatus(statuses: Record<string, PanelStatusSnapshot>): "OK" | "DEGRADED" | "DOWN" | null {
   const values = Object.values(statuses)
@@ -74,6 +103,18 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
   const [slaSnapshots, setSlaSnapshots] = useState<DashboardSlaSnapshot[]>([]);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [hidden, setHidden] = useState(document.hidden);
+  const [engineConnectionStatus, setEngineConnectionStatus] = useState<EngineConnectionStatus>("checking");
+  const [managedEngineId, setManagedEngineId] = useState<string | null>(null);
+  const [engineLastCheckedAt, setEngineLastCheckedAt] = useState<Date | null>(null);
+  const [engineBusyAction, setEngineBusyAction] = useState<"connect" | "disconnect" | null>(null);
+  const [engineErrorReason, setEngineErrorReason] = useState<string | null>(null);
+  const [copyPayloadToken, setCopyPayloadToken] = useState<string | null>(null);
+  const [engineSnippetCopyReady, setEngineSnippetCopyReady] = useState(false);
+  const [engineSnippetCopyState, setEngineSnippetCopyState] = useState<EngineSnippetCopyState>("idle");
+  const [engineSnippetLastCopiedAt, setEngineSnippetLastCopiedAt] = useState<Date | null>(null);
+  const [maskedTokenPreview, setMaskedTokenPreview] = useState<string | null>(null);
+  const [snippetErrorReason, setSnippetErrorReason] = useState<string | null>(null);
+  const [lastIssuedEngineId, setLastIssuedEngineId] = useState<string | null>(null);
 
   const refreshHandlersRef = useRef<Map<string, () => void>>(new Map());
   const lastSlaTickMsRef = useRef<number | null>(null);
@@ -95,6 +136,179 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
       }),
     [config.apiBaseUrl, config.bearerToken, config.schemaVersion, workspaceId],
   );
+
+  const managedEngineActorId = useMemo(() => `a2_bridge_${workspaceId}`, [workspaceId]);
+
+  const resetEngineSnippetState = useCallback(() => {
+    setCopyPayloadToken(null);
+    setEngineSnippetCopyReady(false);
+    setEngineSnippetCopyState("idle");
+    setEngineSnippetLastCopiedAt(null);
+    setMaskedTokenPreview(null);
+    setSnippetErrorReason(null);
+    setLastIssuedEngineId(null);
+  }, []);
+
+  const refreshEngineConnection = useCallback(async () => {
+    const result = await client.get<EngineListResponse>("/v1/engines");
+    const checkedAt = new Date();
+    if (!result.ok) {
+      setEngineConnectionStatus("disconnected");
+      setManagedEngineId(null);
+      setEngineErrorReason(redactSecretText(result.error.reason));
+      setEngineLastCheckedAt(checkedAt);
+      resetEngineSnippetState();
+      return;
+    }
+
+    const managedEngine = (result.data.engines ?? []).find((item) => item.actor_id === managedEngineActorId) ?? null;
+    setManagedEngineId(managedEngine?.engine_id ?? null);
+    setEngineConnectionStatus(managedEngine?.status === "active" ? "connected" : "disconnected");
+    if (!managedEngine || managedEngine.status !== "active") {
+      resetEngineSnippetState();
+    }
+    setEngineErrorReason(null);
+    setEngineLastCheckedAt(checkedAt);
+  }, [client, managedEngineActorId, resetEngineSnippetState]);
+
+  useEffect(() => {
+    setEngineConnectionStatus("checking");
+    setManagedEngineId(null);
+    setEngineLastCheckedAt(null);
+    setEngineBusyAction(null);
+    setEngineErrorReason(null);
+    resetEngineSnippetState();
+  }, [workspaceId, resetEngineSnippetState]);
+
+  useEffect(() => {
+    let disposed = false;
+    const run = async () => {
+      if (disposed) return;
+      await refreshEngineConnection();
+    };
+
+    void run();
+    const timer = window.setInterval(() => {
+      void run();
+    }, ENGINE_STATUS_POLL_MS);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [refreshEngineConnection]);
+
+  useEffect(() => {
+    return () => {
+      resetEngineSnippetState();
+    };
+  }, [resetEngineSnippetState]);
+
+  const onConnectEngine = useCallback(async () => {
+    setEngineBusyAction("connect");
+    setEngineErrorReason(null);
+    setSnippetErrorReason(null);
+    resetEngineSnippetState();
+
+    const response = await client.post<EngineRegisterResponse>("/v1/engines/register", {
+      actor_id: managedEngineActorId,
+      engine_name: `A2 Bridge (${workspaceId})`,
+      token_label: "ops_dashboard_connect",
+      metadata: {
+        source: "ops_dashboard",
+        workspace_id: workspaceId,
+      },
+    });
+
+    setEngineBusyAction(null);
+    if (!response.ok) {
+      setEngineErrorReason(redactSecretText(response.error.reason));
+      return;
+    }
+
+    setLastIssuedEngineId(response.data.engine.engine_id);
+    setCopyPayloadToken(response.data.token.engine_token);
+    setMaskedTokenPreview(maskToken(response.data.token.engine_token));
+    setEngineSnippetCopyReady(true);
+    setEngineSnippetCopyState("idle");
+    setEngineConnectionStatus("connected");
+    setManagedEngineId(response.data.engine.engine_id);
+    setEngineLastCheckedAt(new Date());
+    await refreshEngineConnection();
+  }, [client, managedEngineActorId, refreshEngineConnection, resetEngineSnippetState, workspaceId]);
+
+  const onDisconnectEngine = useCallback(async () => {
+    if (!managedEngineId) {
+      await refreshEngineConnection();
+      return;
+    }
+
+    setEngineBusyAction("disconnect");
+    setEngineErrorReason(null);
+    setSnippetErrorReason(null);
+
+    const response = await client.post<{ ok?: boolean }>(
+      `/v1/engines/${encodeURIComponent(managedEngineId)}/deactivate`,
+      {
+        reason: "ops_dashboard_disconnect",
+      },
+    );
+
+    setEngineBusyAction(null);
+    if (!response.ok) {
+      setEngineErrorReason(redactSecretText(response.error.reason));
+      return;
+    }
+
+    resetEngineSnippetState();
+    setEngineConnectionStatus("disconnected");
+    setEngineLastCheckedAt(new Date());
+    await refreshEngineConnection();
+  }, [client, managedEngineId, refreshEngineConnection, resetEngineSnippetState]);
+
+  const onCopyEngineSnippet = useCallback(async () => {
+    setSnippetErrorReason(null);
+
+    const token = copyPayloadToken;
+    const engineId = lastIssuedEngineId;
+    if (!token || !engineId || !engineSnippetCopyReady) {
+      setEngineSnippetCopyState("reconnect_required");
+      return;
+    }
+
+    const snippet = buildEngineSnippet({
+      apiBaseUrl: config.apiBaseUrl,
+      workspaceId,
+      actorId: managedEngineActorId,
+      engineId,
+      engineToken: token,
+    });
+
+    try {
+      if (!navigator?.clipboard?.writeText) {
+        setEngineSnippetCopyState("failed");
+        setSnippetErrorReason(redactSecretText("clipboard_unavailable"));
+        return;
+      }
+      await navigator.clipboard.writeText(snippet);
+      setEngineSnippetCopyState("copied");
+      setEngineSnippetLastCopiedAt(new Date());
+    } catch {
+      setEngineSnippetCopyState("failed");
+      setSnippetErrorReason(redactSecretText("clipboard_write_failed"));
+    } finally {
+      // Security-first: consume plain token after first copy attempt (success or failure).
+      setCopyPayloadToken(null);
+      setEngineSnippetCopyReady(false);
+    }
+  }, [
+    config.apiBaseUrl,
+    copyPayloadToken,
+    engineSnippetCopyReady,
+    lastIssuedEngineId,
+    managedEngineActorId,
+    workspaceId,
+  ]);
 
   useEffect(() => {
     if (panelData.health && panelData.finance) return;
@@ -218,7 +432,8 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
     for (const refresh of refreshHandlersRef.current.values()) {
       refresh();
     }
-  }, []);
+    void refreshEngineConnection();
+  }, [refreshEngineConnection]);
 
   const globalStatus = useMemo(() => reduceGlobalStatus(panelStatuses), [panelStatuses]);
   const lastUpdatedAt = useMemo(() => latestTimestamp(panelStatuses), [panelStatuses]);
@@ -274,6 +489,20 @@ export function App({ config }: { config: AppConfig }): JSX.Element {
             pollingState={pollingState}
             lastUpdatedAt={lastUpdatedAt}
             onRefreshAll={onRefreshAll}
+            engineConnectionStatus={engineConnectionStatus}
+            engineLastCheckedAt={engineLastCheckedAt}
+            managedEngineActorId={managedEngineActorId}
+            engineBusyAction={engineBusyAction}
+            engineErrorReason={engineErrorReason}
+            lastIssuedEngineId={lastIssuedEngineId}
+            maskedTokenPreview={maskedTokenPreview}
+            engineSnippetCopyReady={engineSnippetCopyReady}
+            engineSnippetCopyState={engineSnippetCopyState}
+            engineSnippetLastCopiedAt={engineSnippetLastCopiedAt}
+            snippetErrorReason={snippetErrorReason}
+            onConnectEngine={onConnectEngine}
+            onDisconnectEngine={onDisconnectEngine}
+            onCopyEngineSnippet={onCopyEngineSnippet}
             showGlobalError={showGlobalError}
             apiBaseUrl={config.apiBaseUrl}
           />
