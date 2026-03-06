@@ -561,7 +561,31 @@ async function main(): Promise<void> {
       assert.ok(wm && wm.length > 0, "watermark should be recorded for workspace");
     }
 
-    // T12 kernel-guard docs/hooks wiring.
+    // T12 watermark advances for non-finance events appended to evt_events.
+    {
+      const workspace_id = `ws_fin_proj_t12_${randomUUID().slice(0, 8)}`;
+      await appendToStream(pool, {
+        event_id: `evt_engine_${randomUUID().replaceAll("-", "")}`,
+        event_type: "engine.registered",
+        event_version: 1,
+        occurred_at: t.now_utc,
+        workspace_id,
+        actor: { actor_type: "service", actor_id: "contract_test" },
+        stream: { stream_type: "workspace", stream_id: workspace_id },
+        correlation_id: `corr:${workspace_id}:engine.registered`,
+        data: {
+          engine_id: `eng_${randomUUID().slice(0, 8)}`,
+          actor_id: `a2_bridge_${workspace_id}`,
+        },
+        policy_context: {},
+        model_context: {},
+        display: {},
+      });
+      const wm = await watermarkAt(db, workspace_id);
+      assert.ok(wm && wm.length > 0, "watermark should advance for non-finance events");
+    }
+
+    // T13 kernel-guard docs/hooks wiring.
     {
       const eventSpecs = await readFile(path.resolve(process.cwd(), "../../docs/EVENT_SPECS.md"), "utf8");
       assert.ok(eventSpecs.includes("finance.usage_recorded"));

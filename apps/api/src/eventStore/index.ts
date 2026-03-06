@@ -71,7 +71,46 @@ async function appendSingleEvent(tx: DbClient, envelope: EventEnvelopeV1): Promi
   const event_hash = computeEventHashV1(withSeq, prev_event_hash);
 
   await appendEvent(tx, { ...withSeq, prev_event_hash, event_hash });
+  await advanceProjectionWatermark(tx, withSeq.workspace_id, withSeq.occurred_at);
   return { ...withSeq, prev_event_hash, event_hash };
+}
+
+async function advanceProjectionWatermark(
+  tx: DbClient,
+  workspace_id: string,
+  occurred_at: string,
+): Promise<void> {
+  await tx.query("SAVEPOINT sp_evt_wm").catch(() => {});
+  try {
+    await tx.query(
+      `INSERT INTO projector_watermarks (workspace_id, last_applied_event_occurred_at, updated_at)
+       VALUES ($1, $2::timestamptz, now())
+       ON CONFLICT (workspace_id) DO UPDATE
+       SET
+         last_applied_event_occurred_at = GREATEST(
+           COALESCE(projector_watermarks.last_applied_event_occurred_at, '-infinity'::timestamptz),
+           EXCLUDED.last_applied_event_occurred_at
+         ),
+         updated_at = now()`,
+      [workspace_id, occurred_at],
+    );
+  } catch (err) {
+    try {
+      await tx.query("ROLLBACK TO SAVEPOINT sp_evt_wm");
+    } catch {
+      // swallow rollback-to-savepoint failures
+    }
+    const code = typeof err === "object" && err ? (err as { code?: string }).code : undefined;
+    if (code !== "42P01" && code !== "42703") {
+      throw err;
+    }
+  } finally {
+    try {
+      await tx.query("RELEASE SAVEPOINT sp_evt_wm");
+    } catch {
+      // swallow release failures
+    }
+  }
 }
 
 async function recordDlpFindings(
